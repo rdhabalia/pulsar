@@ -127,7 +127,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
         checkArgument(numPartitions > 1, "Number of partitions should be more than 1");
         DestinationName ds = validateTopic(destination);
         return asyncPutRequest(
-                persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("partitions"),
+                persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName())).path("partitions"),
                 Entity.entity(numPartitions, MediaType.APPLICATION_JSON));
     }
 
@@ -147,7 +147,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     public CompletableFuture<PartitionedTopicMetadata> getPartitionedTopicMetadataAsync(String destination) {
         DestinationName ds = validateTopic(destination);
         final CompletableFuture<PartitionedTopicMetadata> future = new CompletableFuture<>();
-        asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("partitions"),
+        asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName())).path("partitions"),
                 new InvocationCallback<PartitionedTopicMetadata>() {
 
                     @Override
@@ -178,7 +178,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     @Override
     public CompletableFuture<Void> deletePartitionedTopicAsync(String destination) {
         DestinationName ds = validateTopic(destination);
-        return asyncDeleteRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName())
+        return asyncDeleteRequest(persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName()))
                 .path("partitions"));
     }
 
@@ -197,7 +197,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     @Override
     public CompletableFuture<Void> deleteAsync(String destination) {
         DestinationName ds = validateTopic(destination);
-        return asyncDeleteRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()));
+        return asyncDeleteRequest(persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName())));
     }
 
     @Override
@@ -216,7 +216,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     public CompletableFuture<List<String>> getSubscriptionsAsync(String destination) {
         DestinationName ds = validateTopic(destination);
         final CompletableFuture<List<String>> future = new CompletableFuture<>();
-        asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscriptions"),
+        asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName())).path("subscriptions"),
                 new InvocationCallback<List<String>>() {
 
                     @Override
@@ -248,7 +248,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     public CompletableFuture<PersistentTopicStats> getStatsAsync(String destination) {
         DestinationName ds = validateTopic(destination);
         final CompletableFuture<PersistentTopicStats> future = new CompletableFuture<>();
-        asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("stats"),
+        asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName())).path("stats"),
                 new InvocationCallback<PersistentTopicStats>() {
 
                     @Override
@@ -280,7 +280,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     public CompletableFuture<PersistentTopicInternalStats> getInternalStatsAsync(String destination) {
         DestinationName ds = validateTopic(destination);
         final CompletableFuture<PersistentTopicInternalStats> future = new CompletableFuture<>();
-        asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("internalStats"),
+        asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName())).path("internalStats"),
                 new InvocationCallback<PersistentTopicInternalStats>() {
 
                     @Override
@@ -315,7 +315,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
         DestinationName ds = validateTopic(destination);
         final CompletableFuture<PartitionedTopicStats> future = new CompletableFuture<>();
         asyncGetRequest(
-                persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("partitioned-stats"),
+                persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName())).path("partitioned-stats"),
                 new InvocationCallback<PartitionedTopicStats>() {
 
                     @Override
@@ -350,7 +350,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     public CompletableFuture<Void> deleteSubscriptionAsync(String destination, String subName) {
         DestinationName ds = validateTopic(destination);
         String encodedSubName = Codec.encode(subName);
-        return asyncDeleteRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName())
+        return asyncDeleteRequest(persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName()))
                 .path("subscription").path(encodedSubName));
     }
 
@@ -371,7 +371,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
         DestinationName ds = validateTopic(destination);
         String encodedSubName = Codec.encode(subName);
         return asyncPostRequest(
-                persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscription")
+                persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName())).path("subscription")
                         .path(encodedSubName).path("skip_all"), Entity.entity("", MediaType.APPLICATION_JSON));
     }
 
@@ -392,7 +392,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
         DestinationName ds = validateTopic(destination);
         String encodedSubName = Codec.encode(subName);
         return asyncPostRequest(
-                persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscription")
+                persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName())).path("subscription")
                         .path(encodedSubName).path("skip").path(String.valueOf(numMessages)),
                 Entity.entity("", MediaType.APPLICATION_JSON));
     }
@@ -414,7 +414,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
         DestinationName ds = validateTopic(destination);
         String encodedSubName = Codec.encode(subName);
         return asyncPostRequest(
-                persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscription")
+                persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName())).path("subscription")
                         .path(encodedSubName).path("expireMessages").path(String.valueOf(expireTimeInSeconds)),
                 Entity.entity("", MediaType.APPLICATION_JSON));
     }
@@ -435,7 +435,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     public CompletableFuture<Void> expireMessagesForAllSubscriptionsAsync(String destination, long expireTimeInSeconds) {
         DestinationName ds = validateTopic(destination);
         return asyncPostRequest(
-                persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("all_subscription")
+                persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName())).path("all_subscription")
                         .path("expireMessages").path(String.valueOf(expireTimeInSeconds)),
                 Entity.entity("", MediaType.APPLICATION_JSON));
     }
@@ -444,7 +444,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
         DestinationName ds = validateTopic(destination);
         String encodedSubName = Codec.encode(subName);
         final CompletableFuture<Message> future = new CompletableFuture<Message>();
-        asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscription")
+        asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName())).path("subscription")
                 .path(encodedSubName).path("position").path(String.valueOf(messagePosition)),
                 new InvocationCallback<Response>() {
 
@@ -523,7 +523,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
             DestinationName ds = validateTopic(destination);
             String encodedSubName = Codec.encode(subName);
             request(
-                    persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscription")
+                    persistentTopics.path(ds.getNamespace()).path(encode(ds.getLocalName())).path("subscription")
                             .path(encodedSubName).path("resetcursor").path(String.valueOf(timestamp))).post(
                     Entity.entity("", MediaType.APPLICATION_JSON), ErrorData.class);
         } catch (Exception e) {
@@ -579,5 +579,9 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
                 stream.close();
             }
         }
+    }
+    
+    public static String encode(String name) {
+        return Codec.encode(name).replaceAll("\\+", "%20");
     }
 }

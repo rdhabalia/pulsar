@@ -36,6 +36,10 @@ public class Codec {
             return s;
         }
     }
+    
+    public static String encodeUri(String s) {
+        return encode(s).replaceAll("\\+", "%20");
+    }
 
     public static String decode(String s) {
         try {

@@ -15,9 +15,11 @@
  */
 package com.yahoo.pulsar.broker.admin;
 
+import static org.mockito.Mockito.spy;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.fail;
 
 import java.net.URL;
@@ -67,6 +69,7 @@ import com.yahoo.pulsar.client.api.Message;
 import com.yahoo.pulsar.client.api.Producer;
 import com.yahoo.pulsar.client.api.ProducerConfiguration;
 import com.yahoo.pulsar.client.api.ProducerConfiguration.MessageRoutingMode;
+import com.yahoo.pulsar.client.impl.ConsumerImpl;
 import com.yahoo.pulsar.client.api.PulsarClient;
 import com.yahoo.pulsar.client.api.SubscriptionType;
 import com.yahoo.pulsar.common.naming.DestinationName;
@@ -153,6 +156,11 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
         return new Object[][] { { 0 }, { 4 } };
     }
 
+    @DataProvider(name = "topicName")
+    public Object[][] topicNamesProvider() {
+        return new Object[][] { { "topic_+&*%{}() \\/$@#^%" }, { "simple-topicName" } };
+    }
+    
     @Test
     public void clusters() throws Exception {
         admin.clusters().createCluster("usw",
@@ -489,14 +497,15 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
         // otheradmin.namespaces().unload("prop-xyz/use/ns2");
     }
 
-    @Test(enabled = true)
-    public void persistentTopics() throws Exception {
+    @Test(dataProvider = "topicName")
+    public void persistentTopics(String topicName) throws Exception {
         assertEquals(admin.persistentTopics().getList("prop-xyz/use/ns1"), Lists.newArrayList());
 
+        final String persistentTopicName = "persistent://prop-xyz/use/ns1/" + topicName;
         // Force to create a destination
-        publishMessagesOnPersistentTopic("persistent://prop-xyz/use/ns1/ds2", 0);
+        publishMessagesOnPersistentTopic("persistent://prop-xyz/use/ns1/" + topicName, 0);
         assertEquals(admin.persistentTopics().getList("prop-xyz/use/ns1"),
-                Lists.newArrayList("persistent://prop-xyz/use/ns1/ds2"));
+                Lists.newArrayList("persistent://prop-xyz/use/ns1/" + topicName));
 
         // create consumer and subscription
         URL pulsarUrl = new URL("http://127.0.0.1" + ":" + BROKER_WEBSERVICE_PORT);
@@ -505,66 +514,62 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
         PulsarClient client = PulsarClient.create(pulsarUrl.toString(), clientConf);
         ConsumerConfiguration conf = new ConsumerConfiguration();
         conf.setSubscriptionType(SubscriptionType.Exclusive);
-        Consumer consumer = client.subscribe("persistent://prop-xyz/use/ns1/ds2", "my-sub", conf);
+        Consumer consumer = client.subscribe(persistentTopicName, "my-sub", conf);
 
-        assertEquals(admin.persistentTopics().getSubscriptions("persistent://prop-xyz/use/ns1/ds2"),
-                Lists.newArrayList("my-sub"));
+        assertEquals(admin.persistentTopics().getSubscriptions(persistentTopicName), Lists.newArrayList("my-sub"));
 
-        publishMessagesOnPersistentTopic("persistent://prop-xyz/use/ns1/ds2", 10);
+        publishMessagesOnPersistentTopic("persistent://prop-xyz/use/ns1/" + topicName, 10);
 
-        PersistentTopicStats topicStats = admin.persistentTopics().getStats("persistent://prop-xyz/use/ns1/ds2");
+        PersistentTopicStats topicStats = admin.persistentTopics().getStats(persistentTopicName);
         assertEquals(topicStats.subscriptions.keySet(), Sets.newTreeSet(Lists.newArrayList("my-sub")));
         assertEquals(topicStats.subscriptions.get("my-sub").consumers.size(), 1);
         assertEquals(topicStats.subscriptions.get("my-sub").msgBacklog, 10);
         assertEquals(topicStats.publishers.size(), 0);
 
-        PersistentTopicInternalStats internalStats = admin.persistentTopics()
-                .getInternalStats("persistent://prop-xyz/use/ns1/ds2");
+        PersistentTopicInternalStats internalStats = admin.persistentTopics().getInternalStats(persistentTopicName);
         assertEquals(internalStats.cursors.keySet(), Sets.newTreeSet(Lists.newArrayList("my-sub")));
 
-        List<Message> messages = admin.persistentTopics().peekMessages("persistent://prop-xyz/use/ns1/ds2", "my-sub",
-                3);
+        List<Message> messages = admin.persistentTopics().peekMessages(persistentTopicName, "my-sub", 3);
         assertEquals(messages.size(), 3);
         for (int i = 0; i < 3; i++) {
             String expectedMessage = "message-" + i;
             assertEquals(messages.get(i).getData(), expectedMessage.getBytes());
         }
 
-        messages = admin.persistentTopics().peekMessages("persistent://prop-xyz/use/ns1/ds2", "my-sub", 15);
+        messages = admin.persistentTopics().peekMessages(persistentTopicName, "my-sub", 15);
         assertEquals(messages.size(), 10);
         for (int i = 0; i < 10; i++) {
             String expectedMessage = "message-" + i;
             assertEquals(messages.get(i).getData(), expectedMessage.getBytes());
         }
 
-        admin.persistentTopics().skipMessages("persistent://prop-xyz/use/ns1/ds2", "my-sub", 5);
-        topicStats = admin.persistentTopics().getStats("persistent://prop-xyz/use/ns1/ds2");
+        admin.persistentTopics().skipMessages(persistentTopicName, "my-sub", 5);
+        topicStats = admin.persistentTopics().getStats(persistentTopicName);
         assertEquals(topicStats.subscriptions.get("my-sub").msgBacklog, 5);
 
-        admin.persistentTopics().skipAllMessages("persistent://prop-xyz/use/ns1/ds2", "my-sub");
-        topicStats = admin.persistentTopics().getStats("persistent://prop-xyz/use/ns1/ds2");
+        admin.persistentTopics().skipAllMessages(persistentTopicName, "my-sub");
+        topicStats = admin.persistentTopics().getStats(persistentTopicName);
         assertEquals(topicStats.subscriptions.get("my-sub").msgBacklog, 0);
 
         consumer.close();
         client.close();
 
-        admin.persistentTopics().deleteSubscription("persistent://prop-xyz/use/ns1/ds2", "my-sub");
+        admin.persistentTopics().deleteSubscription(persistentTopicName, "my-sub");
 
-        assertEquals(admin.persistentTopics().getSubscriptions("persistent://prop-xyz/use/ns1/ds2"),
-                Lists.newArrayList());
-        topicStats = admin.persistentTopics().getStats("persistent://prop-xyz/use/ns1/ds2");
+        assertEquals(admin.persistentTopics().getSubscriptions(persistentTopicName), Lists.newArrayList());
+        topicStats = admin.persistentTopics().getStats(persistentTopicName);
         assertEquals(topicStats.subscriptions.keySet(), Sets.newTreeSet());
         assertEquals(topicStats.publishers.size(), 0);
 
         try {
-            admin.persistentTopics().skipAllMessages("persistent://prop-xyz/use/ns1/ds2", "my-sub");
+            admin.persistentTopics().skipAllMessages(persistentTopicName, "my-sub");
         } catch (NotFoundException e) {
         }
 
-        admin.persistentTopics().delete("persistent://prop-xyz/use/ns1/ds2");
+        admin.persistentTopics().delete(persistentTopicName);
 
         try {
-            admin.persistentTopics().delete("persistent://prop-xyz/use/ns1/ds1");
+            admin.persistentTopics().delete(persistentTopicName);
             fail("Should have received 404");
         } catch (NotFoundException e) {
         }
@@ -572,13 +577,12 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
         assertEquals(admin.persistentTopics().getList("prop-xyz/use/ns1"), Lists.newArrayList());
     }
 
-    @Test
-    public void partitionedTopics() throws Exception {
-        admin.persistentTopics().createPartitionedTopic("persistent://prop-xyz/use/ns1/ds1", 4);
+    @Test(dataProvider = "topicName")
+    public void partitionedTopics(String topicName) throws Exception {
+        final String partitionedTopicName = "persistent://prop-xyz/use/ns1/" + topicName;
+        admin.persistentTopics().createPartitionedTopic(partitionedTopicName, 4);
 
-        assertEquals(
-                admin.persistentTopics().getPartitionedTopicMetadata("persistent://prop-xyz/use/ns1/ds1").partitions,
-                4);
+        assertEquals(admin.persistentTopics().getPartitionedTopicMetadata(partitionedTopicName).partitions, 4);
 
         // check if the virtual topic doesn't get created
         List<String> destinations = admin.persistentTopics().getList("prop-xyz/use/ns1");
@@ -595,37 +599,34 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
         PulsarClient client = PulsarClient.create(pulsarUrl.toString(), clientConf);
         ConsumerConfiguration conf = new ConsumerConfiguration();
         conf.setSubscriptionType(SubscriptionType.Exclusive);
-        Consumer consumer = client.subscribe("persistent://prop-xyz/use/ns1/ds1", "my-sub", conf);
+        Consumer consumer = client.subscribe(partitionedTopicName, "my-sub", conf);
 
-        assertEquals(admin.persistentTopics().getSubscriptions("persistent://prop-xyz/use/ns1/ds1"),
-                Lists.newArrayList("my-sub"));
+        assertEquals(admin.persistentTopics().getSubscriptions(partitionedTopicName), Lists.newArrayList("my-sub"));
 
-        Consumer consumer1 = client.subscribe("persistent://prop-xyz/use/ns1/ds1", "my-sub-1", conf);
+        Consumer consumer1 = client.subscribe(partitionedTopicName, "my-sub-1", conf);
 
-        assertEquals(Sets.newHashSet(admin.persistentTopics().getSubscriptions("persistent://prop-xyz/use/ns1/ds1")),
+        assertEquals(Sets.newHashSet(admin.persistentTopics().getSubscriptions(partitionedTopicName)),
                 Sets.newHashSet("my-sub", "my-sub-1"));
 
         consumer1.close();
-        admin.persistentTopics().deleteSubscription("persistent://prop-xyz/use/ns1/ds1", "my-sub-1");
-        assertEquals(admin.persistentTopics().getSubscriptions("persistent://prop-xyz/use/ns1/ds1"),
-                Lists.newArrayList("my-sub"));
+        admin.persistentTopics().deleteSubscription(partitionedTopicName, "my-sub-1");
+        assertEquals(admin.persistentTopics().getSubscriptions(partitionedTopicName), Lists.newArrayList("my-sub"));
 
         ProducerConfiguration prodConf = new ProducerConfiguration();
         prodConf.setMessageRoutingMode(MessageRoutingMode.RoundRobinPartition);
-        Producer producer = client.createProducer("persistent://prop-xyz/use/ns1/ds1", prodConf);
+        Producer producer = client.createProducer(partitionedTopicName, prodConf);
 
         for (int i = 0; i < 10; i++) {
             String message = "message-" + i;
             producer.send(message.getBytes());
         }
 
-        assertEquals(Sets.newHashSet(admin.persistentTopics().getList("prop-xyz/use/ns1")), Sets.newHashSet(
-                "persistent://prop-xyz/use/ns1/ds1-partition-0", "persistent://prop-xyz/use/ns1/ds1-partition-1",
-                "persistent://prop-xyz/use/ns1/ds1-partition-2", "persistent://prop-xyz/use/ns1/ds1-partition-3"));
+        assertEquals(Sets.newHashSet(admin.persistentTopics().getList("prop-xyz/use/ns1")),
+                Sets.newHashSet(partitionedTopicName + "-partition-0", partitionedTopicName + "-partition-1",
+                        partitionedTopicName + "-partition-2", partitionedTopicName + "-partition-3"));
 
         // test cumulative stats for partitioned topic
-        PartitionedTopicStats topicStats = admin.persistentTopics()
-                .getPartitionedStats("persistent://prop-xyz/use/ns1/ds1", false);
+        PartitionedTopicStats topicStats = admin.persistentTopics().getPartitionedStats(partitionedTopicName, false);
         assertEquals(topicStats.subscriptions.keySet(), Sets.newTreeSet(Lists.newArrayList("my-sub")));
         assertEquals(topicStats.subscriptions.get("my-sub").consumers.size(), 1);
         assertEquals(topicStats.subscriptions.get("my-sub").msgBacklog, 10);
@@ -633,49 +634,47 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
         assertEquals(topicStats.partitions, Maps.newHashMap());
 
         // test per partition stats for partitioned topic
-        topicStats = admin.persistentTopics().getPartitionedStats("persistent://prop-xyz/use/ns1/ds1", true);
+        topicStats = admin.persistentTopics().getPartitionedStats(partitionedTopicName, true);
         assertEquals(topicStats.metadata.partitions, 4);
-        assertEquals(topicStats.partitions.keySet(), Sets.newHashSet("persistent://prop-xyz/use/ns1/ds1-partition-0",
-                "persistent://prop-xyz/use/ns1/ds1-partition-1", "persistent://prop-xyz/use/ns1/ds1-partition-2",
-                "persistent://prop-xyz/use/ns1/ds1-partition-3"));
-        PersistentTopicStats partitionStats = topicStats.partitions
-                .get("persistent://prop-xyz/use/ns1/ds1-partition-0");
+        assertEquals(topicStats.partitions.keySet(),
+                Sets.newHashSet(partitionedTopicName + "-partition-0", partitionedTopicName + "-partition-1",
+                        partitionedTopicName + "-partition-2", partitionedTopicName + "-partition-3"));
+        PersistentTopicStats partitionStats = topicStats.partitions.get(partitionedTopicName + "-partition-0");
         assertEquals(partitionStats.publishers.size(), 1);
         assertEquals(partitionStats.subscriptions.get("my-sub").consumers.size(), 1);
         assertEquals(partitionStats.subscriptions.get("my-sub").msgBacklog, 3, 1);
 
         try {
-            admin.persistentTopics().skipMessages("persistent://prop-xyz/use/ns1/ds1", "my-sub", 5);
+            admin.persistentTopics().skipMessages(partitionedTopicName, "my-sub", 5);
             fail("skip messages for partitioned topics should fail");
         } catch (Exception e) {
             // ok
         }
 
-        admin.persistentTopics().skipAllMessages("persistent://prop-xyz/use/ns1/ds1", "my-sub");
-        topicStats = admin.persistentTopics().getPartitionedStats("persistent://prop-xyz/use/ns1/ds1", false);
+        admin.persistentTopics().skipAllMessages(partitionedTopicName, "my-sub");
+        topicStats = admin.persistentTopics().getPartitionedStats(partitionedTopicName, false);
         assertEquals(topicStats.subscriptions.get("my-sub").msgBacklog, 0);
 
         producer.close();
         consumer.close();
 
-        admin.persistentTopics().deleteSubscription("persistent://prop-xyz/use/ns1/ds1", "my-sub");
+        admin.persistentTopics().deleteSubscription(partitionedTopicName, "my-sub");
 
-        assertEquals(admin.persistentTopics().getSubscriptions("persistent://prop-xyz/use/ns1/ds1"),
-                Lists.newArrayList());
+        assertEquals(admin.persistentTopics().getSubscriptions(partitionedTopicName), Lists.newArrayList());
 
         try {
-            admin.persistentTopics().createPartitionedTopic("persistent://prop-xyz/use/ns1/ds1", 32);
+            admin.persistentTopics().createPartitionedTopic(partitionedTopicName, 32);
             fail("Should have failed as the partitioned topic already exists");
         } catch (ConflictException ce) {
         }
 
-        producer = client.createProducer("persistent://prop-xyz/use/ns1/ds1");
+        producer = client.createProducer(partitionedTopicName);
 
         destinations = admin.persistentTopics().getList("prop-xyz/use/ns1");
         assertEquals(destinations.size(), 4);
 
         try {
-            admin.persistentTopics().deletePartitionedTopic("persistent://prop-xyz/use/ns1/ds1");
+            admin.persistentTopics().deletePartitionedTopic(partitionedTopicName);
             fail("The topic is busy");
         } catch (PreconditionFailedException pfe) {
             // ok
@@ -684,17 +683,13 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
         producer.close();
         client.close();
 
-        admin.persistentTopics().deletePartitionedTopic("persistent://prop-xyz/use/ns1/ds1");
+        admin.persistentTopics().deletePartitionedTopic(partitionedTopicName);
 
-        assertEquals(
-                admin.persistentTopics().getPartitionedTopicMetadata("persistent://prop-xyz/use/ns1/ds1").partitions,
-                0);
+        assertEquals(admin.persistentTopics().getPartitionedTopicMetadata(partitionedTopicName).partitions, 0);
 
-        admin.persistentTopics().createPartitionedTopic("persistent://prop-xyz/use/ns1/ds1", 32);
+        admin.persistentTopics().createPartitionedTopic(partitionedTopicName, 32);
 
-        assertEquals(
-                admin.persistentTopics().getPartitionedTopicMetadata("persistent://prop-xyz/use/ns1/ds1").partitions,
-                32);
+        assertEquals(admin.persistentTopics().getPartitionedTopicMetadata(partitionedTopicName).partitions, 32);
 
         try {
             admin.persistentTopics().deletePartitionedTopic("persistent://prop-xyz/use/ns1/ds2");
@@ -702,11 +697,11 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
         } catch (NotFoundException nfe) {
         }
 
-        admin.persistentTopics().deletePartitionedTopic("persistent://prop-xyz/use/ns1/ds1");
+        admin.persistentTopics().deletePartitionedTopic(partitionedTopicName);
 
         // delete a partitioned topic in a global namespace
-        admin.persistentTopics().createPartitionedTopic("persistent://prop-xyz/global/ns1/ds1", 4);
-        admin.persistentTopics().deletePartitionedTopic("persistent://prop-xyz/global/ns1/ds1");
+        admin.persistentTopics().createPartitionedTopic(partitionedTopicName, 4);
+        admin.persistentTopics().deletePartitionedTopic(partitionedTopicName);
     }
 
     @Test(dataProvider = "numBundles")
@@ -1484,6 +1479,24 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
         consumer.close();
         client.close();
 
+    }
+    
+    @Test
+    public void testPulsarAdminWithSpecialCharacterInTopicName() throws Exception {
+        testPulsarAdmin("topic_+&*%{}() \\/$@#^%");
+        testPulsarAdmin("simple-topic-name");
+        
+    }
+
+    private void testPulsarAdmin(String topicName) throws Exception {
+        final String ns1 = "prop-xyz/use/ns1";
+        final String dn1 = "persistent://" + ns1 + "/" + topicName;
+        Consumer consumer1 = pulsarClient.subscribe(dn1, "my-subscriber-name", new ConsumerConfiguration());
+        PersistentTopicStats stats = admin.persistentTopics().getStats(dn1);
+        PersistentTopicInternalStats internalStats = admin.persistentTopics().getInternalStats(dn1);
+        assertNotNull(stats);
+        assertNotNull(internalStats);
+        
     }
 
 }

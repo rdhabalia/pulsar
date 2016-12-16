@@ -26,6 +26,7 @@ import com.yahoo.pulsar.client.util.FutureUtil;
 import com.yahoo.pulsar.common.lookup.data.LookupData;
 import com.yahoo.pulsar.common.naming.DestinationName;
 import com.yahoo.pulsar.common.partition.PartitionedTopicMetadata;
+import com.yahoo.pulsar.common.util.Codec;
 
 class HttpLookupService implements LookupService {
 
@@ -46,7 +47,7 @@ class HttpLookupService implements LookupService {
      */
     @SuppressWarnings("deprecation")
     public CompletableFuture<InetSocketAddress> getBroker(DestinationName destination) {
-        return httpClient.get(BasePath + destination.getLookupName(), LookupData.class).thenCompose(lookupData -> {
+        return httpClient.get(BasePath + getLookupName(destination), LookupData.class).thenCompose(lookupData -> {
             // Convert LookupData into as SocketAddress, handling exceptions
         	URI uri = null;
             try {
@@ -69,12 +70,18 @@ class HttpLookupService implements LookupService {
     }
     
     public CompletableFuture<PartitionedTopicMetadata> getPartitionedTopicMetadata(DestinationName destination) {
-    	return httpClient.get(String.format("admin/%s/partitions", destination.getLookupName()),
+    	return httpClient.get(String.format("admin/%s/partitions", getLookupName(destination)),
                 PartitionedTopicMetadata.class);
     }
     
     public String getServiceUrl() {
     	return httpClient.url.toString();
+    }
+
+    public static String getLookupName(DestinationName destination) {
+        return String.format("%s/%s/%s/%s/%s", destination.getDomain(), destination.getProperty(),
+                destination.getCluster(), destination.getNamespacePortion(),
+                Codec.encodeUri(destination.getLocalName()));
     }
     
     private static final Logger log = LoggerFactory.getLogger(HttpLookupService.class);
