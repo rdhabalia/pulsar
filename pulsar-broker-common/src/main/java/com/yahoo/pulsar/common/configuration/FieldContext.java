@@ -19,6 +19,7 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.util.function.Consumer;
 
 /**
  * Stores field context to validate based on requirement or value constraints.
@@ -56,4 +57,12 @@ public @interface FieldContext {
      * @return character length of field
      */
     public int maxCharLength() default Integer.MAX_VALUE;
+    
+    /**
+     * check if updating field also requires to update it on zookeeper configuration
+     * 
+     * @return
+     */
+    public boolean updateOnZookeeper() default false;
+    
 }

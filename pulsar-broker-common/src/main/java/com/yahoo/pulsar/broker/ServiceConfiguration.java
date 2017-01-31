@@ -88,6 +88,7 @@ public class ServiceConfiguration implements PulsarConfiguration{
     // Using a value of 0, is disabling unackedMessage-limit check and consumer can receive messages without any restriction
     private int maxUnackedMessagesPerConsumer = 50000;
     // Max number of concurrent lookup request broker allows to throttle heavy incoming lookup traffic
+    @FieldContext(updateOnZookeeper = true)
     private int maxConcurrentLookupRequest = 20000;
 
     /***** --- TLS --- ****/

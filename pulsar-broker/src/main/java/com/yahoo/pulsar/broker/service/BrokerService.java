@@ -876,6 +876,10 @@ public class BrokerService implements Closeable, ZooKeeperCacheListener<Policies
             }
         });
     }
+    
+    public void updateLookupRequestPermits(int permit) {
+        lookupRequestSemaphore.set(new Semaphore(permit, true));
+    }
 
     public List<PersistentTopic> getAllTopicsFromNamespaceBundle(String namespace, String bundle) {
         return multiLayerTopicsMap.get(namespace).get(bundle).values();
