@@ -16,6 +16,7 @@
 package com.yahoo.pulsar.broker;
 
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.net.URL;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -30,6 +31,7 @@ import java.util.function.Supplier;
 
 import org.apache.bookkeeper.mledger.ManagedLedgerFactory;
 import org.apache.bookkeeper.util.OrderedSafeExecutor;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.zookeeper.ZooKeeper;
 import org.eclipse.jetty.servlet.ServletHolder;
 import org.slf4j.Logger;
@@ -86,6 +88,7 @@ public class PulsarService implements AutoCloseable {
     private ZooKeeperCache localZkCache;
     private GlobalZooKeeperCache globalZkCache;
     private LocalZooKeeperConnectionService localZooKeeperConnectionProvider;
+    private LocalZooKeeperConnectionService bkZooKeeperConnectionProvider;
     private final ScheduledExecutorService executor = Executors.newScheduledThreadPool(20,
             new DefaultThreadFactory("pulsar"));
     private final OrderedSafeExecutor orderedExecutor = new OrderedSafeExecutor(8, "pulsar-ordered");
@@ -172,6 +175,8 @@ public class PulsarService implements AutoCloseable {
                 globalZkCache = null;
                 localZooKeeperConnectionProvider.close();
                 localZooKeeperConnectionProvider = null;
+                bkZooKeeperConnectionProvider.close();
+                bkZooKeeperConnectionProvider = null;
             }
 
             configurationCacheService = null;
@@ -225,11 +230,21 @@ public class PulsarService implements AutoCloseable {
             localZooKeeperConnectionProvider = new LocalZooKeeperConnectionService(getZooKeeperClientFactory(),
                     config.getZookeeperServers(), config.getZooKeeperSessionTimeoutMillis());
             localZooKeeperConnectionProvider.start(shutdownService);
+            
+            // create bkZkConnectionProvider if its zkconnect is different than localZkConnect
+            if (StringUtils.isNotBlank(config.getBkZookeeperServers())
+                    && !config.getZookeeperServers().equalsIgnoreCase(config.getBkZookeeperServers())) {
+                bkZooKeeperConnectionProvider = new LocalZooKeeperConnectionService(getZooKeeperClientFactory(),
+                        config.getZookeeperServers(), config.getZooKeeperSessionTimeoutMillis());
+                bkZooKeeperConnectionProvider.start(shutdownService);
+            } else {
+                bkZooKeeperConnectionProvider = localZooKeeperConnectionProvider;
+            }
 
             // Initialize and start service to access configuration repository.
             this.startZkCacheService();
 
-            managedLedgerClientFactory = new ManagedLedgerClientFactory(config, getZkClient(),
+            managedLedgerClientFactory = new ManagedLedgerClientFactory(config, getBkZkClient(), getZkClient(),
                     getBookKeeperClientFactory());
 
             this.brokerService = new BrokerService(this);
@@ -463,6 +478,10 @@ public class PulsarService implements AutoCloseable {
     public ZooKeeper getZkClient() {
         return this.localZooKeeperConnectionProvider.getLocalZooKeeper();
     }
+    
+    public ZooKeeper getBkZkClient() {
+        return this.bkZooKeeperConnectionProvider.getLocalZooKeeper();
+    }
 
     public ConfigurationCacheService getConfigurationCache() {
         return configurationCacheService;
@@ -540,7 +559,26 @@ public class PulsarService implements AutoCloseable {
         return zkClientFactory;
     }
 
-    public BookKeeperClientFactory getBookKeeperClientFactory() {
+    /**
+     * Instantiate provided implementation of {@link BookkeeperClientFactoryProvider} otherwise use default
+     * {@link BookKeeperClientFactoryImpl}
+     * 
+     * @return
+     * @throws PulsarServerException
+     */
+    public BookKeeperClientFactory getBookKeeperClientFactory() throws PulsarServerException {
+
+        if (StringUtils.isNotBlank(config.getBookkeeperClientFactoryProvider())) {
+            try {
+                Class<?> clazz = Class.forName(config.getBookkeeperClientFactoryProvider());
+                Constructor<?> ctor = clazz.getConstructor(String.class);
+                return (BookKeeperClientFactory) ctor.newInstance(new Object[] { this });
+            } catch (Exception e) {
+                LOG.error("Failed to instantiate BookkeeperClientFactory with class {}",
+                        config.getBookkeeperClientFactoryProvider(), e);
+                throw new PulsarServerException(e);
+            }
+        }
         return new BookKeeperClientFactoryImpl();
     }
 

@@ -33,6 +33,14 @@ public class BookKeeperClientFactoryImpl implements BookKeeperClientFactory {
 
     @Override
     public BookKeeper create(ServiceConfiguration conf, ZooKeeper zkClient) throws IOException {
+        try {
+            return new BookKeeper(createBookkeeperClientConfiguration(conf, zkClient), zkClient);
+        } catch (InterruptedException | KeeperException e) {
+            throw new IOException(e);
+        }
+    }
+
+    public ClientConfiguration createBookkeeperClientConfiguration(ServiceConfiguration conf, ZooKeeper zkClient) {
         ClientConfiguration bkConf = new ClientConfiguration();
 
         if (conf.getBookkeeperClientAuthenticationPlugin() != null
@@ -74,11 +82,6 @@ public class BookKeeperClientFactoryImpl implements BookKeeperClientFactory {
                 });
             }
         }
-
-        try {
-            return new BookKeeper(bkConf, zkClient);
-        } catch (InterruptedException | KeeperException e) {
-            throw new IOException(e);
-        }
+        return bkConf;
     }
 }

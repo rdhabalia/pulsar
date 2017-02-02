@@ -39,6 +39,9 @@ public class ServiceConfiguration implements PulsarConfiguration{
     // Global Zookeeper quorum connection string
     @FieldContext(required = false)
     private String globalZookeeperServers;
+    // Bookkeeper Zookeeper quorum connection string
+    @FieldContext(required = false)
+    private String bkZookeeperServers;
     private int brokerServicePort = 6650;
     private int brokerServicePortTls = 6651;
     // Port to use to server HTTP request
@@ -145,6 +148,11 @@ public class ServiceConfiguration implements PulsarConfiguration{
     // broker
     @FieldContext(required = false)
     private String bookkeeperClientIsolationGroups;
+    // BookKeeperClientFactory implementation class to create Bookkeeper client
+    // takes default implementation if not provided
+    @FieldContext(required = false)
+    private String bookkeeperClientFactoryProvider;
+    
 
     /**** --- Managed Ledger --- ****/
     // Number of bookies to use when creating a ledger
@@ -256,6 +264,19 @@ public class ServiceConfiguration implements PulsarConfiguration{
             return this.getZookeeperServers();
         }
         return globalZookeeperServers;
+    }
+    
+    public String getBkZookeeperServers() {
+        if (this.bkZookeeperServers == null || this.bkZookeeperServers.isEmpty()) {
+            // If the configuration is not set, assuming that the bkZKServer is not enabled and all data is in the same
+            // ZooKeeper cluster
+            return this.getZookeeperServers();
+        }
+        return bkZookeeperServers;
+    }
+
+    public void setBkZookeeperServers(String bkZookeeperServers) {
+        this.bkZookeeperServers = bkZookeeperServers;
     }
 
     public void setGlobalZookeeperServers(String globalZookeeperServers) {
@@ -590,6 +611,14 @@ public class ServiceConfiguration implements PulsarConfiguration{
 
     public void setBookkeeperClientIsolationGroups(String bookkeeperClientIsolationGroups) {
         this.bookkeeperClientIsolationGroups = bookkeeperClientIsolationGroups;
+    }
+    
+    public String getBookkeeperClientFactoryProvider() {
+        return bookkeeperClientFactoryProvider;
+    }
+
+    public void setBookkeeperClientFactoryProvider(String bookkeeperClientFactoryProvider) {
+        this.bookkeeperClientFactoryProvider = bookkeeperClientFactoryProvider;
     }
 
     public int getManagedLedgerDefaultEnsembleSize() {

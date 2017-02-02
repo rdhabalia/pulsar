@@ -33,9 +33,9 @@ public class ManagedLedgerClientFactory implements Closeable {
     private final ManagedLedgerFactory managedLedgerFactory;
     private final BookKeeper bkClient;
 
-    public ManagedLedgerClientFactory(ServiceConfiguration conf, ZooKeeper zkClient,
+    public ManagedLedgerClientFactory(ServiceConfiguration conf, ZooKeeper bkZkClient, ZooKeeper zkClient,
             BookKeeperClientFactory bookkeeperProvider) throws Exception {
-        this.bkClient = bookkeeperProvider.create(conf, zkClient);
+        this.bkClient = bookkeeperProvider.create(conf, bkZkClient);
 
         ManagedLedgerFactoryConfig managedLedgerFactoryConfig = new ManagedLedgerFactoryConfig();
         managedLedgerFactoryConfig.setMaxCacheSize(conf.getManagedLedgerCacheSizeMB() * 1024L * 1024L);
