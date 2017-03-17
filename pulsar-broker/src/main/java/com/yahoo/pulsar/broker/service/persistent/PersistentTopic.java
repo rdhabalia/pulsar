@@ -356,57 +356,73 @@ public class PersistentTopic implements Topic, AddEntryCallback {
             lock.readLock().unlock();
         }
 
+        createSubscription(subscriptionName).thenAccept(subscription -> {
+            if (log.isDebugEnabled()) {
+                log.debug("[{}][{}] Opened cursor for {} {}", topic, subscriptionName, consumerId, consumerName);
+            }
+            try {
+                Consumer consumer = new Consumer(subscription, subType, consumerId, priorityLevel, consumerName,
+                        brokerService.pulsar().getConfiguration().getMaxUnackedMessagesPerConsumer(), cnx,
+                        cnx.getRole());
+                subscription.addConsumer(consumer);
+                if (!cnx.isActive()) {
+                    consumer.close();
+                    if (log.isDebugEnabled()) {
+                        log.debug("[{}] [{}] [{}] Subscribe failed -- count: {}", topic, subscriptionName,
+                                consumer.consumerName(), USAGE_COUNT_UPDATER.get(PersistentTopic.this));
+                    }
+                    future.completeExceptionally(
+                            new BrokerServiceException("Connection was closed while the opening the cursor "));
+                } else {
+                    log.info("[{}][{}] Created new subscription for {}", topic, subscriptionName, consumerId);
+                    future.complete(consumer);
+                }
+            } catch (BrokerServiceException e) {
+                if (e instanceof ConsumerBusyException) {
+                    log.warn("[{}][{}] Consumer {} {} already connected", topic, subscriptionName, consumerId,
+                            consumerName);
+                } else if (e instanceof SubscriptionBusyException) {
+                    log.warn("[{}][{}] {}", topic, subscriptionName, e.getMessage());
+                }
+
+                USAGE_COUNT_UPDATER.decrementAndGet(PersistentTopic.this);
+                future.completeExceptionally(e);
+            }
+
+        }).exceptionally(ex -> {
+            USAGE_COUNT_UPDATER.decrementAndGet(PersistentTopic.this);
+            future.completeExceptionally(ex);
+            return null;
+        });
+        
+        return future;
+    }
+
+    @Override
+    public CompletableFuture<PersistentSubscription> createSubscription(String subscriptionName) {
+
+        CompletableFuture<PersistentSubscription> subscriptionFuture = new CompletableFuture<>();
+
         ledger.asyncOpenCursor(Codec.encode(subscriptionName), new OpenCursorCallback() {
             @Override
             public void openCursorComplete(ManagedCursor cursor, Object ctx) {
                 if (log.isDebugEnabled()) {
-                    log.debug("[{}][{}] Opened cursor for {} {}", topic, subscriptionName, consumerId, consumerName);
+                    log.debug("[{}][{}] Opened cursor", topic, subscriptionName);
                 }
-
-                try {
-                    PersistentSubscription subscription = subscriptions.computeIfAbsent(subscriptionName,
-                            name -> new PersistentSubscription(PersistentTopic.this, cursor));
-                    
-                    Consumer consumer = new Consumer(subscription, subType, consumerId, priorityLevel, consumerName,
-                            brokerService.pulsar().getConfiguration().getMaxUnackedMessagesPerConsumer(), cnx,
-                            cnx.getRole());
-                    subscription.addConsumer(consumer);
-                    if (!cnx.isActive()) {
-                        consumer.close();
-                        if (log.isDebugEnabled()) {
-                            log.debug("[{}] [{}] [{}] Subscribe failed -- count: {}", topic, subscriptionName,
-                                    consumer.consumerName(), USAGE_COUNT_UPDATER.get(PersistentTopic.this));
-                        }
-                        future.completeExceptionally(
-                                new BrokerServiceException("Connection was closed while the opening the cursor "));
-                    } else {
-                        log.info("[{}][{}] Created new subscription for {}", topic, subscriptionName, consumerId);
-                        future.complete(consumer);
-                    }
-                } catch (BrokerServiceException e) {
-                    if (e instanceof ConsumerBusyException) {
-                        log.warn("[{}][{}] Consumer {} {} already connected", topic, subscriptionName, consumerId,
-                                consumerName);
-                    } else if (e instanceof SubscriptionBusyException) {
-                        log.warn("[{}][{}] {}", topic, subscriptionName, e.getMessage());
-                    }
-
-                    USAGE_COUNT_UPDATER.decrementAndGet(PersistentTopic.this);
-                    future.completeExceptionally(e);
-                }
+                subscriptionFuture.complete(subscriptions.computeIfAbsent(subscriptionName,
+                        name -> new PersistentSubscription(PersistentTopic.this, cursor)));
             }
 
             @Override
             public void openCursorFailed(ManagedLedgerException exception, Object ctx) {
                 log.warn("[{}] Failed to create subscription for {}", topic, subscriptionName);
-                USAGE_COUNT_UPDATER.decrementAndGet(PersistentTopic.this);
-                future.completeExceptionally(new PersistenceException(exception));
+                subscriptionFuture.completeExceptionally(new PersistenceException(exception));
             }
         }, null);
 
-        return future;
+        return subscriptionFuture;
     }
-
+    
     /**
      * Delete the cursor ledger for a given subscription
      *

@@ -40,6 +40,8 @@ public interface Topic {
 
     CompletableFuture<Consumer> subscribe(ServerCnx cnx, String subscriptionName, long consumerId, SubType subType,
             int priorityLevel, String consumerName);
+    
+    CompletableFuture<PersistentSubscription> createSubscription(String subscriptionName);
 
     CompletableFuture<Void> unsubscribe(String subName);
 
