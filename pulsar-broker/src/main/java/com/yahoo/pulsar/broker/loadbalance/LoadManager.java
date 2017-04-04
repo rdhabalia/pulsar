@@ -22,9 +22,10 @@ import com.yahoo.pulsar.broker.PulsarService;
 import com.yahoo.pulsar.broker.ServiceConfiguration;
 import com.yahoo.pulsar.broker.loadbalance.impl.ModularLoadManagerWrapper;
 import com.yahoo.pulsar.broker.loadbalance.impl.SimpleLoadManagerImpl;
-import com.yahoo.pulsar.broker.stats.Metrics;
 import com.yahoo.pulsar.common.naming.ServiceUnitId;
 import com.yahoo.pulsar.common.policies.data.loadbalancer.LoadReport;
+import com.yahoo.pulsar.common.stats.Metrics;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
