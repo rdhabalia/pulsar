@@ -346,9 +346,26 @@ public class OwnershipCache {
         CompletableFuture<OwnedBundle> f = ownedBundlesCache.getIfPresent(path);
         if (f != null && f.isDone() && !f.isCompletedExceptionally()) {
             f.join().setActive(isActive);
+            LOG.info("bundle flag {} {}/{}", bundle, f.join().isActive(), f.join().IS_ACTIVE_UPDATER.get(f.join()));
+        } else {
+            LOG.info("bundle-update flag {} not found", bundle);
         }
     }
 
+    
+    public boolean isBundleActive(NamespaceBundle bundle) throws Exception {
+        String path = ServiceUnitZkUtils.path(bundle);
+        // Disable owned instance in local cache
+        CompletableFuture<OwnedBundle> f = ownedBundlesCache.getIfPresent(path);
+        if (f != null && f.isDone() && !f.isCompletedExceptionally()) {
+            return f.join().isActive();
+        } else {
+            LOG.info("bundle-check flag {} not found", bundle);
+            return false;
+        }
+        
+    }
+    
     public NamespaceEphemeralData getSelfOwnerInfo() {
         return selfOwnerInfo;
     }

@@ -467,13 +467,16 @@ public class BrokerService implements Closeable, ZooKeeperCacheListener<Policies
 
         final long topicCreateTimeMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime());
         DestinationName destinationName = DestinationName.get(topic);
-        if (!pulsar.getNamespaceService().isServiceUnitActive(destinationName)) {
+        boolean isBundleActive = pulsar.getNamespaceService().isServiceUnitActive(destinationName);
+        log.info("Checking create topic bundle is active {} {}",topic, isBundleActive);
+        if (!isBundleActive) {
             // namespace is being unloaded
             String msg = String.format("Namespace is being unloaded, cannot add topic %s", topic);
             log.warn(msg);
             topicFuture.completeExceptionally(new ServiceUnitNotReadyException(msg));
         }
-
+        log.info("Creating topic successfully bundle is active {} {}",topic, isBundleActive);
+        
         getManagedLedgerConfig(destinationName).thenAccept(config -> {
             // Once we have the configuration, we can proceed with the async open operation
 

@@ -37,7 +37,7 @@ public class OwnedBundle {
     private final ReentrantReadWriteLock nsLock = new ReentrantReadWriteLock();
     private static final int FALSE = 0;
     private static final int TRUE = 1;
-    private static final AtomicIntegerFieldUpdater<OwnedBundle> IS_ACTIVE_UPDATER =
+    public static final AtomicIntegerFieldUpdater<OwnedBundle> IS_ACTIVE_UPDATER =
             AtomicIntegerFieldUpdater.newUpdater(OwnedBundle.class, "isActive");
     private volatile int isActive = TRUE;
 
@@ -120,6 +120,7 @@ public class OwnedBundle {
             }
             // delete ownership node on zk
             try {
+                LOG.info("before removing checking flag {} {}", bundle, isActive());
                 pulsar.getNamespaceService().getOwnershipCache().removeOwnership(bundle).get();
             } catch (Exception e) {
                 // Failed to remove ownership node: enable namespace-bundle again so, it can serve new topics
@@ -142,10 +143,12 @@ public class OwnedBundle {
      * @return boolean value indicate that the namespace is active or not.
      */
     public boolean isActive() {
+        LOG.info("checking flag stat {} {}",this.bundle,IS_ACTIVE_UPDATER.get(this));
         return IS_ACTIVE_UPDATER.get(this) == TRUE;
     }
 
     public void setActive(boolean active) {
         IS_ACTIVE_UPDATER.set(this, active ? TRUE : FALSE);
+        LOG.info("updated flag stat {} {}",this.bundle,IS_ACTIVE_UPDATER.get(this));
     }
 }
