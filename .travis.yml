@@ -34,3 +34,4 @@ deploy:
     on:
       repo: yahoo/pulsar
       tags: true
+      skip_cleanup: true
