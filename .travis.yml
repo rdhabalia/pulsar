@@ -12,6 +12,13 @@ before_deploy:
   - echo $GPG_SECRET_KEYS | base64 --decode | $GPG_EXECUTABLE --import --batch || true
   - echo $GPG_OWNERTRUST | base64 --decode | $GPG_EXECUTABLE --import-ownertrust --batch || true
 
+install:
+  - |
+    if [ "${TRAVIS_OS_NAME}" == "osx" ]; then
+      # https://github.com/travis-ci/travis-ci/issues/6307#issuecomment-233315824
+      rvm get head
+    fi
+
 deploy:
   -
     provider: script
