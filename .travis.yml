@@ -16,13 +16,13 @@ deploy:
   -
     provider: script
     skip_cleanup: true
-    script: mvn deploy -DskipTests --settings .travis/settings.xml
+    script: mvn -DskipTests --settings .travis/settings.xml
     on:
       tags: false
   -
     provider: script
     skip_cleanup: true
-    script: mvn install deploy -Prelease -DskipTests --settings .travis/settings.xml
+    script: mvn install -Prelease -DskipTests --settings .travis/settings.xml
     on:
       tags: true
   -
