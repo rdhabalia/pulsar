@@ -18,6 +18,7 @@ package com.yahoo.pulsar.broker.authorization;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,11 +51,13 @@ public class AuthorizationManager {
      *            the app id used to send messages to the destination.
      */
     public CompletableFuture<Boolean> canProduceAsync(DestinationName destination, String role) {
-        return checkAuthorization(destination, role, AuthAction.produce);
+        return new CompletableFuture<Boolean>();
+        //return checkAuthorization(destination, role, AuthAction.produce);
     }
     
     public boolean canProduce(DestinationName destination, String role) throws Exception {
         try {
+            log.info("authorization started for {}-{}",destination,role);
             return canProduceAsync(destination, role).get();
         } catch (Exception e) {
             log.warn("Producer-client  with Role - {} failed to get permissions for destination - {}", role,
@@ -97,7 +100,9 @@ public class AuthorizationManager {
      * @throws Exception 
      */
     public boolean canLookup(DestinationName destination, String role) throws Exception {
-        return canProduce(destination, role) || canConsume(destination, role);
+        boolean authorized =  canProduce(destination, role) || canConsume(destination, role);
+        log.info("authorization completed for {}-{}",destination,role);
+        return authorized;
     }
 
     private CompletableFuture<Boolean> checkAuthorization(DestinationName destination, String role,
