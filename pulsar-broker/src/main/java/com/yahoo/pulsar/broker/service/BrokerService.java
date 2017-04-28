@@ -34,6 +34,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -351,19 +352,30 @@ public class BrokerService implements Closeable, ZooKeeperCacheListener<Policies
                 pulsar.getLoadManager().get().disableBroker();
             }
 
+            log.info("starting unloading bundle concurrently {}", pulsar.getConfiguration().getUnloadConcurrentBundles());
             // unload all namespace-bundles gracefully
             long closeTopicsStartTime = System.nanoTime();
             Set<NamespaceBundle> serviceUnits = pulsar.getNamespaceService().getOwnedServiceUnits();
+            Semaphore unloadingBundleSemaphore = new Semaphore(pulsar.getConfiguration().getUnloadConcurrentBundles(), false);
+            List<CompletableFuture<Void>> futures = Lists.newArrayList();
             serviceUnits.forEach(su -> {
+                CompletableFuture<Void> unloadFuture = new CompletableFuture<>();
+                futures.add(unloadFuture);
+                unloadingBundleSemaphore.tryAcquire();
                 if (su instanceof NamespaceBundle) {
-                    try {
-                        pulsar.getNamespaceService().unloadNamespaceBundle((NamespaceBundle) su);
-                    } catch (Exception e) {
-                        log.warn("Failed to unload namespace bundle {}", su, e);
-                    }
+                    pulsar.getExecutor().submit(() -> {
+                        try {
+                            pulsar.getNamespaceService().unloadNamespaceBundle((NamespaceBundle) su);
+                        } catch (Exception e) {
+                            log.warn("Failed to unload namespace bundle {}", su, e);
+                        }
+                        unloadFuture.complete(null);
+                        unloadingBundleSemaphore.release();
+                    });
                 }
             });
 
+            FutureUtil.waitForAll(futures).get();
             double closeTopicsTimeSeconds = TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - closeTopicsStartTime))
                     / 1000.0;
             log.info("Unloading {} namespace-bundles completed in {} seconds", serviceUnits.size(),

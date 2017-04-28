@@ -232,6 +232,9 @@ public class ServiceConfiguration implements PulsarConfiguration {
     private int loadBalancerNamespaceBundleMaxBandwidthMbytes = 100;
     // maximum number of bundles in a namespace
     private int loadBalancerNamespaceMaximumBundles = 128;
+    // unload number of bundles concurrently on shutdown
+    @FieldContext(dynamic = true)
+    private int unloadConcurrentBundles = 1;
 
     /**** --- Replication --- ****/
     // Enable replication metrics
@@ -858,6 +861,14 @@ public class ServiceConfiguration implements PulsarConfiguration {
 
     public int getLoadBalancerNamespaceMaximumBundles() {
         return this.loadBalancerNamespaceMaximumBundles;
+    }
+
+    public int getUnloadConcurrentBundles() {
+        return unloadConcurrentBundles;
+    }
+
+    public void setUnloadConcurrentBundles(int unloadConcurrentBundles) {
+        this.unloadConcurrentBundles = unloadConcurrentBundles;
     }
 
     public boolean isReplicationMetricsEnabled() {
