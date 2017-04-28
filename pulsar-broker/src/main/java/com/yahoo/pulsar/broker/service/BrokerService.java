@@ -333,16 +333,30 @@ public class BrokerService implements Closeable, ZooKeeperCacheListener<Policies
             // unload all namespace-bundles gracefully
             long closeTopicsStartTime = System.nanoTime();
             Set<NamespaceBundle> serviceUnits = pulsar.getNamespaceService().getOwnedServiceUnits();
+            Semaphore unloadingBundleSemaphore = new Semaphore(pulsar.getConfiguration().getUnloadConcurrentBundles(), false);
+            List<CompletableFuture<Void>> futures = Lists.newArrayList();
             serviceUnits.forEach(su -> {
+                CompletableFuture<Void> unloadFuture = new CompletableFuture<>();
+                futures.add(unloadFuture);
+                try {
+                    unloadingBundleSemaphore.acquire();   
+                } catch (InterruptedException e1) {
+                    //ok
+                }
                 if (su instanceof NamespaceBundle) {
-                    try {
-                        pulsar.getNamespaceService().unloadNamespaceBundle((NamespaceBundle) su);
-                    } catch (Exception e) {
-                        log.warn("Failed to unload namespace bundle {}", su, e);
-                    }
+                    pulsar.getExecutor().submit(() -> {
+                        try {
+                            pulsar.getNamespaceService().unloadNamespaceBundle((NamespaceBundle) su);
+                        } catch (Exception e) {
+                            log.warn("Failed to unload namespace bundle {}", su, e);
+                        }
+                        unloadFuture.complete(null);
+                        unloadingBundleSemaphore.release();
+                    });
                 }
             });
 
+            FutureUtil.waitForAll(futures).get();
             double closeTopicsTimeSeconds = TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - closeTopicsStartTime))
                     / 1000.0;
             log.info("Unloading {} namespace-bundles completed in {} seconds", serviceUnits.size(),

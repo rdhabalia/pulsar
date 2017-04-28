@@ -197,7 +197,7 @@ public class ServiceConfiguration implements PulsarConfiguration {
     // Number of independent ZK sessions to open. More sessions will speed
     // up ZK operations by using different threads and connections
     @FieldContext(minValue = 1)
-    private int managedLedgerZooKeeperSessions = 1;
+    private int managedLedgerZooKeeperSessions = 16;
 
     /*** --- Load balancer --- ****/
     // Enable load balancer
@@ -237,6 +237,9 @@ public class ServiceConfiguration implements PulsarConfiguration {
     private int loadBalancerNamespaceBundleMaxBandwidthMbytes = 100;
     // maximum number of bundles in a namespace
     private int loadBalancerNamespaceMaximumBundles = 128;
+    // unload number of bundles concurrently on shutdown
+    @FieldContext(dynamic = true)
+    private int unloadConcurrentBundles = 2;
 
     /**** --- Replication --- ****/
     // Enable replication metrics
@@ -873,6 +876,14 @@ public class ServiceConfiguration implements PulsarConfiguration {
         return this.loadBalancerNamespaceMaximumBundles;
     }
 
+    public int getUnloadConcurrentBundles() {
+        return unloadConcurrentBundles;
+    }
+
+    public void setUnloadConcurrentBundles(int unloadConcurrentBundles) {
+        this.unloadConcurrentBundles = unloadConcurrentBundles;
+    }
+    
     public boolean isReplicationMetricsEnabled() {
         return replicationMetricsEnabled;
     }
