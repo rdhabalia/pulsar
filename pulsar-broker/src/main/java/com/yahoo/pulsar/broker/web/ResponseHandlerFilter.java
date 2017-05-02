@@ -53,6 +53,9 @@ public class ResponseHandlerFilter implements Filter {
         if (((HttpServletResponse) response).getStatus() == Status.INTERNAL_SERVER_ERROR.getStatusCode()) {
             // invalidate current session from servlet-container if it received internal-server-error 
             try {
+                // Close persistent-connection:
+                // http://docs.oracle.com/javase/6/docs/technotes/guides/net/http-keepalive.html
+                ((HttpServletResponse) response).addHeader("Connection", "Close");
                 ((HttpServletRequest) request).getSession(false).invalidate();
             } catch (Exception ignoreException) {
                 /* connection is already invalidated */
