@@ -586,6 +586,71 @@ public class Namespaces extends AdminResource {
         }
     }
 
+    @DELETE
+    @Path("/{property}/{cluster}/{namespace}/replication")
+    @ApiOperation(value = "Delete replication clusters for a namespace.")
+    @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission"),
+            @ApiResponse(code = 404, message = "Property or cluster or namespace doesn't exist"),
+            @ApiResponse(code = 412, message = "Namespace is not global or invalid cluster ids") })
+    public void deleteNamespaceReplicationClusters(@PathParam("property") String property,
+            @PathParam("cluster") String cluster, @PathParam("namespace") String namespace, List<String> clusterIds) {
+        validateAdminAccessOnProperty(property);
+        validatePoliciesReadOnlyAccess();
+
+        if (!cluster.equals("global")) {
+            throw new RestException(Status.PRECONDITION_FAILED, "Cannot set replication on a non-global namespace");
+        }
+
+        if (clusterIds.contains("global")) {
+            throw new RestException(Status.PRECONDITION_FAILED,
+                    "Cannot specify global in the list of replication clusters");
+        }
+
+        Set<String> clusters = clusters();
+        for (String clusterId : clusterIds) {
+            if (!clusters.contains(clusterId)) {
+                throw new RestException(Status.FORBIDDEN, "Invalid cluster id: " + clusterId);
+            }
+        }
+
+        for (String clusterId : clusterIds) {
+            validateClusterForProperty(property, clusterId);
+        }
+
+        Entry<Policies, Stat> policiesNode = null;
+        NamespaceName nsName = new NamespaceName(property, cluster, namespace);
+
+        try {
+            // Force to read the data s.t. the watch to the cache content is setup.
+            policiesNode = policiesCache().getWithStat(path("policies", property, cluster, namespace))
+                    .orElseThrow(() -> new RestException(Status.NOT_FOUND, "Namespace " + nsName + " does not exist"));
+            policiesNode.getKey().replication_clusters = clusterIds;
+
+            // Write back the new policies into zookeeper
+            globalZk().setData(path("policies", property, cluster, namespace),
+                    jsonMapper().writeValueAsBytes(policiesNode.getKey()), policiesNode.getValue().getVersion());
+            policiesCache().invalidate(path("policies", property, cluster, namespace));
+
+            log.info("[{}] Successfully updated the replication clusters on namespace {}/{}/{}", clientAppId(),
+                    property, cluster, namespace);
+        } catch (KeeperException.NoNodeException e) {
+            log.warn("[{}] Failed to update the replication clusters for namespace {}/{}/{}: does not exist",
+                    clientAppId(), property, cluster, namespace);
+            throw new RestException(Status.NOT_FOUND, "Namespace does not exist");
+        } catch (KeeperException.BadVersionException e) {
+            log.warn(
+                    "[{}] Failed to update the replication clusters on namespace {}/{}/{} expected policy node version={} : concurrent modification",
+                    clientAppId(), property, cluster, namespace, policiesNode.getValue().getVersion());
+
+            throw new RestException(Status.CONFLICT, "Concurrent modification");
+        } catch (Exception e) {
+            log.error("[{}] Failed to update the replication clusters on namespace {}/{}/{}", clientAppId(), property,
+                    cluster, namespace, e);
+            throw new RestException(e);
+        }
+    }
+
+    
     @GET
     @Path("/{property}/{cluster}/{namespace}/messageTTL")
     @ApiOperation(value = "Get the message TTL for the namespace")
