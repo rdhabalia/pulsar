@@ -208,7 +208,7 @@ public class Consumer {
     }
 
     private void incrementUnackedMessages(int ackedMessages) {
-        if (UNACKED_MESSAGES_UPDATER.addAndGet(this, ackedMessages) >= maxUnackedMessages && shouldBlockConsumerOnUnackMsgs()) {
+        if (shouldBlockConsumerOnUnackMsgs() && addAndGetUnAckedMsgs(this, ackedMessages) >= maxUnackedMessages) {
             blockedConsumerOnUnackedMsgs = true;
         }
     }
@@ -407,6 +407,10 @@ public class Consumer {
         stats.blockedConsumerOnUnackedMsgs = blockedConsumerOnUnackedMsgs;
         return stats;
     }
+    
+    public int getUnackedMessages() {
+        return UNACKED_MESSAGES_UPDATER.get(this);
+    }
 
     @Override
     public String toString() {
@@ -476,7 +480,7 @@ public class Consumer {
             int totalAckedMsgs = ackOwnedConsumer.getPendingAcks().remove(position);
             // unblock consumer-throttling when receives half of maxUnackedMessages => consumer can start again
             // consuming messages
-            if (((UNACKED_MESSAGES_UPDATER.addAndGet(ackOwnedConsumer, -totalAckedMsgs) <= (maxUnackedMessages / 2))
+            if (((addAndGetUnAckedMsgs(ackOwnedConsumer, -totalAckedMsgs) <= (maxUnackedMessages / 2))
                     && ackOwnedConsumer.blockedConsumerOnUnackedMsgs)
                     && ackOwnedConsumer.shouldBlockConsumerOnUnackMsgs()) {
                 ackOwnedConsumer.blockedConsumerOnUnackedMsgs = false;
@@ -495,7 +499,7 @@ public class Consumer {
 
     public void redeliverUnacknowledgedMessages() {
         // cleanup unackedMessage bucket and redeliver those unack-msgs again
-        UNACKED_MESSAGES_UPDATER.set(this, 0);
+        clearUnAckedMsgs(this);
         blockedConsumerOnUnackedMsgs = false;
         // redeliver unacked-msgs
         subscription.redeliverUnacknowledgedMessages(this);
@@ -524,7 +528,7 @@ public class Consumer {
             }
         }
 
-        UNACKED_MESSAGES_UPDATER.addAndGet(this, -totalRedeliveryMessages);
+        addAndGetUnAckedMsgs(this, -totalRedeliveryMessages);
         blockedConsumerOnUnackedMsgs = false;
 
         subscription.redeliverUnacknowledgedMessages(this, pendingPositions);
@@ -539,6 +543,20 @@ public class Consumer {
             MESSAGE_PERMITS_UPDATER.getAndAdd(this, numberOfBlockedPermits);
             subscription.consumerFlow(this, numberOfBlockedPermits);
         }
+    }
+    
+    public Subscription getSubscription() {
+        return subscription;
+    }
+    
+    private int addAndGetUnAckedMsgs(Consumer consumer, int ackedMessages) {
+        subscription.addUnAckedMessages(ackedMessages);
+        return UNACKED_MESSAGES_UPDATER.addAndGet(this, ackedMessages);
+    }
+    
+    private void clearUnAckedMsgs(Consumer consumer) {
+        int unaAckedMsgs = UNACKED_MESSAGES_UPDATER.getAndSet(this, 0);
+        subscription.addUnAckedMessages(-unaAckedMsgs);
     }
     
     private static final Logger log = LoggerFactory.getLogger(Consumer.class);

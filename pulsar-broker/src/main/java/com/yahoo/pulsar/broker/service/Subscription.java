@@ -23,6 +23,7 @@ import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.impl.PositionImpl;
 
 import com.yahoo.pulsar.common.api.proto.PulsarApi.CommandAck.AckType;
+import com.yahoo.pulsar.common.api.proto.PulsarApi.CommandSubscribe.SubType;
 
 public interface Subscription {
     void addConsumer(Consumer consumer) throws BrokerServiceException;
@@ -64,4 +65,14 @@ public interface Subscription {
     void redeliverUnacknowledgedMessages(Consumer consumer, List<PositionImpl> positions);
 
     void markTopicWithBatchMessagePublished();
+    
+    double getExpiredMessageRate();
+    
+    SubType getType();
+    
+    String getTypeString();
+
+    void addUnAckedMessages(int unAckMessages);
+    
+    void clearAckedMessages();
 }

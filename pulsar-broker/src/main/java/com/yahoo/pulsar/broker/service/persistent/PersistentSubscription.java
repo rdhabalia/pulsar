@@ -53,6 +53,7 @@ import com.yahoo.pulsar.common.policies.data.ConsumerStats;
 import com.yahoo.pulsar.common.policies.data.PersistentSubscriptionStats;
 import com.yahoo.pulsar.common.util.Codec;
 import com.yahoo.pulsar.utils.CopyOnWriteArrayList;
+import com.yahoo.pulsar.common.api.proto.PulsarApi.CommandSubscribe.SubType;
 
 public class PersistentSubscription implements Subscription {
     private final PersistentTopic topic;
@@ -213,6 +214,7 @@ public class PersistentSubscription implements Subscription {
         return this.topicName;
     }
 
+    @Override
     public SubType getType() {
         return dispatcher != null ? dispatcher.getType() : null;
     }
@@ -599,6 +601,16 @@ public class PersistentSubscription implements Subscription {
     @Override
     public synchronized void redeliverUnacknowledgedMessages(Consumer consumer, List<PositionImpl> positions) {
         dispatcher.redeliverUnacknowledgedMessages(consumer, positions);
+    }
+
+    @Override
+    public synchronized void addUnAckedMessages(int unAckMessages) {
+        dispatcher.addUnAckedMessages(unAckMessages);
+    }
+    
+    @Override
+    public void clearAckedMessages() {
+        //TODO: clear unack
     }
 
     @Override

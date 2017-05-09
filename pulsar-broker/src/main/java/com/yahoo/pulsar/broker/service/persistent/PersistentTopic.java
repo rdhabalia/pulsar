@@ -867,7 +867,6 @@ public class PersistentTopic implements Topic, AddEntryCallback {
             double subMsgRateOut = 0;
             double subMsgThroughputOut = 0;
             double subMsgRateRedeliver = 0;
-            long subUnackedMessages = 0;
 
             // Start subscription name & consumers
             try {
@@ -886,7 +885,6 @@ public class PersistentTopic implements Topic, AddEntryCallback {
                     subMsgRateOut += consumerStats.msgRateOut;
                     subMsgThroughputOut += consumerStats.msgThroughputOut;
                     subMsgRateRedeliver += consumerStats.msgRateRedeliver;
-                    subUnackedMessages += consumerStats.unackedMessages;
 
                     // Populate consumer specific stats here
                     destStatsStream.startObject();
@@ -911,8 +909,16 @@ public class PersistentTopic implements Topic, AddEntryCallback {
                 destStatsStream.writePair("msgRateOut", subMsgRateOut);
                 destStatsStream.writePair("msgThroughputOut", subMsgThroughputOut);
                 destStatsStream.writePair("msgRateRedeliver", subMsgRateRedeliver);
-                destStatsStream.writePair("unackedMessages", subUnackedMessages);
                 destStatsStream.writePair("type", subscription.getTypeString());
+
+                if (SubType.Shared.equals(subscription.getType())) {
+                    if(subscription.getDispatcher() instanceof PersistentDispatcherMultipleConsumers) {
+                        PersistentDispatcherMultipleConsumers dispatcher = (PersistentDispatcherMultipleConsumers)subscription.getDispatcher();
+                        destStatsStream.writePair("blockedDispatcherOnUnackedMsgs",  dispatcher.isBlockedDispatcherOnUnackedMsgs());
+                        destStatsStream.writePair("unackedMessages", dispatcher.getTotalUnackedMessages());
+                    }
+                    
+                }
 
                 // Close consumers
                 destStatsStream.endObject();
