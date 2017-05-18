@@ -53,7 +53,7 @@ import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.util.concurrent.DefaultThreadFactory;
 
-public class PerformanceProducer {
+public class SharedSubscriptionStressTest {
 
     static class Arguments {
 
@@ -297,5 +297,5 @@ public class PerformanceProducer {
         client.close();
     }
 
-    private static final Logger log = LoggerFactory.getLogger(PerformanceProducer.class);
+    private static final Logger log = LoggerFactory.getLogger(SharedSubscriptionStressTest.class);
 }
