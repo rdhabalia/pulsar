@@ -1,0 +1,11 @@
+<aspectj>
+
+  <aspects>
+    <aspect name="com.yahoo.pulsar.broker.zookeeper.aspectj.ClientCnxnAspect" />
+  </aspects>
+
+  <weaver>
+    <include within="com.yahoo.pulsar.broker.zookeeper.aspectj.ClientCnxnAspect" />
+  </weaver>
+
+</aspectj>
