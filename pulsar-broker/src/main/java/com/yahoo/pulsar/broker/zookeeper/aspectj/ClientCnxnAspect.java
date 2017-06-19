@@ -21,19 +21,7 @@ import java.util.Map;
 
 import org.apache.bookkeeper.util.MathUtils;
 import org.apache.jute.Record;
-import org.apache.zookeeper.proto.ConnectResponse;
-import org.apache.zookeeper.proto.CreateResponse;
-import org.apache.zookeeper.proto.ErrorResponse;
-import org.apache.zookeeper.proto.ExistsResponse;
-import org.apache.zookeeper.proto.GetACLResponse;
-import org.apache.zookeeper.proto.GetChildren2Response;
-import org.apache.zookeeper.proto.GetChildrenResponse;
-import org.apache.zookeeper.proto.GetDataResponse;
-import org.apache.zookeeper.proto.GetMaxChildrenResponse;
-import org.apache.zookeeper.proto.SetDataResponse;
-import org.apache.zookeeper.proto.SetSASLResponse;
-import org.apache.zookeeper.proto.SetWatches;
-import org.apache.zookeeper.proto.SyncResponse;
+import org.apache.zookeeper.proto.*;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
@@ -59,6 +47,7 @@ public class ClientCnxnAspect {
 
     @Around("processEvent()")
     public void timedProcessEvent(ProceedingJoinPoint joinPoint) throws Throwable {
+        System.out.println("I am called");
         joinPoint.proceed();
 
         long startTimeMs = getStartTime(joinPoint.getArgs()[0]);
@@ -66,9 +55,10 @@ public class ClientCnxnAspect {
             // couldn't find start time
             return;
         }
-        Record response = getEventResponse(joinPoint.getArgs()[0]);
-        if (response != null) {
-            int type = checkType(response);
+        Record request = getEventType(joinPoint.getArgs()[0]);
+        System.out.println(request.getClass());
+        if (request != null) {
+            int type = checkType(request);
             if (type == writeType) {
                 System.out.println("writetype = " + (MathUtils.now() - startTimeMs));
             } else if (type == writeType) {
@@ -83,38 +73,41 @@ public class ClientCnxnAspect {
 
         if (response == null) {
             return otherType;
-        } else if (response instanceof CreateResponse) {
+        } else if (response instanceof ConnectRequest) {
             return writeType;
-        } else if (response instanceof SetDataResponse) {
+        } else if (response instanceof CreateRequest) {
             return writeType;
-        } else if (response instanceof SetDataResponse) {
+        } else if (response instanceof DeleteRequest) {
             return writeType;
-        } else if (response instanceof SyncResponse) {
+        } else if (response instanceof SetDataRequest) {
             return writeType;
-        } else if (response instanceof SetSASLResponse) {
+        } else if (response instanceof SetACLRequest) {
             return writeType;
-        } else if (response instanceof ConnectResponse) {
+        } else if (response instanceof SetMaxChildrenRequest) {
+            return writeType;
+        } else if (response instanceof SetSASLRequest) {
             return writeType;
         } else if (response instanceof SetWatches) {
             return writeType;
-        } else if (response instanceof GetDataResponse) {
+        } else if (response instanceof SyncRequest) {
+            return writeType;
+        } else if (response instanceof ExistsRequest) {
             return readType;
-        } else if (response instanceof GetChildrenResponse) {
+        } else if (response instanceof GetDataRequest) {
             return readType;
-        } else if (response instanceof ExistsResponse) {
+        } else if (response instanceof GetMaxChildrenRequest) {
             return readType;
-        } else if (response instanceof ErrorResponse) {
+        } else if (response instanceof GetACLRequest) {
             return readType;
-        } else if (response instanceof GetACLResponse) {
+        } else if (response instanceof GetChildrenRequest) {
             return readType;
-        } else if (response instanceof GetChildren2Response) {
+        } else if (response instanceof GetChildren2Request) {
             return readType;
-        } else if (response instanceof GetChildrenResponse) {
+        } else if (response instanceof GetSASLRequest) {
             return readType;
-        } else if (response instanceof GetMaxChildrenResponse) {
-            return readType;
+        } else {
+            return otherType;
         }
-        return otherType;
     }
 
     private long getStartTime(Object packet) {
@@ -137,10 +130,10 @@ public class ClientCnxnAspect {
         return -1;
     }
 
-    private Record getEventResponse(Object packet) {
+    private Record getEventType(Object packet) {
         try {
             if (packet.getClass().getName().equals("org.apache.zookeeper.ClientCnxn$Packet")) {
-                Field field = Class.forName("org.apache.zookeeper.ClientCnxn$Packet").getDeclaredField("response");
+                Field field = Class.forName("org.apache.zookeeper.ClientCnxn$Packet").getDeclaredField("request");
                 field.setAccessible(true);
                 Record response = (Record) field.get(packet);
                 return response;

@@ -5,7 +5,7 @@
   </aspects>
 
   <weaver>
-    <include within="com.yahoo.pulsar.broker.zookeeper.aspectj.ClientCnxnAspect" />
+    <include within="org.apache.zookeeper.ClientCnxn" />
   </weaver>
 
 </aspectj>
