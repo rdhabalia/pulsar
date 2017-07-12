@@ -48,7 +48,9 @@ SharedBuffer Commands::newPartitionMetadataRequest(BaseCommand& cmd, const std::
     CommandPartitionedTopicMetadata* partitionMetadata = cmd.mutable_partitionmetadata();
     partitionMetadata->set_topic(topic);
     partitionMetadata->set_request_id(requestId);
-    return writeMessageWithSize(cmd);
+    const SharedBuffer& buffer = writeMessageWithSize(cmd);
+    cmd.release_partitionmetadata();
+    return buffer;
 }
 
 SharedBuffer Commands::newLookup(BaseCommand& cmd, const std::string& topic, const bool authoritative,
@@ -58,7 +60,9 @@ SharedBuffer Commands::newLookup(BaseCommand& cmd, const std::string& topic, con
     lookup->set_topic(topic);
     lookup->set_authoritative(authoritative);
     lookup->set_request_id(requestId);
-    return writeMessageWithSize(cmd);
+    const SharedBuffer& buffer = writeMessageWithSize(cmd);
+    cmd.release_lookuptopic();
+    return buffer;
 }
 
 SharedBuffer Commands::newConsumerStats(BaseCommand& cmd, uint64_t consumerId, uint64_t requestId) { 
@@ -66,7 +70,9 @@ SharedBuffer Commands::newConsumerStats(BaseCommand& cmd, uint64_t consumerId, u
     CommandConsumerStats* consumerStats = cmd.mutable_consumerstats();
     consumerStats->set_consumer_id(consumerId);
     consumerStats->set_request_id(requestId);
-    return writeMessageWithSize(cmd);
+    const SharedBuffer& buffer = writeMessageWithSize(cmd);
+    cmd.release_consumerstats();
+    return buffer;
 }
 
 PairSharedBuffer Commands::newSend(SharedBuffer& headers, BaseCommand& cmd,
@@ -137,6 +143,7 @@ PairSharedBuffer Commands::newSend(SharedBuffer& headers, BaseCommand& cmd,
         headers.setWriterIndex(writeIndex);
     }
 
+    cmd.release_send();
     return composite;
 }
 
@@ -151,7 +158,9 @@ SharedBuffer Commands::newConnect(const AuthenticationPtr& authentication) {
     if (authentication->getAuthData(authDataContent) == ResultOk && authDataContent->hasDataFromCommand()) {
         connect->set_auth_data(authDataContent->getCommandData());
     }
-    return writeMessageWithSize(cmd);
+    const SharedBuffer& buffer = writeMessageWithSize(cmd);
+    cmd.release_connect();
+    return buffer;
 }
 
 SharedBuffer Commands::newSubscribe(const std::string& topic, const std::string&subscription,
@@ -166,8 +175,9 @@ SharedBuffer Commands::newSubscribe(const std::string& topic, const std::string&
     subscribe->set_consumer_id(consumerId);
     subscribe->set_request_id(requestId);
     subscribe->set_consumer_name(consumerName);
-
-    return writeMessageWithSize(cmd);
+    const SharedBuffer& buffer = writeMessageWithSize(cmd);
+    cmd.release_subscribe();
+    return buffer;
 }
 
 SharedBuffer Commands::newUnsubscribe(uint64_t consumerId, uint64_t requestId) {
@@ -176,8 +186,9 @@ SharedBuffer Commands::newUnsubscribe(uint64_t consumerId, uint64_t requestId) {
     CommandUnsubscribe* unsubscribe = cmd.mutable_unsubscribe();
     unsubscribe->set_consumer_id(consumerId);
     unsubscribe->set_request_id(requestId);
-
-    return writeMessageWithSize(cmd);
+    const SharedBuffer& buffer = writeMessageWithSize(cmd);
+    cmd.release_unsubscribe();
+    return buffer;
 }
 
 SharedBuffer Commands::newProducer(const std::string& topic, uint64_t producerId,
@@ -192,8 +203,9 @@ SharedBuffer Commands::newProducer(const std::string& topic, uint64_t producerId
     if (!producerName.empty()) {
         producer->set_producer_name(producerName);
     }
-
-    return writeMessageWithSize(cmd);
+    const SharedBuffer& buffer = writeMessageWithSize(cmd);
+    cmd.release_producer();
+    return buffer;
 }
 
 SharedBuffer Commands::newAck(uint64_t consumerId, const MessageIdData& messageId,
@@ -217,7 +229,9 @@ SharedBuffer Commands::newFlow(uint64_t consumerId, uint32_t messagePermits) {
     CommandFlow* flow = cmd.mutable_flow();
     flow->set_consumer_id(consumerId);
     flow->set_messagepermits(messagePermits);
-    return writeMessageWithSize(cmd);
+    const SharedBuffer& buffer = writeMessageWithSize(cmd);
+    cmd.release_flow();
+    return buffer;
 }
 
 SharedBuffer Commands::newCloseProducer(uint64_t producerId, uint64_t requestId) {
@@ -226,7 +240,9 @@ SharedBuffer Commands::newCloseProducer(uint64_t producerId, uint64_t requestId)
     CommandCloseProducer* close = cmd.mutable_close_producer();
     close->set_producer_id(producerId);
     close->set_request_id(requestId);
-    return writeMessageWithSize(cmd);
+    const SharedBuffer& buffer = writeMessageWithSize(cmd);
+    cmd.release_close_producer();
+    return buffer;
 }
 
 SharedBuffer Commands::newCloseConsumer(uint64_t consumerId, uint64_t requestId) {
@@ -235,7 +251,9 @@ SharedBuffer Commands::newCloseConsumer(uint64_t consumerId, uint64_t requestId)
     CommandCloseConsumer* close = cmd.mutable_close_consumer();
     close->set_consumer_id(consumerId);
     close->set_request_id(requestId);
-    return writeMessageWithSize(cmd);
+    const SharedBuffer& buffer = writeMessageWithSize(cmd);
+    cmd.release_close_consumer();
+    return buffer;
 }
 
 SharedBuffer Commands::newPing() {
@@ -257,7 +275,9 @@ SharedBuffer Commands::newRedeliverUnacknowledgedMessages(uint64_t consumerId) {
     cmd.set_type(BaseCommand::REDELIVER_UNACKNOWLEDGED_MESSAGES);
     CommandRedeliverUnacknowledgedMessages* command = cmd.mutable_redeliverunacknowledgedmessages();
     command->set_consumer_id(consumerId);
-    return writeMessageWithSize(cmd);
+    const SharedBuffer& buffer = writeMessageWithSize(cmd);
+    cmd.release_redeliverunacknowledgedmessages();
+    return buffer;
 }
 
 std::string Commands::messageType(BaseCommand_Type type) {
