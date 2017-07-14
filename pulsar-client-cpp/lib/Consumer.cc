@@ -79,6 +79,10 @@ Result Consumer::receive(Message& msg, int timeoutMs) {
     return impl_->receive(msg, timeoutMs);
 }
 
+void Consumer::receiveAsync(ReceiveCallback callback) {
+    impl_->receiveAsync(callback);
+}
+
 Result Consumer::acknowledge(const Message& message) {
     return acknowledge(message.getMessageId());
 }

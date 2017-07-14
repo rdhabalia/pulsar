@@ -52,6 +52,7 @@ namespace pulsar {
         virtual const std::string& getTopic() const;
         virtual Result receive(Message& msg);
         virtual Result receive(Message& msg, int timeout);
+        void receiveAsync(ReceiveCallback& callback);
         virtual void unsubscribeAsync(ResultCallback callback);
         virtual void acknowledgeAsync(const MessageId& msgId, ResultCallback callback);
         virtual void acknowledgeCumulativeAsync(const MessageId& msgId, ResultCallback callback);
@@ -100,8 +101,10 @@ namespace pulsar {
         void messageReceived(Consumer consumer, const Message& msg);
         void internalListener(Consumer consumer);
         void receiveMessages();
+        void notifyPendingReceivedCallback(Message& msg, const ReceiveCallback& callback);
         Promise<Result, ConsumerImplBaseWeakPtr> partitionedConsumerCreatedPromise_;
         UnAckedMessageTrackerScopedPtr unAckedMessageTrackerPtr_;
+        UnboundedBlockingQueue<ReceiveCallback> pendingReceives_;
     };
     typedef boost::weak_ptr<PartitionedConsumerImpl> PartitionedConsumerImplWeakPtr;
     typedef boost::shared_ptr<PartitionedConsumerImpl> PartitionedConsumerImplPtr;

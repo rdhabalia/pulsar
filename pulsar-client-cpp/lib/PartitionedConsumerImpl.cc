@@ -38,6 +38,7 @@ namespace pulsar {
     messages_(1000),
     listenerExecutor_(client->getListenerExecutorProvider()->get()),
     messageListener_(conf.getMessageListener()),
+    pendingReceives_(100000),
     topic_(destinationName->toString())
     {
         std::stringstream consumerStrStream;
@@ -97,6 +98,20 @@ namespace pulsar {
             return ResultOk;
         } else {
             return ResultTimeout;
+        }
+    }
+
+    void PartitionedConsumerImpl::receiveAsync(ReceiveCallback& callback) {
+        Message msg;
+
+        Lock lock(mutex_);
+        if(messages_.pop(msg, milliseconds(0))) {
+            lock.unlock();
+            unAckedMessageTrackerPtr_->add(msg.getMessageId());
+            callback(msg);
+        } else {
+            lock.unlock();
+            pendingReceives_.push(callback);
         }
     }
 
@@ -318,10 +333,25 @@ namespace pulsar {
 
     void PartitionedConsumerImpl::messageReceived(Consumer consumer, const Message& msg) {
         LOG_DEBUG("Received Message from one of the partition - " << msg.impl_->messageId.partition_);
-        messages_.push(msg);
-        if (messageListener_) {
-            listenerExecutor_->postWork(boost::bind(&PartitionedConsumerImpl::internalListener, shared_from_this(), consumer));
+        Lock lock(mutex_);
+        if(!pendingReceives_.empty()) {
+            ReceiveCallback callback;
+            pendingReceives_.pop(callback);
+            lock.unlock();
+            listenerExecutor_->postWork(boost::bind(&PartitionedConsumerImpl::notifyPendingReceivedCallback, shared_from_this(), msg, callback));
+        } else {
+            lock.unlock();
+            messages_.push(msg);
+            if (messageListener_) {
+                listenerExecutor_->postWork(boost::bind(&PartitionedConsumerImpl::internalListener, shared_from_this(), consumer));
+            }
         }
+
+    }
+
+    void PartitionedConsumerImpl::notifyPendingReceivedCallback(Message& msg, const ReceiveCallback& callback) {
+        unAckedMessageTrackerPtr_->add(msg.getMessageId());
+        callback(msg);
     }
 
     void PartitionedConsumerImpl::internalListener(Consumer consumer) {

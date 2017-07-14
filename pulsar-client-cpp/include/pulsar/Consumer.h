@@ -100,6 +100,8 @@ class Consumer {
      */
     Result receive(Message& msg, int timeoutMs);
 
+    void receiveAsync(ReceiveCallback callback);
+
     /**
      * Acknowledge the reception of a single message.
      *

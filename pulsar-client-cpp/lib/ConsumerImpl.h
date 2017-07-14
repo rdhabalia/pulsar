@@ -85,6 +85,7 @@ enum ConsumerTopicType {
     virtual const std::string& getTopic() const;
     virtual Result receive(Message& msg);
     virtual Result receive(Message& msg, int timeout);
+    void receiveAsync(ReceiveCallback& callback);
     Result fetchSingleMessageFromBroker(Message& msg);
     virtual void acknowledgeAsync(const MessageId& msgId, ResultCallback callback);
     virtual void acknowledgeCumulativeAsync(const MessageId& msgId, ResultCallback callback);
@@ -126,6 +127,7 @@ private:
     Result receiveHelper(Message& msg);
     Result receiveHelper(Message& msg, int timeout);
     void statsCallback(Result, ResultCallback, proto::CommandAck_AckType);
+    void notifyPendingReceivedCallback(Message& message, const ReceiveCallback& callback);
 
     boost::mutex mutexForReceiveWithZeroQueueSize;
     const ConsumerConfiguration config_;
@@ -135,6 +137,7 @@ private:
     ExecutorServicePtr listenerExecutor_;
     ConsumerTopicType consumerTopicType_;
     UnboundedBlockingQueue<Message> incomingMessages_;
+    UnboundedBlockingQueue<ReceiveCallback> pendingReceives_;
     int availablePermits_;
     uint64_t consumerId_;
     std::string consumerName_;

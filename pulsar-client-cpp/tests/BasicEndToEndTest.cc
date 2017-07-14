@@ -33,6 +33,7 @@
 
 #include "lib/Future.h"
 #include "lib/Utils.h"
+#include "boost/enable_shared_from_this.hpp"
 DECLARE_LOG_OBJECT()
 
 using namespace pulsar;
@@ -54,6 +55,12 @@ static void sendCallBack(Result r, const Message& msg, std::string prefix) {
     std::string messageContent = prefix + boost::lexical_cast<std::string>(globalTestBatchMessagesCounter++);
     ASSERT_EQ(messageContent, msg.getDataAsString());
     LOG_DEBUG("Received publish acknowledgement for " << msg.getDataAsString());
+}
+
+static void receiveCallBack(const Message& msg, std::string& messageContent, bool* received) {
+    std::cout << "\nreceived msg " << msg.getDataAsString() << " expected: " << messageContent;
+    ASSERT_EQ(messageContent, msg.getDataAsString());
+    *received = true;
 }
 
 static void sendCallBack(Result r, const Message& msg, std::string prefix, double percentage, uint64_t delayInMicros) {
@@ -1022,4 +1029,50 @@ TEST(BasicEndToEndTest, testProduceMessageSize) {
     client.close();
 
     delete[] content;
+}
+
+
+TEST(BasicEndToEndTest, testReceiveAsync)
+{
+    ClientConfiguration config;
+    Client client(lookupUrl);
+    std::string topicName = "persistent://prop/unit/ns1/receiveAsync";
+    std::string subName = "my-sub-name";
+    Producer producer;
+
+    Promise<Result, Producer> producerPromise;
+    client.createProducerAsync(topicName, WaitForCallbackValue<Producer>(producerPromise));
+    Future<Result, Producer> producerFuture = producerPromise.getFuture();
+    Result result = producerFuture.get(producer);
+    ASSERT_EQ(ResultOk, result);
+    Consumer consumer;
+    Promise<Result, Consumer> consumerPromise;
+    client.subscribeAsync(topicName, subName, WaitForCallbackValue<Consumer>(consumerPromise));
+    Future<Result, Consumer> consumerFuture = consumerPromise.getFuture();
+    result = consumerFuture.get(consumer);
+    ASSERT_EQ(ResultOk, result);
+    std::string temp = producer.getTopic();
+    ASSERT_EQ(temp, topicName);
+    temp = consumer.getTopic();
+    ASSERT_EQ(temp, topicName);
+    ASSERT_EQ(consumer.getSubscriptionName(), subName);
+
+    std::string content = "msg-1-content";
+    bool completed = false;
+    consumer.receiveAsync(boost::bind(&receiveCallBack, _1, content, &completed));
+
+    // Send synchronously
+    Message msg = MessageBuilder().setContent(content).build();
+    result = producer.send(msg);
+    ASSERT_EQ(ResultOk, result);
+
+    // check strategically
+    for (int i = 0; i < 3; i++) {
+        if (completed) {
+            break;
+        }
+        usleep(1 * 1000 * 1000);
+    }
+    std::cout<<"\ncompleted value: "<<completed <<"\n";
+    ASSERT_TRUE(completed);
 }

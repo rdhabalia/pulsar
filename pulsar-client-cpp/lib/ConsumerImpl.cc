@@ -46,6 +46,7 @@ ConsumerImpl::ConsumerImpl(const ClientImplPtr client, const std::string& topic,
           consumerTopicType_(consumerTopicType),
           // This is the initial capacity of the queue
           incomingMessages_(std::max(config_.getReceiverQueueSize(), 1)),
+          pendingReceives_(100000),
           availablePermits_(conf.getReceiverQueueSize()),
           consumerId_(client->newConsumerId()),
           consumerName_(config_.getConsumerName()),
@@ -271,19 +272,33 @@ void ConsumerImpl::messageReceived(const ClientConnectionPtr& cnx, const proto::
 
     unsigned int numOfMessageReceived = 1;
     if (metadata.has_num_messages_in_batch()) {
-        Lock lock(mutex_);
         numOfMessageReceived = receiveIndividualMessagesFromBatch(m);
     } else {
-        // config_.getReceiverQueueSize() != 0 or waiting For ZeroQueueSize Message`
-        if (config_.getReceiverQueueSize() != 0) {
+
+        // pendingReceives_ push/pop needs to be thread-safe: to decide callback or adding into incomingMessages_ queue
+        Lock lock(mutex_);
+        bool asyncReceivedWaiting = !pendingReceives_.empty();
+        ReceiveCallback callback;
+        if(asyncReceivedWaiting) {
+            pendingReceives_.pop(callback);
+        }
+
+        // Enqueue the message so that it can be retrieved when application calls receive()
+        // if the conf.getReceiverQueueSize() is 0 then discard message if no one is waiting for it.
+        // if asyncReceive is waiting then notify callback without adding to incomingMessages queue
+        if ((config_.getReceiverQueueSize() != 0 || waitingForZeroQueueSizeMessage)
+                && !asyncReceivedWaiting) {
+            lock.unlock();
             incomingMessages_.push(m);
         } else {
-            Lock lock(mutex_);
-            if(waitingForZeroQueueSizeMessage) {
-                lock.unlock();
-                incomingMessages_.push(m);
-            }
+            lock.unlock();
         }
+        if (asyncReceivedWaiting) {
+            listenerExecutor_->postWork(
+                    boost::bind(&ConsumerImpl::notifyPendingReceivedCallback, shared_from_this(), m,
+                                callback));
+        }
+
     }
 
     if (messageListener_) {
@@ -300,6 +315,13 @@ void ConsumerImpl::messageReceived(const ClientConnectionPtr& cnx, const proto::
     }
 }
 
+void ConsumerImpl::notifyPendingReceivedCallback(Message& msg, const ReceiveCallback& callback) {
+    if (config_.getReceiverQueueSize() != 0) {
+        messageProcessed(msg);
+    }
+    callback(msg);
+}
+
 // Zero Queue size is not supported with Batch Messages
 unsigned int ConsumerImpl::receiveIndividualMessagesFromBatch(Message& batchedMessage) {
     unsigned int batchSize = batchedMessage.impl_->metadata.num_messages_in_batch();
@@ -308,7 +330,18 @@ unsigned int ConsumerImpl::receiveIndividualMessagesFromBatch(Message& batchedMe
     for (int i=0; i<batchSize; i++) {
         batchedMessage.impl_->messageId.batchIndex_ = i;
         // This is a cheap copy since message contains only one shared pointer (impl_)
-        incomingMessages_.push(Commands::deSerializeSingleMessageInBatch(batchedMessage));
+        Message msg = Commands::deSerializeSingleMessageInBatch(batchedMessage);
+        Lock lock(mutex_);
+        if(!pendingReceives_.empty()) {
+            ReceiveCallback callback;
+            pendingReceives_.pop(callback);
+            callback(msg);
+            lock.unlock();
+        } else {
+            lock.unlock();
+            incomingMessages_.push(msg);
+        }
+
     }
     return batchSize;
 }
@@ -422,6 +455,30 @@ Result ConsumerImpl::receive(Message& msg) {
     Result res = receiveHelper(msg);
     consumerStatsBasePtr_->receivedMessage(msg, res);
     return res;
+}
+
+void ConsumerImpl::receiveAsync(ReceiveCallback& callback) {
+    Message msg;
+
+    Lock lock(mutex_);
+    if(incomingMessages_.pop(msg, milliseconds(0))) {
+        lock.unlock();
+        messageProcessed(msg);
+        callback(msg);
+    } else {
+        // TODO: pending receive queue can't be unbounded
+        pendingReceives_.push(callback);
+        lock.unlock();
+
+        if (config_.getReceiverQueueSize() == 0) {
+            ClientConnectionPtr currentCnx = getCnx().lock();
+            if (currentCnx) {
+                LOG_DEBUG(getName() << "Send more permits: " << 1);
+                receiveMessages(currentCnx, 1);
+            }
+        }
+
+    }
 }
 
 Result ConsumerImpl::receiveHelper(Message& msg) {
