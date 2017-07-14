@@ -135,6 +135,8 @@ public class SimpleLoadManagerImplTest {
     void setup() throws Exception {
 
         try {
+            log.error("doing simpleloadmanager setup");
+            System.out.println("doing simpleloadmanager setup");
         	// Start local bookkeeper ensemble
             bkEnsemble = new LocalBookkeeperEnsemble(3, ZOOKEEPER_PORT, PortManager.nextFreePort());
             bkEnsemble.start();
@@ -172,6 +174,7 @@ public class SimpleLoadManagerImplTest {
                     SECONDARY_BROKER_WEBSERVICE_PORT);
             Thread.sleep(100);
         }catch(Exception e) {
+            log.error("exit from process : ", e);
         	e.printStackTrace();
         }
     }

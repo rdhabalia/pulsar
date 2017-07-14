@@ -128,6 +128,8 @@ public class LoadBalancerTest {
     @BeforeMethod
     void setup() throws Exception {
     	try {
+    	    log.error("doing loadBalance setup");
+    	    System.out.println("doing loadBalance setup");
             // Start local bookkeeper ensemble
             bkEnsemble = new LocalBookkeeperEnsemble(3, ZOOKEEPER_PORT, PortManager.nextFreePort());
             bkEnsemble.start();
@@ -161,6 +163,7 @@ public class LoadBalancerTest {
             Thread.sleep(100);
     	}catch(Exception e) {
     		e.printStackTrace();
+            log.error("exit from process : ", e);
     	}
     	
     	
