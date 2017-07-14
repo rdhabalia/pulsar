@@ -38,6 +38,7 @@ namespace pulsar {
     messages_(1000),
     listenerExecutor_(client->getListenerExecutorProvider()->get()),
     messageListener_(conf.getMessageListener()),
+    pendingReceives_(),
     topic_(destinationName->toString())
     {
         std::stringstream consumerStrStream;
@@ -97,6 +98,28 @@ namespace pulsar {
             return ResultOk;
         } else {
             return ResultTimeout;
+        }
+    }
+
+    void PartitionedConsumerImpl::receiveAsync(ReceiveCallback& callback) {
+        Message msg;
+
+        {
+            // fail the callback if consumer is closing or closed
+            Lock lock(mutex_);
+            if (state_ == Closing || state_ == Closed) {
+                callback(ResultAlreadyClosed, msg);
+                return;
+            }
+        }
+
+        Lock lock(pendingReceiveMutex_);
+        if(messages_.pop(msg, milliseconds(0))) {
+            lock.unlock();
+            unAckedMessageTrackerPtr_->add(msg.getMessageId());
+            callback(ResultOk, msg);
+        } else {
+            pendingReceives_.push(callback);
         }
     }
 
@@ -285,6 +308,9 @@ namespace pulsar {
                 }
             }
         }
+
+        //fail pending recieve
+        failPendingReceiveCallback();
     }
 
     void PartitionedConsumerImpl::notifyResult(CloseCallback closeCallback) {
@@ -318,10 +344,36 @@ namespace pulsar {
 
     void PartitionedConsumerImpl::messageReceived(Consumer consumer, const Message& msg) {
         LOG_DEBUG("Received Message from one of the partition - " << msg.impl_->messageId.partition_);
-        messages_.push(msg);
-        if (messageListener_) {
-            listenerExecutor_->postWork(boost::bind(&PartitionedConsumerImpl::internalListener, shared_from_this(), consumer));
+
+        // messages_ is a blocking queue: if queue is already full then no need of lock as receiveAsync already gets available-msg and no need to put request in pendingReceives_
+        Lock lock(pendingReceiveMutex_);
+        if(!pendingReceives_.empty()) {
+            ReceiveCallback callback = pendingReceives_.front();
+            pendingReceives_.pop();
+            lock.unlock();
+            unAckedMessageTrackerPtr_->add(msg.getMessageId());
+            listenerExecutor_->postWork(boost::bind(callback, ResultOk, msg));
+        } else {
+            if(messages_.full()) {
+                lock.unlock();
+            }
+            messages_.push(msg);
+            if (messageListener_) {
+                listenerExecutor_->postWork(boost::bind(&PartitionedConsumerImpl::internalListener, shared_from_this(), consumer));
+            }
         }
+
+    }
+
+    void PartitionedConsumerImpl::failPendingReceiveCallback() {
+        Message msg;
+        Lock lock(pendingReceiveMutex_);
+        while (!pendingReceives_.empty()) {
+            ReceiveCallback callback = pendingReceives_.front();
+            pendingReceives_.pop();
+            listenerExecutor_->postWork(boost::bind(callback, ResultAlreadyClosed, msg));
+        }
+        lock.unlock();
     }
 
     void PartitionedConsumerImpl::internalListener(Consumer consumer) {

@@ -29,6 +29,7 @@
 #include "lib/UnAckedMessageTrackerDisabled.h"
 #include <lib/Latch.h>
 #include <lib/PartitionedBrokerConsumerStatsImpl.h>
+#include <queue>
 
 namespace pulsar {
     class PartitionedConsumerImpl;
@@ -52,6 +53,7 @@ namespace pulsar {
         virtual const std::string& getTopic() const;
         virtual Result receive(Message& msg);
         virtual Result receive(Message& msg, int timeout);
+        void receiveAsync(ReceiveCallback& callback);
         virtual void unsubscribeAsync(ResultCallback callback);
         virtual void acknowledgeAsync(const MessageId& msgId, ResultCallback callback);
         virtual void acknowledgeCumulativeAsync(const MessageId& msgId, ResultCallback callback);
@@ -79,6 +81,7 @@ namespace pulsar {
         typedef std::vector<ConsumerImplPtr> ConsumerList;
         ConsumerList consumers_;
         boost::mutex mutex_;
+        boost::mutex pendingReceiveMutex_;
         PartitionedConsumerState state_;
         unsigned int unsubscribedSoFar_;
         BlockingQueue<Message> messages_;
@@ -100,8 +103,10 @@ namespace pulsar {
         void messageReceived(Consumer consumer, const Message& msg);
         void internalListener(Consumer consumer);
         void receiveMessages();
+        void failPendingReceiveCallback();
         Promise<Result, ConsumerImplBaseWeakPtr> partitionedConsumerCreatedPromise_;
         UnAckedMessageTrackerScopedPtr unAckedMessageTrackerPtr_;
+        std::queue<ReceiveCallback> pendingReceives_;
     };
     typedef boost::weak_ptr<PartitionedConsumerImpl> PartitionedConsumerImplWeakPtr;
     typedef boost::shared_ptr<PartitionedConsumerImpl> PartitionedConsumerImplPtr;

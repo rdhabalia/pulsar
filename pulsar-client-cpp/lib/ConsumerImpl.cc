@@ -46,6 +46,7 @@ ConsumerImpl::ConsumerImpl(const ClientImplPtr client, const std::string& topic,
           consumerTopicType_(consumerTopicType),
           // This is the initial capacity of the queue
           incomingMessages_(std::max(config_.getReceiverQueueSize(), 1)),
+          pendingReceives_(),
           availablePermits_(conf.getReceiverQueueSize()),
           consumerId_(client->newConsumerId()),
           consumerName_(config_.getConsumerName()),
@@ -274,16 +275,29 @@ void ConsumerImpl::messageReceived(const ClientConnectionPtr& cnx, const proto::
         Lock lock(mutex_);
         numOfMessageReceived = receiveIndividualMessagesFromBatch(m);
     } else {
-        // config_.getReceiverQueueSize() != 0 or waiting For ZeroQueueSize Message`
-        if (config_.getReceiverQueueSize() != 0) {
-            incomingMessages_.push(m);
-        } else {
-            Lock lock(mutex_);
-            if(waitingForZeroQueueSizeMessage) {
-                lock.unlock();
-                incomingMessages_.push(m);
-            }
+
+        Lock lock(pendingReceiveMutex_);
+        // Enqueue the message so that it can be retrieved when application calls receive()
+        // if the conf.getReceiverQueueSize() is 0 then discard message if no one is waiting for it.
+        // if asyncReceive is waiting then notify callback without adding to incomingMessages queue
+        bool asyncReceivedWaiting = !pendingReceives_.empty();
+        ReceiveCallback callback;
+        if (asyncReceivedWaiting) {
+            callback = pendingReceives_.front();
+            pendingReceives_.pop();
         }
+        if ((config_.getReceiverQueueSize() != 0 || waitingForZeroQueueSizeMessage)
+                && !asyncReceivedWaiting) {
+            incomingMessages_.push(m);
+        }
+        lock.unlock();
+
+        if (asyncReceivedWaiting) {
+            listenerExecutor_->postWork(
+                    boost::bind(&ConsumerImpl::notifyPendingReceivedCallback, shared_from_this(),
+                                ResultOk, m, callback));
+        }
+
     }
 
     if (messageListener_) {
@@ -300,6 +314,27 @@ void ConsumerImpl::messageReceived(const ClientConnectionPtr& cnx, const proto::
     }
 }
 
+void ConsumerImpl::failPendingReceiveCallback() {
+    Message msg;
+    Lock lock(pendingReceiveMutex_);
+    while (!pendingReceives_.empty()) {
+        ReceiveCallback callback = pendingReceives_.front();
+        pendingReceives_.pop();
+        listenerExecutor_->postWork(
+                boost::bind(&ConsumerImpl::notifyPendingReceivedCallback, shared_from_this(),
+                            ResultAlreadyClosed, msg, callback));
+    }
+    lock.unlock();
+}
+
+void ConsumerImpl::notifyPendingReceivedCallback(Result result, Message& msg, const ReceiveCallback& callback) {
+    if (result == ResultOk && config_.getReceiverQueueSize() != 0) {
+        messageProcessed(msg);
+        unAckedMessageTrackerPtr_->add(msg.getMessageId());
+    }
+    callback(result, msg);
+}
+
 // Zero Queue size is not supported with Batch Messages
 unsigned int ConsumerImpl::receiveIndividualMessagesFromBatch(Message& batchedMessage) {
     unsigned int batchSize = batchedMessage.impl_->metadata.num_messages_in_batch();
@@ -308,7 +343,18 @@ unsigned int ConsumerImpl::receiveIndividualMessagesFromBatch(Message& batchedMe
     for (int i=0; i<batchSize; i++) {
         batchedMessage.impl_->messageId.batchIndex_ = i;
         // This is a cheap copy since message contains only one shared pointer (impl_)
-        incomingMessages_.push(Commands::deSerializeSingleMessageInBatch(batchedMessage));
+        Message msg = Commands::deSerializeSingleMessageInBatch(batchedMessage);
+        Lock lock(pendingReceiveMutex_);
+        if(!pendingReceives_.empty()) {
+            ReceiveCallback callback = pendingReceives_.front();
+            pendingReceives_.pop();
+            lock.unlock();
+            callback(ResultOk, msg);
+        } else {
+            incomingMessages_.push(msg);
+            lock.unlock();
+        }
+
     }
     return batchSize;
 }
@@ -409,6 +455,7 @@ Result ConsumerImpl::fetchSingleMessageFromBroker(Message& msg) {
             // if message received due to an old flow - discard it and wait for the message from the
             // latest flow command
             if (msg.impl_->cnx_ == currentCnx.get()) {
+
                 waitingForZeroQueueSizeMessage = false;
                 // Can't use break here else it may trigger a race with connection opened.
                 return ResultOk;
@@ -422,6 +469,39 @@ Result ConsumerImpl::receive(Message& msg) {
     Result res = receiveHelper(msg);
     consumerStatsBasePtr_->receivedMessage(msg, res);
     return res;
+}
+
+void ConsumerImpl::receiveAsync(ReceiveCallback& callback) {
+    Message msg;
+
+    {
+        // fail the callback if consumer is closing or closed
+        Lock lock(mutex_);
+        if (state_ == Closing || state_ == Closed) {
+            callback(ResultAlreadyClosed, msg);
+            return;
+        }
+    }
+
+    Lock lock(pendingReceiveMutex_);
+    if (incomingMessages_.pop(msg, milliseconds(0))) {
+        lock.unlock();
+        messageProcessed(msg);
+        unAckedMessageTrackerPtr_->add(msg.getMessageId());
+        callback(ResultOk, msg);
+    } else {
+        pendingReceives_.push(callback);
+        lock.unlock();
+
+        if (config_.getReceiverQueueSize() == 0) {
+            ClientConnectionPtr currentCnx = getCnx().lock();
+            if (currentCnx) {
+                LOG_DEBUG(getName() << "Send more permits: " << 1);
+                receiveMessages(currentCnx, 1);
+            }
+        }
+
+    }
 }
 
 Result ConsumerImpl::receiveHelper(Message& msg) {
@@ -627,6 +707,9 @@ void ConsumerImpl::closeAsync(ResultCallback callback) {
         future.addListener(
                 boost::bind(&ConsumerImpl::handleClose, shared_from_this(), _1, callback));
     }
+
+    // fail pendingReceive callback
+    failPendingReceiveCallback();
 
 }
 
