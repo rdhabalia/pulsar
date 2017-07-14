@@ -162,6 +162,7 @@ public class LoadBalancerTest {
 
             Thread.sleep(100);
     	}catch(Exception e) {
+    	    System.out.println("failed to loadbalance = "+e.getMessage());
     		e.printStackTrace();
             log.error("exit from process : ", e);
     	}
@@ -206,7 +207,7 @@ public class LoadBalancerTest {
      * those load reports can be deserialized and are in valid format tests if the rankings are populated from the load
      * reports are not, both broker will have zero rank
      */
-    @Test(invocationCount=10)
+    @Test
     public void testLoadReportsWrittenOnZK() throws Exception {
         ZooKeeper zkc = bkEnsemble.getZkClient();
         try {
@@ -248,7 +249,7 @@ public class LoadBalancerTest {
      * tests rankings get updated when we write write the new load reports to the zookeeper on loadbalance root node
      * tests writing pre-configured load report on the zookeeper translates the pre-calculated rankings
      */
-    @Test(invocationCount=10)
+    @Test
     public void testUpdateLoadReportAndCheckUpdatedRanking() throws Exception {
         for (int i = 0; i < BROKER_COUNT; i++) {
             LoadReport lr = new LoadReport();
@@ -319,7 +320,7 @@ public class LoadBalancerTest {
      * bottleneck, for the 4/5th brokers CPU become bottleneck since memory is big enough - non-bundles assigned so all
      * idle resources are avaiable for new bundle Check the broker rankings are the load percentage of each broker.
      */
-    @Test(invocationCount=10)
+    @Test
     public void testBrokerRanking() throws Exception {
         for (int i = 0; i < BROKER_COUNT; i++) {
             LoadReport lr = new LoadReport();
@@ -364,7 +365,7 @@ public class LoadBalancerTest {
      * bottleneck, for the 4/5th brokers CPU become bottleneck since memory is big enough - already has some bundles
      * assigned Check the distribution of new destinations is roughly consistent (with <10% variation) with the ranking
      */
-    @Test(invocationCount=10)
+    @Test
     public void testDestinationAssignmentWithExistingBundles() throws Exception {
         for (int i = 0; i < BROKER_COUNT; i++) {
             ResourceQuota defaultQuota = new ResourceQuota();
@@ -442,7 +443,7 @@ public class LoadBalancerTest {
     /**
      * Ensure that the load manager's zookeeper data cache is shutdown after invoking stop().
      */
-    @Test(invocationCount=10)
+    @Test
     public void testStop() throws Exception {
         final SimpleLoadManagerImpl loadManager = (SimpleLoadManagerImpl) pulsarServices[0].getLoadManager().get();
         loadManager.stop();
@@ -520,7 +521,7 @@ public class LoadBalancerTest {
     /*
      * Test broker dynamically calculating resource quota for each connected namespace bundle.
      */
-    @Test(invocationCount=10)
+    @Test
     public void testDynamicNamespaceBundleQuota() throws Exception {
         long startTime = System.currentTimeMillis();
         for (int i = 0; i < BROKER_COUNT; i++) {
@@ -622,7 +623,7 @@ public class LoadBalancerTest {
     /**
      * Test the namespace bundle auto-split
      */
-    @Test(invocationCount=10)
+    @Test
     public void testNamespaceBundleAutoSplit() throws Exception {
         int maxBundles = pulsarServices[0].getConfiguration().getLoadBalancerNamespaceMaximumBundles();
         long maxTopics = pulsarServices[0].getConfiguration().getLoadBalancerNamespaceBundleMaxTopics();
@@ -698,7 +699,7 @@ public class LoadBalancerTest {
     /*
      * Test all brokers are consistent on current leader and close leader to trigger re-election.
      */
-    @Test(invocationCount=10)
+    @Test
     public void testLeaderElection() throws Exception {
         for (int i = 0; i < BROKER_COUNT - 1; i++) {
             Set<PulsarService> activePulsar = new HashSet<PulsarService>();
@@ -797,7 +798,7 @@ public class LoadBalancerTest {
 
     }
 
-    @Test(invocationCount=10, enabled = false)
+    @Test(enabled = false)
     public void testGetLeastLoadedBasic() throws Exception {
         LocalZooKeeperCache mockCache = mock(LocalZooKeeperCache.class);
         Set<String> activeBrokers = Sets.newHashSet("prod1-broker1.messaging.use.example.com:8080",
@@ -862,7 +863,7 @@ public class LoadBalancerTest {
      * should be divided fairly equally with about 10% of variation
      *
      */
-    @Test(invocationCount=10, enabled = false)
+    @Test(enabled = false)
     public void testLoadbalanceDistributionAmongEquallyLoaded() throws Exception {
         LoadManager loadManager = new SimpleLoadManagerImpl(pulsarServices[0]);
         ZooKeeperCache mockCache = mock(ZooKeeperCache.class);
@@ -907,7 +908,7 @@ public class LoadBalancerTest {
      *
      * We should not see any of these inactive brokers assigned any namespace.
      */
-    @Test(invocationCount=10, enabled = false)
+    @Test(enabled = false)
     void testLoadBalanceDiscardingInactiveBrokersInSelection() throws Exception {
         long memoryMB = 2096;
         long cpuPercent = 12;
@@ -964,7 +965,7 @@ public class LoadBalancerTest {
         assertTrue(!namespaceOwner.containsKey(inactiveBroker));
     }
 
-    @Test(invocationCount=10, enabled = false)
+    @Test(enabled = false)
     void testLoadBalanceDistributionAmongUnequallyLoaded() throws Exception {
         long memoryMB = 4096;
         long cpuPercent = 25;
