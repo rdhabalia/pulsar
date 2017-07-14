@@ -65,6 +65,7 @@ import org.apache.pulsar.zookeeper.LocalZooKeeperConnectionService;
 import org.apache.pulsar.zookeeper.ZooKeeperCache;
 import org.apache.pulsar.zookeeper.ZooKeeperClientFactory;
 import org.apache.pulsar.zookeeper.ZookeeperBkClientFactoryImpl;
+import org.apache.pulsar.zookeeper.ZookeeperClientFactoryImpl;
 import org.apache.zookeeper.ZooKeeper;
 import org.eclipse.jetty.servlet.ServletHolder;
 import org.slf4j.Logger;
@@ -561,7 +562,8 @@ public class PulsarService implements AutoCloseable {
 
     public ZooKeeperClientFactory getZooKeeperClientFactory() {
         if (zkClientFactory == null) {
-            zkClientFactory = new ZookeeperBkClientFactoryImpl();
+            //zkClientFactory = new ZookeeperBkClientFactoryImpl();
+            zkClientFactory = new ZookeeperClientFactoryImpl();
         }
         // Return default factory
         return zkClientFactory;
