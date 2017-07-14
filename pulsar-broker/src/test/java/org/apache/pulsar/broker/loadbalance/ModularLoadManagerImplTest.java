@@ -136,45 +136,53 @@ public class ModularLoadManagerImplTest {
     @BeforeMethod
     void setup() throws Exception {
 
-        // Start local bookkeeper ensemble
-        bkEnsemble = new LocalBookkeeperEnsemble(3, ZOOKEEPER_PORT, PortManager.nextFreePort());
-        bkEnsemble.start();
+    	try {
+    		System.out.println("doing modularLoadManager setup");
+    		// Start local bookkeeper ensemble
+            bkEnsemble = new LocalBookkeeperEnsemble(3, ZOOKEEPER_PORT, PortManager.nextFreePort());
+            bkEnsemble.start();
 
-        // Start broker 1
-        ServiceConfiguration config1 = new ServiceConfiguration();
-        config1.setLoadManagerClassName(ModularLoadManagerImpl.class.getName());
-        config1.setClusterName("use");
-        config1.setWebServicePort(PRIMARY_BROKER_WEBSERVICE_PORT);
-        config1.setZookeeperServers("127.0.0.1" + ":" + ZOOKEEPER_PORT);
-        config1.setBrokerServicePort(PRIMARY_BROKER_PORT);
-        pulsar1 = new PulsarService(config1);
+            // Start broker 1
+            ServiceConfiguration config1 = new ServiceConfiguration();
+            config1.setLoadManagerClassName(ModularLoadManagerImpl.class.getName());
+            config1.setClusterName("use");
+            config1.setWebServicePort(PRIMARY_BROKER_WEBSERVICE_PORT);
+            config1.setZookeeperServers("127.0.0.1" + ":" + ZOOKEEPER_PORT);
+            config1.setBrokerServicePort(PRIMARY_BROKER_PORT);
+            pulsar1 = new PulsarService(config1);
 
-        pulsar1.start();
+            pulsar1.start();
 
-        primaryHost = String.format("%s:%d", InetAddress.getLocalHost().getHostName(), PRIMARY_BROKER_WEBSERVICE_PORT);
-        url1 = new URL("http://127.0.0.1" + ":" + PRIMARY_BROKER_WEBSERVICE_PORT);
-        admin1 = new PulsarAdmin(url1, (Authentication) null);
+            primaryHost = String.format("%s:%d", InetAddress.getLocalHost().getHostName(), PRIMARY_BROKER_WEBSERVICE_PORT);
+            url1 = new URL("http://127.0.0.1" + ":" + PRIMARY_BROKER_WEBSERVICE_PORT);
+            admin1 = new PulsarAdmin(url1, (Authentication) null);
 
-        // Start broker 2
-        ServiceConfiguration config2 = new ServiceConfiguration();
-        config2.setLoadManagerClassName(ModularLoadManagerImpl.class.getName());
-        config2.setClusterName("use");
-        config2.setWebServicePort(SECONDARY_BROKER_WEBSERVICE_PORT);
-        config2.setZookeeperServers("127.0.0.1" + ":" + ZOOKEEPER_PORT);
-        config2.setBrokerServicePort(SECONDARY_BROKER_PORT);
-        pulsar2 = new PulsarService(config2);
-        secondaryHost = String.format("%s:%d", InetAddress.getLocalHost().getHostName(),
-                SECONDARY_BROKER_WEBSERVICE_PORT);
+            // Start broker 2
+            ServiceConfiguration config2 = new ServiceConfiguration();
+            config2.setLoadManagerClassName(ModularLoadManagerImpl.class.getName());
+            config2.setClusterName("use");
+            config2.setWebServicePort(SECONDARY_BROKER_WEBSERVICE_PORT);
+            config2.setZookeeperServers("127.0.0.1" + ":" + ZOOKEEPER_PORT);
+            config2.setBrokerServicePort(SECONDARY_BROKER_PORT);
+            pulsar2 = new PulsarService(config2);
+            secondaryHost = String.format("%s:%d", InetAddress.getLocalHost().getHostName(),
+                    SECONDARY_BROKER_WEBSERVICE_PORT);
 
-        pulsar2.start();
+            pulsar2.start();
 
-        url2 = new URL("http://127.0.0.1" + ":" + SECONDARY_BROKER_WEBSERVICE_PORT);
-        admin2 = new PulsarAdmin(url2, (Authentication) null);
+            url2 = new URL("http://127.0.0.1" + ":" + SECONDARY_BROKER_WEBSERVICE_PORT);
+            admin2 = new PulsarAdmin(url2, (Authentication) null);
 
-        primaryLoadManager = (ModularLoadManagerImpl) getField(pulsar1.getLoadManager().get(), "loadManager");
-        secondaryLoadManager = (ModularLoadManagerImpl) getField(pulsar2.getLoadManager().get(), "loadManager");
-        nsFactory = new NamespaceBundleFactory(pulsar1, Hashing.crc32());
-        Thread.sleep(100);
+            primaryLoadManager = (ModularLoadManagerImpl) getField(pulsar1.getLoadManager().get(), "loadManager");
+            secondaryLoadManager = (ModularLoadManagerImpl) getField(pulsar2.getLoadManager().get(), "loadManager");
+            nsFactory = new NamespaceBundleFactory(pulsar1, Hashing.crc32());
+            Thread.sleep(100);
+    	} catch(Throwable th) {
+    		th.printStackTrace();
+    		System.out.println(th.getMessage());
+
+    	}
+        
     }
 
     @AfterMethod

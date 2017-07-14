@@ -173,7 +173,7 @@ public class SimpleLoadManagerImplTest {
             secondaryHost = String.format("http://%s:%d", InetAddress.getLocalHost().getHostName(),
                     SECONDARY_BROKER_WEBSERVICE_PORT);
             Thread.sleep(100);
-        }catch(Exception e) {
+        }catch(Throwable e) {
             log.error("exit from process : ", e);
         	e.printStackTrace();
         }

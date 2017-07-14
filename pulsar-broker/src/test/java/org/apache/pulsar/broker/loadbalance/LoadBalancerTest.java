@@ -161,7 +161,7 @@ public class LoadBalancerTest {
             createNamespacePolicies(pulsarServices[0]);
 
             Thread.sleep(100);
-    	}catch(Exception e) {
+    	}catch(Throwable e) {
     	    System.out.println("failed to loadbalance = "+e.getMessage());
     		e.printStackTrace();
             log.error("exit from process : ", e);
