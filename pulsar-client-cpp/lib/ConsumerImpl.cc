@@ -46,7 +46,7 @@ ConsumerImpl::ConsumerImpl(const ClientImplPtr client, const std::string& topic,
           consumerTopicType_(consumerTopicType),
           // This is the initial capacity of the queue
           incomingMessages_(std::max(config_.getReceiverQueueSize(), 1)),
-          pendingReceives_(100000),
+          pendingReceives_(config_.getReceiverQueueSize()),
           availablePermits_(conf.getReceiverQueueSize()),
           consumerId_(client->newConsumerId()),
           consumerName_(config_.getConsumerName()),
@@ -276,27 +276,33 @@ void ConsumerImpl::messageReceived(const ClientConnectionPtr& cnx, const proto::
     } else {
 
         // pendingReceives_ push/pop needs to be thread-safe: to decide callback or adding into incomingMessages_ queue
-        Lock lock(mutex_);
+        Lock lock(pendingReceiveMutex_);
         bool asyncReceivedWaiting = !pendingReceives_.empty();
         ReceiveCallback callback;
-        if(asyncReceivedWaiting) {
+        if (asyncReceivedWaiting) {
             pendingReceives_.pop(callback);
         }
+        lock.unlock();
 
         // Enqueue the message so that it can be retrieved when application calls receive()
         // if the conf.getReceiverQueueSize() is 0 then discard message if no one is waiting for it.
         // if asyncReceive is waiting then notify callback without adding to incomingMessages queue
-        if ((config_.getReceiverQueueSize() != 0 || waitingForZeroQueueSizeMessage)
-                && !asyncReceivedWaiting) {
-            lock.unlock();
+        if (config_.getReceiverQueueSize() != 0 && !asyncReceivedWaiting) {
             incomingMessages_.push(m);
         } else {
-            lock.unlock();
-        }
-        if (asyncReceivedWaiting) {
-            listenerExecutor_->postWork(
-                    boost::bind(&ConsumerImpl::notifyPendingReceivedCallback, shared_from_this(), m,
-                                callback));
+            // if receiverQueueSize = 0 and if receiveAsync is waiting then complete callback else put into incomingMsgQueue
+            if (asyncReceivedWaiting) {
+                listenerExecutor_->postWork(
+                        boost::bind(&ConsumerImpl::notifyPendingReceivedCallback,
+                                    shared_from_this(), m, callback));
+            } else {
+                Lock lock(mutex_);
+                if (waitingForZeroQueueSizeMessage) {
+                    lock.unlock();
+                    incomingMessages_.push(m);
+                }
+
+            }
         }
 
     }
@@ -318,6 +324,7 @@ void ConsumerImpl::messageReceived(const ClientConnectionPtr& cnx, const proto::
 void ConsumerImpl::notifyPendingReceivedCallback(Message& msg, const ReceiveCallback& callback) {
     if (config_.getReceiverQueueSize() != 0) {
         messageProcessed(msg);
+        unAckedMessageTrackerPtr_->add(msg.getMessageId());
     }
     callback(msg);
 }
@@ -331,12 +338,12 @@ unsigned int ConsumerImpl::receiveIndividualMessagesFromBatch(Message& batchedMe
         batchedMessage.impl_->messageId.batchIndex_ = i;
         // This is a cheap copy since message contains only one shared pointer (impl_)
         Message msg = Commands::deSerializeSingleMessageInBatch(batchedMessage);
-        Lock lock(mutex_);
+        Lock lock(pendingReceiveMutex_);
         if(!pendingReceives_.empty()) {
             ReceiveCallback callback;
             pendingReceives_.pop(callback);
-            callback(msg);
             lock.unlock();
+            callback(msg);
         } else {
             lock.unlock();
             incomingMessages_.push(msg);
@@ -460,13 +467,13 @@ Result ConsumerImpl::receive(Message& msg) {
 void ConsumerImpl::receiveAsync(ReceiveCallback& callback) {
     Message msg;
 
-    Lock lock(mutex_);
-    if(incomingMessages_.pop(msg, milliseconds(0))) {
+    Lock lock(pendingReceiveMutex_);
+    if (incomingMessages_.pop(msg, milliseconds(0))) {
         lock.unlock();
         messageProcessed(msg);
+        unAckedMessageTrackerPtr_->add(msg.getMessageId());
         callback(msg);
     } else {
-        // TODO: pending receive queue can't be unbounded
         pendingReceives_.push(callback);
         lock.unlock();
 

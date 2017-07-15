@@ -38,7 +38,7 @@ namespace pulsar {
     messages_(1000),
     listenerExecutor_(client->getListenerExecutorProvider()->get()),
     messageListener_(conf.getMessageListener()),
-    pendingReceives_(100000),
+    pendingReceives_(conf.getReceiverQueueSize()),
     topic_(destinationName->toString())
     {
         std::stringstream consumerStrStream;
@@ -104,14 +104,14 @@ namespace pulsar {
     void PartitionedConsumerImpl::receiveAsync(ReceiveCallback& callback) {
         Message msg;
 
-        Lock lock(mutex_);
+        Lock lock(pendingReceiveMutex_);
         if(messages_.pop(msg, milliseconds(0))) {
             lock.unlock();
             unAckedMessageTrackerPtr_->add(msg.getMessageId());
             callback(msg);
         } else {
-            lock.unlock();
             pendingReceives_.push(callback);
+            lock.unlock();
         }
     }
 
@@ -333,7 +333,7 @@ namespace pulsar {
 
     void PartitionedConsumerImpl::messageReceived(Consumer consumer, const Message& msg) {
         LOG_DEBUG("Received Message from one of the partition - " << msg.impl_->messageId.partition_);
-        Lock lock(mutex_);
+        Lock lock(pendingReceiveMutex_);
         if(!pendingReceives_.empty()) {
             ReceiveCallback callback;
             pendingReceives_.pop(callback);

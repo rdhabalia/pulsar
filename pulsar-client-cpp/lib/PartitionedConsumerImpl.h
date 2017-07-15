@@ -80,6 +80,7 @@ namespace pulsar {
         typedef std::vector<ConsumerImplPtr> ConsumerList;
         ConsumerList consumers_;
         boost::mutex mutex_;
+        boost::mutex pendingReceiveMutex_;
         PartitionedConsumerState state_;
         unsigned int unsubscribedSoFar_;
         BlockingQueue<Message> messages_;
