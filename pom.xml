@@ -528,11 +528,6 @@ flexible messaging model and an intuitive client API.</description>
 
   <dependencies>
     <!-- These dependencies are common to all the submodules -->
-    <dependency>
-      <groupId>org.slf4j</groupId>
-      <artifactId>slf4j-simple</artifactId>
-      <scope>test</scope>
-    </dependency>
 
     <dependency>
       <groupId>org.testng</groupId>
@@ -593,13 +588,6 @@ flexible messaging model and an intuitive client API.</description>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <configuration>
-          <argLine> -Xmx2G -XX:MaxDirectMemorySize=8G
-            -Dio.netty.leakDetectionLevel=advanced
-            -Dorg.slf4j.simpleLogger.showDateTime=true
-            -Dorg.slf4j.simpleLogger.log.org.apache.zookeeper=off
-            -Dorg.slf4j.simpleLogger.log.org.apache.bookkeeper=off
-            -Dorg.slf4j.simpleLogger.log.org.apache.bookkeeper.mledger=info
-          </argLine>
           <reuseForks>true</reuseForks>
           <forkCount>1</forkCount>
           <redirectTestOutputToFile>true</redirectTestOutputToFile>

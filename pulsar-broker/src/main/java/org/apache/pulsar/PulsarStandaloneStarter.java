@@ -85,7 +85,7 @@ public class PulsarStandaloneStarter {
     private static final Logger log = LoggerFactory.getLogger(PulsarStandaloneStarter.class);
 
     public PulsarStandaloneStarter(String[] args) throws Exception {
-
+        
         JCommander jcommander = new JCommander();
         try {
             jcommander.addObject(this);

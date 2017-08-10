@@ -22,10 +22,12 @@
 
   <aspects>
     <aspect name="org.apache.pulsar.broker.zookeeper.aspectj.ClientCnxnAspect" />
+    <aspect name="org.apache.pulsar.broker.zookeeper.aspectj.LoggerAspect" />
   </aspects>
 
   <weaver options="-verbose -Xset:weaveJavaxPackages=true -Xset:weaveJavaPackages=true">
     <include within="org.apache.zookeeper.ClientCnxn" />
+    <include within="org.slf4j.impl.Log4jLoggerAdapter" />
   </weaver>
 
 </aspectj>
