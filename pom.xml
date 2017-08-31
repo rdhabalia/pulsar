@@ -885,11 +885,11 @@ flexible messaging model and an intuitive client API.</description>
            <artifactId>maven-surefire-plugin</artifactId>
            <configuration>
             <argLine> -Xmx2G -XX:MaxDirectMemorySize=8G
+             -Dorg.testng.TestNG=
              -Dio.netty.leakDetectionLevel=advanced
              -Dorg.slf4j.simpleLogger.showDateTime=true
-             -Dorg.slf4j.simpleLogger.defaultLogLevel=info
-             -Dorg.slf4j.simpleLogger.log.org.apache=error
-             -Dorg.slf4j.simpleLogger.log.org.eclipse.jetty=off
+             -Dorg.slf4j.simpleLogger.defaultLogLevel=off
+             -Dorg.slf4j.simpleLogger.log.org.apache.pulsar.broker=info
             </argLine>
            </configuration>
           </plugin>
