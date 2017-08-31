@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -36,9 +37,6 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.bookkeeper.test.PortManager;
-import org.apache.pulsar.broker.PulsarServerException;
-import org.apache.pulsar.broker.PulsarService;
-import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.loadbalance.LoadBalancerTest;
 import org.apache.pulsar.broker.namespace.NamespaceService;
 import org.apache.pulsar.client.admin.PulsarAdmin;
@@ -55,6 +53,7 @@ import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
+
 
 public class SLAMonitoringTest {
     LocalBookkeeperEnsemble bkEnsemble;
@@ -242,6 +241,13 @@ public class SLAMonitoringTest {
             e.printStackTrace();
             fail("The broker should be able to stop without exception");
         }
+    }
+    
+    public static void main(String[] args) {
+        Optional<String> op = Optional.of("test");
+        Optional<String> op2 = Optional.empty();
+        System.out.println(op.get());
+        System.out.println(op2.get());
     }
 
 }

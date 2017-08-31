@@ -36,7 +36,7 @@ import org.apache.pulsar.utils.StatsOutputStream;
 import io.netty.buffer.ByteBuf;
 
 public interface Topic {
-
+    
     public interface PublishCallback {
         void completed(Exception e, long ledgerId, long entryId);
     }

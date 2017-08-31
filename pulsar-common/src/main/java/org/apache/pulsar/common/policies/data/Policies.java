@@ -37,6 +37,7 @@ public class Policies {
     public int message_ttl_in_seconds;
     public RetentionPolicies retention_policies;
     public boolean deleted;
+    public Map<String, ReplicatorPolicies> replicatorPolicies;
 
     public static final String FIRST_BOUNDARY = "0x00000000";
     public static final String LAST_BOUNDARY = "0xffffffff";

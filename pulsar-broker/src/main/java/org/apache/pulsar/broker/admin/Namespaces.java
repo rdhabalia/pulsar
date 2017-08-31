@@ -19,6 +19,7 @@
 package org.apache.pulsar.broker.admin;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.pulsar.broker.cache.ConfigurationCacheService.POLICIES;
 import static org.apache.pulsar.broker.cache.LocalZooKeeperCacheService.LOCAL_POLICIES_ROOT;
 
 import java.net.URI;
@@ -70,6 +71,7 @@ import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.policies.data.DispatchRate;
 import org.apache.pulsar.common.policies.data.PersistencePolicies;
 import org.apache.pulsar.common.policies.data.Policies;
+import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.KeeperException.NoNodeException;
@@ -83,7 +85,6 @@ import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import io.swagger.annotations.ApiResponse;
 import io.swagger.annotations.ApiResponses;
-import static org.apache.pulsar.broker.cache.ConfigurationCacheService.POLICIES;
 
 @Path("/namespaces")
 @Produces(MediaType.APPLICATION_JSON)
@@ -589,6 +590,45 @@ public class Namespaces extends AdminResource {
                     cluster, namespace, e);
             throw new RestException(e);
         }
+    }
+
+    @POST
+    @Path("/{property}/{cluster}/{namespace}/replication")
+    @ApiOperation(value = "Set the replication clusters for a namespace.")
+    @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission"),
+            @ApiResponse(code = 404, message = "Property or cluster or namespace doesn't exist"),
+            @ApiResponse(code = 412, message = "Namespace is not global or invalid cluster ids") })
+    public void addNamespaceReplicator(@PathParam("property") String property,
+            @PathParam("cluster") String cluster, @PathParam("namespace") String namespace, ReplicatorPolicies replicationPolicies) {
+        
+        //(1) Check if replicator plugin is registered: get replicator
+        
+        
+        Policies policies = null;
+        //(2) validate replicator exist in policies: 
+        policies.replicatorPolicies.containsKey(replicationPolicies.name);
+        
+        //(3) validate unique replicator in policies
+        ReplicatorProvider replicatorValidator = null;
+        replicatorValidator.validateProperties(replicationPolicies.topicProperties, replicationPolicies.credentialProperties);
+        
+        //(4) Encrypt credential-properties
+        replicationPolicies.credentialProperties = encyrpt(replicationPolicies.credentialProperties);
+        
+        //(5) add into policies
+        policies.replicatorPolicies.put(replicationPolicies.name, replicationPolicies);
+        
+        //(6) update zk
+    }
+    
+    private Map<String, String> encyrpt(Map<String, String> credentialProperties) {
+        // TODO Auto-generated method stub
+        return null;
+    }
+    
+    private Map<String, String> decyrpt(Map<String, String> credentialProperties) {
+        // TODO Auto-generated method stub
+        return null;
     }
 
     @GET
