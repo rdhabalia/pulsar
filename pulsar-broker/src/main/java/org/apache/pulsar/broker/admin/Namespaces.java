@@ -1122,7 +1122,7 @@ public class Namespaces extends AdminResource {
         Policies policies = getNamespacePolicies(property, cluster, namespace);
         if (policies.persistence == null) {
             return new PersistencePolicies(config().getManagedLedgerDefaultEnsembleSize(),
-                    config().getManagedLedgerDefaultWriteQuorum(), config().getManagedLedgerDefaultAckQuorum(), 0.0d);
+                    config().getManagedLedgerDefaultWriteQuorum(), config().getManagedLedgerDefaultAckQuorum());
         } else {
             return policies.persistence;
         }

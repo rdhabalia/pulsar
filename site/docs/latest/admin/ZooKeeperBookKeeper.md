@@ -132,8 +132,7 @@ $ pulsar-admin namespaces get-persistence my-prop/my-cluster/my-ns
 {
   "bookkeeperEnsemble": 1,
   "bookkeeperWriteQuorum": 1,
-  "bookkeeperAckQuorum", 1,
-  "managedLedgerMaxMarkDeleteRate": 0
+  "bookkeeperAckQuorum", 1
 }
 ```
 

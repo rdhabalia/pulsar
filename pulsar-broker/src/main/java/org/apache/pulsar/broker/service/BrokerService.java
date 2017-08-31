@@ -639,8 +639,7 @@ public class BrokerService implements Closeable, ZooKeeperCacheListener<Policies
                 // Apply default values
                 persistencePolicies = new PersistencePolicies(serviceConfig.getManagedLedgerDefaultEnsembleSize(),
                         serviceConfig.getManagedLedgerDefaultWriteQuorum(),
-                        serviceConfig.getManagedLedgerDefaultAckQuorum(),
-                        serviceConfig.getManagedLedgerDefaultMarkDeleteRateLimit());
+                        serviceConfig.getManagedLedgerDefaultAckQuorum());
             }
 
             if (retentionPolicies == null) {
@@ -652,7 +651,7 @@ public class BrokerService implements Closeable, ZooKeeperCacheListener<Policies
             config.setEnsembleSize(persistencePolicies.getBookkeeperEnsemble());
             config.setWriteQuorumSize(persistencePolicies.getBookkeeperWriteQuorum());
             config.setAckQuorumSize(persistencePolicies.getBookkeeperAckQuorum());
-            config.setThrottleMarkDelete(persistencePolicies.getManagedLedgerMaxMarkDeleteRate());
+            config.setThrottleMarkDelete(serviceConfig.getManagedLedgerDefaultMarkDeleteRateLimit());
             config.setDigestType(DigestType.CRC32);
 
             config.setMaxUnackedRangesToPersist(serviceConfig.getManagedLedgerMaxUnackedRangesToPersist());

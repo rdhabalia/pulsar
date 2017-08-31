@@ -329,7 +329,7 @@ POST /admin/persistent/{property}/{cluster}/{namespace}/persistence
 ###### Java
 
 ```java
-admin.namespaces().setPersistence(namespace,new PersistencePolicies(bookkeeperEnsemble, bookkeeperWriteQuorum,bookkeeperAckQuorum,managedLedgerMaxMarkDeleteRate))
+admin.namespaces().setPersistence(namespace,new PersistencePolicies(bookkeeperEnsemble, bookkeeperWriteQuorum,bookkeeperAckQuorum))
 ```
 
 
@@ -347,8 +347,7 @@ $ pulsar-admin namespaces get-persistence test-property/cl1/ns1
 {
   "bookkeeperEnsemble": 3,
   "bookkeeperWriteQuorum": 2,
-  "bookkeeperAckQuorum": 2,
-  "managedLedgerMaxMarkDeleteRate": 0
+  "bookkeeperAckQuorum": 2
 }
 ```
 

@@ -252,8 +252,8 @@ public class PulsarAdminToolTest {
         verify(mockNamespaces).setBacklogQuota("myprop/clust/ns1",
                 new BacklogQuota(10l * 1024 * 1024 * 1024, RetentionPolicy.producer_exception));
 
-        namespaces.run(split("set-persistence myprop/clust/ns1 -e 2 -w 1 -a 1 -r 100.0"));
-        verify(mockNamespaces).setPersistence("myprop/clust/ns1", new PersistencePolicies(2, 1, 1, 100.0d));
+        namespaces.run(split("set-persistence myprop/clust/ns1 -e 2 -w 1 -a 1"));
+        verify(mockNamespaces).setPersistence("myprop/clust/ns1", new PersistencePolicies(2, 1, 1));
 
         namespaces.run(split("get-persistence myprop/clust/ns1"));
         verify(mockNamespaces).getPersistence("myprop/clust/ns1");

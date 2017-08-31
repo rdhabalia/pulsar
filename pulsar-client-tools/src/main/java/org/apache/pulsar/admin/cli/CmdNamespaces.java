@@ -415,15 +415,11 @@ public class CmdNamespaces extends CmdBase {
                 "--bookkeeper-ack-quorum" }, description = "Number of acks (garanteed copies) to wait for each entry", required = true)
         private int bookkeeperAckQuorum;
 
-        @Parameter(names = { "-r",
-                "--ml-mark-delete-max-rate" }, description = "Throttling rate of mark-delete operation (0 means no throttle)", required = true)
-        private double managedLedgerMaxMarkDeleteRate;
-
         @Override
         void run() throws PulsarAdminException {
             String namespace = validateNamespace(params);
             admin.namespaces().setPersistence(namespace, new PersistencePolicies(bookkeeperEnsemble,
-                    bookkeeperWriteQuorum, bookkeeperAckQuorum, managedLedgerMaxMarkDeleteRate));
+                    bookkeeperWriteQuorum, bookkeeperAckQuorum));
         }
     }
 

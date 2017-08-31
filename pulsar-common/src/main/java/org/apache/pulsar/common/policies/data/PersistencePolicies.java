@@ -24,18 +24,15 @@ public class PersistencePolicies {
     private int bookkeeperEnsemble;
     private int bookkeeperWriteQuorum;
     private int bookkeeperAckQuorum;
-    private double managedLedgerMaxMarkDeleteRate;
 
     public PersistencePolicies() {
-        this(2, 2, 2, 0.0);
+        this(2, 2, 2);
     }
 
-    public PersistencePolicies(int bookkeeperEnsemble, int bookkeeperWriteQuorum, int bookkeeperAckQuorum,
-            double managedLedgerMaxMarkDeleteRate) {
+    public PersistencePolicies(int bookkeeperEnsemble, int bookkeeperWriteQuorum, int bookkeeperAckQuorum) {
         this.bookkeeperEnsemble = bookkeeperEnsemble;
         this.bookkeeperWriteQuorum = bookkeeperWriteQuorum;
         this.bookkeeperAckQuorum = bookkeeperAckQuorum;
-        this.managedLedgerMaxMarkDeleteRate = managedLedgerMaxMarkDeleteRate;
     }
 
     public int getBookkeeperEnsemble() {
@@ -50,18 +47,13 @@ public class PersistencePolicies {
         return bookkeeperAckQuorum;
     }
 
-    public double getManagedLedgerMaxMarkDeleteRate() {
-        return managedLedgerMaxMarkDeleteRate;
-    }
-
     @Override
     public boolean equals(Object obj) {
         if (obj instanceof PersistencePolicies) {
             PersistencePolicies other = (PersistencePolicies) obj;
             return bookkeeperEnsemble == other.bookkeeperEnsemble
                     && bookkeeperWriteQuorum == other.bookkeeperWriteQuorum
-                    && bookkeeperAckQuorum == other.bookkeeperAckQuorum
-                    && managedLedgerMaxMarkDeleteRate == other.managedLedgerMaxMarkDeleteRate;
+                    && bookkeeperAckQuorum == other.bookkeeperAckQuorum;
         }
 
         return false;
@@ -70,6 +62,6 @@ public class PersistencePolicies {
     @Override
     public String toString() {
         return Objects.toStringHelper(this).add("e", bookkeeperEnsemble).add("w", bookkeeperWriteQuorum)
-                .add("a", bookkeeperAckQuorum).add("ml-md-rate", managedLedgerMaxMarkDeleteRate).toString();
+                .add("a", bookkeeperAckQuorum).toString();
     }
 }
