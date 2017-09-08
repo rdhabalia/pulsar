@@ -104,6 +104,7 @@ public class ServiceConfiguration implements PulsarConfiguration {
     // than this percentage limit and subscription will not receive any new messages until that subscription acks back
     // limit/2 messages
     private double maxUnackedMessagesPerSubscriptionOnBrokerBlocked = 0.16;
+    private long maxMarkDeleteDistanceFromReadPosition = -1;
     // Default number of message dispatching throttling-limit for every topic. Using a value of 0, is disabling default
     // message dispatch-throttling 
     @FieldContext(dynamic = true)

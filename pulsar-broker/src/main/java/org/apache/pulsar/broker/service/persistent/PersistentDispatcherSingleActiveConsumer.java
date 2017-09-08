@@ -306,5 +306,10 @@ public final class PersistentDispatcherSingleActiveConsumer extends AbstractDisp
         // No-op
     }
 
+    @Override
+    public void checkMarkDeleteDistance() {
+
+    }
+
     private static final Logger log = LoggerFactory.getLogger(PersistentDispatcherSingleActiveConsumer.class);
 }

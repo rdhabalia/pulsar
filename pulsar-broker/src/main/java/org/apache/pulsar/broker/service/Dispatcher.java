@@ -70,4 +70,6 @@ public interface Dispatcher {
 
     void addUnAckedMessages(int unAckMessages);
 
+    void checkMarkDeleteDistance();
+
 }

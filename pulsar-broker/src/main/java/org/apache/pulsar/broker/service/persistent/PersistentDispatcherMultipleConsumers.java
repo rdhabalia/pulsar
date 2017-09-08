@@ -79,6 +79,10 @@ public class PersistentDispatcherMultipleConsumers  extends AbstractDispatcherMu
     private volatile int blockedDispatcherOnUnackedMsgs = FALSE;
     private static final AtomicIntegerFieldUpdater<PersistentDispatcherMultipleConsumers> BLOCKED_DISPATCHER_ON_UNACKMSG_UPDATER =
             AtomicIntegerFieldUpdater.newUpdater(PersistentDispatcherMultipleConsumers.class, "blockedDispatcherOnUnackedMsgs");
+    
+    private volatile int blockedDispatcherOnMarkDeleteDistance = FALSE;
+    private static final AtomicIntegerFieldUpdater<PersistentDispatcherMultipleConsumers> BLOCKED_DISPATCHER_ON_MARK_DELETE_DISTANCE_UPDATER =
+            AtomicIntegerFieldUpdater.newUpdater(PersistentDispatcherMultipleConsumers.class, "blockedDispatcherOnMarkDeleteDistance");
 
     enum ReadType {
         Normal, Replay
@@ -476,6 +480,24 @@ public class PersistentDispatcherMultipleConsumers  extends AbstractDispatcherMu
         readMoreEntries();
     }
 
+    @Override
+    public void checkMarkDeleteDistance() {
+        long distance = cursor.getNumberOfEntriesSinceFirstNotAckedMessage();
+        if(BLOCKED_DISPATCHER_ON_MARK_DELETE_DISTANCE_UPDATER.get(this)==FALSE) {
+            if(distance > 1000) {
+                if(BLOCKED_DISPATCHER_ON_MARK_DELETE_DISTANCE_UPDATER.compareAndSet(this, FALSE, TRUE)) {
+                    //TODO: trigger redelivery 
+                }
+            }    
+        }else {
+            if(distance < 1000) { // it should be < 1/4 of distance
+                if(BLOCKED_DISPATCHER_ON_MARK_DELETE_DISTANCE_UPDATER.compareAndSet(this, TRUE, FALSE)) {
+                    //TODO: trigger readMoreEntries
+                }
+            }
+        }
+    }
+    
     @Override
     public void addUnAckedMessages(int numberOfMessages) {
         // don't block dispatching if maxUnackedMessages = 0

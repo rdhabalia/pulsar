@@ -71,5 +71,10 @@ public interface NonPersistentDispatcher extends Dispatcher{
     default void addUnAckedMessages(int unAckMessages) {
         // No-op
     }
+    
+    @Override
+    default void checkMarkDeleteDistance() {
+        // No-op
+    }
 
 }

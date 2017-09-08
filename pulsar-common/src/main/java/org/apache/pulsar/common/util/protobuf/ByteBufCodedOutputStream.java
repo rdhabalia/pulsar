@@ -116,6 +116,14 @@ public class ByteBufCodedOutputStream {
         }
     }
 
+    public static void main(String[] args) {
+        int value = 257;
+        System.out.println(0x7F+","+(~0x7F)+","+(0x8F)+","+(0xFF));
+        System.out.println((value & 0x7F)+","+(value & ~0x7F));
+        System.out.println((value & 0x7F) | 0x80);
+        
+    }
+    
     /** Encode and write a tag. */
     public void writeTag(final int fieldNumber, final int wireType) throws IOException {
         writeRawVarint32(makeTag(fieldNumber, wireType));
