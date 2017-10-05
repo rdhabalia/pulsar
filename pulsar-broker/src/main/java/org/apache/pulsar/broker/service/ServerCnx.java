@@ -35,6 +35,7 @@ import javax.net.ssl.SSLSession;
 
 import org.apache.bookkeeper.mledger.util.SafeRun;
 import org.apache.pulsar.broker.authentication.AuthenticationDataCommand;
+import org.apache.pulsar.broker.service.BrokerServiceException.ConsumerBusyException;
 import org.apache.pulsar.broker.service.BrokerServiceException.ServiceUnitNotReadyException;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.impl.BatchMessageIdImpl;
@@ -406,7 +407,8 @@ public class ServerCnx extends PulsarHandler {
                         }) //
                         .exceptionally(exception -> {
                             log.warn("[{}][{}][{}] Failed to create consumer: {}", remoteAddress, topicName,
-                                    subscriptionName, exception.getCause().getMessage(), exception);
+                                    subscriptionName, exception.getCause().getMessage(),
+                                    exception instanceof ConsumerBusyException ? null : exception);
 
                             // If client timed out, the future would have been completed by subsequent close. Send error
                             // back to client, only if not completed already.
