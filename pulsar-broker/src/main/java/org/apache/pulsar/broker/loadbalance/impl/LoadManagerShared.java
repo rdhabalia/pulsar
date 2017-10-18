@@ -19,24 +19,40 @@
 package org.apache.pulsar.broker.loadbalance.impl;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static org.apache.pulsar.broker.cache.ConfigurationCacheService.POLICIES;
+import static org.apache.pulsar.broker.web.PulsarWebResource.path;
 
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
+import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.admin.AdminResource;
 import org.apache.pulsar.broker.loadbalance.BrokerHostUsage;
 import org.apache.pulsar.broker.stats.metrics.JvmMetrics;
+import org.apache.pulsar.client.util.FutureUtil;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.ServiceUnitId;
+import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.policies.data.loadbalancer.SystemResourceUsage;
+import org.apache.pulsar.zookeeper.ZooKeeperDataCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.beust.jcommander.internal.Lists;
+import com.google.common.collect.Maps;
 
 /**
  * This class contains code which in shared between the two load manager implementations.
@@ -268,7 +284,121 @@ public class LoadManagerShared {
                     .size() != finalLeastBundles);
         }
     }
-    
+
+    public static void removeAntiAffinityGroupOwnedBrokers(final PulsarService pulsar, final String assignedBundleName,
+            final Set<String> candidates, final Map<String, Map<String, Set<String>>> brokerToNamespaceToBundleRange) {
+        if (candidates.isEmpty()) {
+            return;
+        }
+        final String namespaceName = getNamespaceNameFromBundleName(assignedBundleName);
+        try {
+            final Map<String, Integer> brokerToAntiAffinityNamespaceCount = getAntiAffinityNamespaceOwnedBrokers(pulsar,
+                    namespaceName, brokerToNamespaceToBundleRange).get(30, TimeUnit.SECONDS);
+            if (brokerToAntiAffinityNamespaceCount == null) {
+                return;
+            }
+            filterDomainsWithHighAntiAffinityNamespace(brokerToAntiAffinityNamespaceCount);
+            int leastNamaespace = Integer.MAX_VALUE;
+            for (final String broker : candidates) {
+                if (brokerToAntiAffinityNamespaceCount.containsKey(broker)) {
+                    Integer namespaceCount = brokerToAntiAffinityNamespaceCount.get(broker);
+                    if (namespaceCount == null) {
+                        // Assume that when the namespace is absent, there are no namespace assigned to
+                        // that broker.
+                        leastNamaespace = 0;
+                        break;
+                    }
+                    leastNamaespace = Math.min(leastNamaespace, namespaceCount);
+                } else {
+                    // Assume non-present brokers have 0 bundles.
+                    leastNamaespace = 0;
+                    break;
+                }
+            }
+            // filter out broker based on namespace distribution
+            if (leastNamaespace == 0) {
+                candidates.removeIf(broker -> brokerToNamespaceToBundleRange.containsKey(broker)
+                        && brokerToNamespaceToBundleRange.get(broker).containsKey(namespaceName));
+            } else {
+                final int finalLeastBundles = leastNamaespace;
+                candidates.removeIf(broker -> brokerToNamespaceToBundleRange.get(broker).get(namespaceName)
+                        .size() != finalLeastBundles);
+            }
+        } catch (Exception e) {
+            log.error("Failed to filter anti-affinity group namespace {}", e.getMessage());
+        }
+    }
+
+    private static void filterDomainsWithHighAntiAffinityNamespace(
+            Map<String, Integer> brokerToAntiAffinityNamespaceCount) {
+       
+        final Map<String, Integer> domainNamespaceCount = Maps.newHashMap();
+        int leastNamespace = Integer.MAX_VALUE;
+        brokerToAntiAffinityNamespaceCount.forEach((broker, count) -> {
+            final String domain = getDomain(broker);
+            domainNamespaceCount.compute(domain, (domainName, nsCount) -> nsCount == null ? 0 : nsCount + 1);
+        });
+        // find leastNameSpaceCount
+        for(Entry<String, Integer> domainNsCountEntry : domainNamespaceCount.entrySet()) {
+            if(domainNsCountEntry.getValue() < leastNamespace){
+                leastNamespace = domainNsCountEntry.getValue();
+            }
+        }
+        // filter domain having high antiaffinity-namespace count
+        domainNamespaceCount.forEach((domainName, nsCount)->{
+            
+        });
+
+    }
+
+    private static String getDomain(String broker) {
+        // TODO Auto-generated method stub
+        return null;
+    }
+
+    private static CompletableFuture<Map<String, Integer>> getAntiAffinityNamespaceOwnedBrokers(
+            final PulsarService pulsar, String namespaceName,
+            Map<String, Map<String, Set<String>>> brokerToNamespaceToBundleRange) {
+
+        CompletableFuture<Map<String, Integer>> antiAffinityNsBrokersResult = new CompletableFuture<>();
+        ZooKeeperDataCache<Policies> policiesCache = pulsar.getConfigurationCache().policiesCache();
+
+        policiesCache.getAsync(path(POLICIES, namespaceName)).thenAccept(policies -> {
+            if (!policies.isPresent() || StringUtils.isBlank(policies.get().antiAffinityGroup)) {
+                antiAffinityNsBrokersResult.complete(null);
+                return;
+            }
+            final String antiAffinityGroup = policies.get().antiAffinityGroup;
+            final Map<String, Integer> brokerToAntiAffinityNamespaceCount = new ConcurrentHashMap<>();
+            final List<CompletableFuture<Void>> futures = Lists.newArrayList();
+            //TODO: instead use forEach()
+            for (Entry<String, Map<String, Set<String>>> brokerToNs : brokerToNamespaceToBundleRange.entrySet()) {
+                for (Entry<String, Set<String>> namespaceEntry : brokerToNs.getValue().entrySet()) {
+                    String ns = namespaceEntry.getKey();
+                    CompletableFuture<Void> future = new CompletableFuture<>();
+                    futures.add(future);
+                    policiesCache.getAsync(path(POLICIES, ns)).thenAccept(nsPolicies -> {
+                        if (nsPolicies.isPresent() && antiAffinityGroup.equals(nsPolicies.get().antiAffinityGroup)) {
+                            brokerToAntiAffinityNamespaceCount.compute(brokerToNs.getKey(),
+                                    (broker, count) -> count == null ? 0 : count + 1);
+                        }
+                        future.complete(null);
+                    }).exceptionally(ex -> {
+                        future.complete(null);
+                        return null;
+                    });
+                }
+            }
+            FutureUtil.waitForAll(futures)
+                    .thenAccept(r -> antiAffinityNsBrokersResult.complete(brokerToAntiAffinityNamespaceCount));
+        }).exceptionally(ex -> {
+            // TODO: log debug: because it should not happen
+            antiAffinityNsBrokersResult.complete(null);
+            return null;
+        });
+        return antiAffinityNsBrokersResult;
+    }
+
     interface BrokerTopicLoadingPredicate {
         boolean isEnablePersistentTopics(String brokerUrl);
 

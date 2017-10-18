@@ -41,6 +41,7 @@ public class Policies {
     public int message_ttl_in_seconds = 0;
     public RetentionPolicies retention_policies = null;
     public boolean deleted = false;
+    public String antiAffinityGroup;
 
     public static final String FIRST_BOUNDARY = "0x00000000";
     public static final String LAST_BOUNDARY = "0xffffffff";
@@ -57,6 +58,7 @@ public class Policies {
                     && Objects.equal(persistence, other.persistence) && Objects.equal(bundles, other.bundles)
                     && Objects.equal(latency_stats_sample_rate, other.latency_stats_sample_rate)
                     && message_ttl_in_seconds == other.message_ttl_in_seconds
+                    && antiAffinityGroup == other.antiAffinityGroup
                     && Objects.equal(retention_policies, other.retention_policies);
         }
 
@@ -80,6 +82,7 @@ public class Policies {
                 .add("deduplicationEnabled", deduplicationEnabled)
                 .add("clusterDispatchRate", clusterDispatchRate)
                 .add("latency_stats_sample_rate", latency_stats_sample_rate)
+                .add("antiAffinityGroup", antiAffinityGroup)
                 .add("message_ttl_in_seconds", message_ttl_in_seconds).add("retention_policies", retention_policies)
                 .add("deleted", deleted).toString();
     }
