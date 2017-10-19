@@ -268,12 +268,10 @@ public class ModularLoadManagerImpl implements ModularLoadManager, ZooKeeperCach
         filterPipeline.add(new BrokerVersionFilter());
         this.loadBrokerToDomainMap();
         
-        pulsar.getConfigurationCache().clusterDomainListCache().registerListener((String path, Set<String> data, Stat stat) ->{
-            loadBrokerToDomainMap();
-        });
-        pulsar.getConfigurationCache().domainCache().registerListener((String path, Domain data, Stat stat) ->{
-            loadBrokerToDomainMap();
-        });
+        pulsar.getConfigurationCache().clusterDomainListCache()
+                .registerListener((path, data, stat) -> scheduler.execute(() -> loadBrokerToDomainMap()));
+        pulsar.getConfigurationCache().domainCache()
+                .registerListener((path, data, stat) -> scheduler.execute(() -> loadBrokerToDomainMap()));
     }
 
     /**
@@ -805,7 +803,11 @@ public class ModularLoadManagerImpl implements ModularLoadManager, ZooKeeperCach
     }
 
     private void loadBrokerToDomainMap() {
+        if (!pulsar.getConfiguration().isClusterDomainsEnabled()) {
+            return;
+        }
         try {
+            // avoid init of tempMap and reuse for GC
             Map<String, String> tempBrokerToDomainMap = Maps.newHashMap();
             for (String domainName : pulsar.getConfigurationCache().clusterDomainListCache().get()) {
                 try {
@@ -821,7 +823,7 @@ public class ModularLoadManagerImpl implements ModularLoadManager, ZooKeeperCach
             }
             this.brokerToDomainMap = tempBrokerToDomainMap;
         } catch (Exception e) {
-            log.warn("Failed to get domain-list for cluster", e);
+            log.warn("Failed to get domain-list for cluster {}", e.getMessage());
         }
     }
 }

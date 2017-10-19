@@ -327,11 +327,11 @@ public class LoadManagerShared {
                 // none of the broker owns anti-affinity-namespace so, none of the broker will be filtered
                 return;
             }
-            if(pulsar.getConfiguration().isClusterDomainsEnabled()) {
+            if (pulsar.getConfiguration().isClusterDomainsEnabled()) {
                 // this will remove all the brokers which are part of domains that don't have least number of
                 // anti-affinity-namespaces
                 filterDomainsNotHavingLeastNumberAntiAffinityNamespaces(brokerToAntiAffinityNamespaceCount, candidates,
-                        brokerToDomainMap);                
+                        brokerToDomainMap);
             }
             // now, "candidates" has list of brokers which are part of domain that can accept this namespace. now,
             // with in these domains, remove brokers which don't have least number of namespaces. so, brokers with least
@@ -371,11 +371,16 @@ public class LoadManagerShared {
             Map<String, Integer> brokerToAntiAffinityNamespaceCount, Set<String> candidates,
             Map<String, String> brokerToDomainMap) {
 
+        if (brokerToDomainMap == null || brokerToDomainMap.isEmpty()) {
+            return;
+        }
+
         final Map<String, Integer> domainNamespaceCount = Maps.newHashMap();
         int leastNamespaceCount = Integer.MAX_VALUE;
-        brokerToAntiAffinityNamespaceCount.forEach((broker, count) -> {
+        candidates.forEach(broker -> {
             final String domain = brokerToDomainMap.getOrDefault(broker, DEFAULT_DOMAIN);
-            domainNamespaceCount.compute(domain, (domainName, nsCount) -> nsCount == null ? 1 : nsCount + 1);
+            final int count = brokerToAntiAffinityNamespaceCount.getOrDefault(broker, 0);
+            domainNamespaceCount.compute(domain, (domainName, nsCount) -> nsCount == null ? count : nsCount + count);
         });
         // find leastNameSpaceCount
         for (Entry<String, Integer> domainNsCountEntry : domainNamespaceCount.entrySet()) {
@@ -387,7 +392,7 @@ public class LoadManagerShared {
         // only keep domain brokers which has leastNamespaceCount
         candidates.removeIf(broker -> {
             Integer nsCount = domainNamespaceCount.get(brokerToDomainMap.getOrDefault(broker, DEFAULT_DOMAIN));
-            return nsCount != null && nsCount > finalLeastNamespaceCount;
+            return nsCount != null && nsCount != finalLeastNamespaceCount;
         });
 
     }

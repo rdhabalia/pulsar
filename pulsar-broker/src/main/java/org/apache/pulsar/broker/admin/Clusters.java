@@ -50,6 +50,7 @@ import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.core.JsonGenerationException;
 import com.fasterxml.jackson.databind.JsonMappingException;
+import com.google.common.collect.Maps;
 
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
@@ -385,7 +386,7 @@ public class Clusters extends AdminResource {
     }
 
     @POST
-    @Path("/{cluster}/domain/{domainName}")
+    @Path("/{cluster}/domains/{domainName}")
     @ApiOperation(value = "Set cluster's domain")
     @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission"),
             @ApiResponse(code = 412, message = "Cluster doesn't exist") })
@@ -400,8 +401,9 @@ public class Clusters extends AdminResource {
             String domainPath = path("clusters", cluster, "domains", domainName);
             if (globalZk().exists(domainPath, false) == null) {
                 this.createZnode(domainPath, domain);
-                // refresh domain children cache as we added new znode 
+                // clear children cache and reload for further watch
                 this.clusterDomainListCache().clear();
+                this.clusterDomainListCache().get();
             } else {
                 globalZk().setData(domainPath, jsonMapper().writeValueAsBytes(domain), -1);
             }
@@ -422,7 +424,88 @@ public class Clusters extends AdminResource {
             throw new RestException(e);
         }
     }
-    
+
+    @GET
+    @Path("/{cluster}/domains")
+    @ApiOperation(value = "Get the cluster domains", response = Domain.class, responseContainer = "Map")
+    @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission"),
+            @ApiResponse(code = 404, message = "Cluster doesn't exist") })
+    public Map<String, Domain> getDomains(@PathParam("cluster") String cluster) throws Exception {
+        validateSuperUserAccess();
+
+        Map<String, Domain> domains = Maps.newHashMap();
+        try {
+            for (String domainName : clusterDomainListCache().get()) {
+                try {
+                    Optional<Domain> domain = domainCache().get(path("clusters", cluster, "domains", domainName));
+                    if (domain.isPresent()) {
+                        domains.put(domainName, domain.get());
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to get domain {}", domainName, e);
+                }
+            }
+        } catch (KeeperException.NoNodeException e) {
+            log.error("[{}] Domain is not configured for cluster {}", clientAppId(), cluster, e);
+            return Collections.emptyMap();
+        } catch (Exception e) {
+            log.error("[{}] Failed to get domains for cluster {}", clientAppId(), cluster, e);
+            throw new RestException(e);
+        }
+        return domains;
+    }
+
+    @GET
+    @Path("/{cluster}/domains/{domainName}")
+    @ApiOperation(value = "Get a domain in a cluster", response = Domain.class)
+    @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission"),
+            @ApiResponse(code = 404, message = "Domain doesn't exist"),
+            @ApiResponse(code = 412, message = "Cluster doesn't exist") })
+    public Domain getDomain(@PathParam("cluster") String cluster, @PathParam("domainName") String domainName)
+            throws Exception {
+        validateSuperUserAccess();
+        validateClusterExists(cluster);
+
+        try {
+            return domainCache().get(path("clusters", cluster, "domains", domainName))
+                    .orElseThrow(() -> new RestException(Status.NOT_FOUND,
+                            "NamespaceIsolationPolicies for cluster " + cluster + " does not exist"));
+        } catch (RestException re) {
+            throw re;
+        } catch (Exception e) {
+            log.error("[{}] Failed to get domain {} for cluster {}", clientAppId(), domainName, cluster, e);
+            throw new RestException(e);
+        }
+    }
+
+    @DELETE
+    @Path("/{cluster}/domains/{domainName}")
+    @ApiOperation(value = "Delete cluster's domain")
+    @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission or plicy is read only"),
+            @ApiResponse(code = 412, message = "Cluster doesn't exist") })
+    public void deleteDomain(@PathParam("cluster") String cluster, @PathParam("domainName") String domainName)
+            throws Exception {
+        validateSuperUserAccess();
+        validateClusterExists(cluster);
+
+        try {
+            globalZk().delete(path("clusters", cluster, "domains", domainName), -1);
+            // make sure that the cache content will be refreshed for the next read access
+            domainCache().invalidate(domainName);
+            // clear children cache and reload for further watch
+            clusterDomainListCache().clear();
+            clusterDomainListCache().get();
+            //TODO: load-manager refresh brokerToDomainCache periodically
+        } catch (KeeperException.NoNodeException nne) {
+            log.warn("[{}] Domain {} does not exist in {}", clientAppId(), domainName, cluster);
+            throw new RestException(Status.NOT_FOUND,
+                    "Domain-name " + domainName + " or cluster " + cluster + " does not exist");
+        } catch (Exception e) {
+            log.error("[{}] Failed to delete domain {} in cluster {}", clientAppId(), domainName, cluster, e);
+            throw new RestException(e);
+        }
+    }
+
     private static final Logger log = LoggerFactory.getLogger(Clusters.class);
 
 }
