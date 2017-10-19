@@ -38,6 +38,7 @@ import org.apache.bookkeeper.util.ZkUtils;
 import org.apache.pulsar.broker.web.RestException;
 import org.apache.pulsar.common.naming.NamedEntity;
 import org.apache.pulsar.common.policies.data.ClusterData;
+import org.apache.pulsar.common.policies.data.Domain;
 import org.apache.pulsar.common.policies.data.NamespaceIsolationData;
 import org.apache.pulsar.common.policies.impl.NamespaceIsolationPolicies;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
@@ -293,7 +294,7 @@ public class Clusters extends AdminResource {
             NamespaceIsolationPolicies nsIsolationPolicies = namespaceIsolationPoliciesCache()
                     .get(nsIsolationPolicyPath).orElseGet(() -> {
                         try {
-                            this.createNamespaceIsolationPolicyNode(nsIsolationPolicyPath);
+                            this.createZnode(nsIsolationPolicyPath, Collections.emptyMap());
                             return new NamespaceIsolationPolicies();
                         } catch (KeeperException | InterruptedException e) {
                             throw new RestException(e);
@@ -323,17 +324,17 @@ public class Clusters extends AdminResource {
         }
     }
 
-    private void createNamespaceIsolationPolicyNode(String nsIsolationPolicyPath)
+    private void createZnode(String path, Object value)
             throws KeeperException, InterruptedException {
         // create persistent node on ZooKeeper
-        if (globalZk().exists(nsIsolationPolicyPath, false) == null) {
+        if (globalZk().exists(path, false) == null) {
             // create all the intermediate nodes
             try {
-                ZkUtils.createFullPathOptimistic(globalZk(), nsIsolationPolicyPath,
+                ZkUtils.createFullPathOptimistic(globalZk(), path,
                         jsonMapper().writeValueAsBytes(Collections.emptyMap()), Ids.OPEN_ACL_UNSAFE,
                         CreateMode.PERSISTENT);
             } catch (KeeperException.NodeExistsException nee) {
-                log.debug("Other broker preempted the full path [{}] already. Continue...", nsIsolationPolicyPath);
+                log.debug("Other broker preempted the full path [{}] already. Continue...", path);
             } catch (JsonGenerationException e) {
                 // ignore json error as it is empty hash
             } catch (JsonMappingException e) {
@@ -359,7 +360,7 @@ public class Clusters extends AdminResource {
             NamespaceIsolationPolicies nsIsolationPolicies = namespaceIsolationPoliciesCache()
                     .get(nsIsolationPolicyPath).orElseGet(() -> {
                         try {
-                            this.createNamespaceIsolationPolicyNode(nsIsolationPolicyPath);
+                            this.createZnode(nsIsolationPolicyPath, Collections.emptyMap());
                             return new NamespaceIsolationPolicies();
                         } catch (KeeperException | InterruptedException e) {
                             throw new RestException(e);
@@ -383,6 +384,45 @@ public class Clusters extends AdminResource {
         }
     }
 
+    @POST
+    @Path("/{cluster}/domain/{domainName}")
+    @ApiOperation(value = "Set cluster's domain")
+    @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission"),
+            @ApiResponse(code = 412, message = "Cluster doesn't exist") })
+    public void setDomain(@PathParam("cluster") String cluster, @PathParam("domainName") String domainName,
+            Domain domain) throws Exception {
+        validateSuperUserAccess();
+        validateClusterExists(cluster);
+        validatePoliciesReadOnlyAccess();
+        //TODO: validate brokers should not be part of other clusters
+
+        try {
+            String domainPath = path("clusters", cluster, "domains", domainName);
+            if (globalZk().exists(domainPath, false) == null) {
+                this.createZnode(domainPath, domain);
+                // refresh domain children cache as we added new znode 
+                this.clusterDomainListCache().clear();
+            } else {
+                globalZk().setData(domainPath, jsonMapper().writeValueAsBytes(domain), -1);
+            }
+            // make sure that the cache content will be refreshed for the next read access
+            domainCache().invalidate(domainPath);
+        } catch (IllegalArgumentException iae) {
+            log.info("[{}] Failed to update clusters/{}/domainName/{}. Input data is invalid", clientAppId(), cluster,
+                    domainName, iae);
+            String jsonInput = ObjectMapperFactory.create().writeValueAsString(domainName);
+            throw new RestException(Status.BAD_REQUEST,
+                    "Invalid format of input domain data. domainName: " + domainName + "; data: " + jsonInput);
+        } catch (KeeperException.NoNodeException nne) {
+            log.warn("[{}] Failed to update clusters/{}/domainName: Does not exist", clientAppId(), cluster);
+            throw new RestException(Status.NOT_FOUND,
+                    "NamespaceIsolationPolicies for cluster " + cluster + " does not exist");
+        } catch (Exception e) {
+            log.error("[{}] Failed to update clusters/{}/domainName/{}", clientAppId(), cluster, domainName, e);
+            throw new RestException(e);
+        }
+    }
+    
     private static final Logger log = LoggerFactory.getLogger(Clusters.class);
 
 }

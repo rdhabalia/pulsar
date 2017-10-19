@@ -21,8 +21,10 @@ package org.apache.pulsar.broker.cache;
 import java.util.Map;
 
 import org.apache.bookkeeper.util.ZkUtils;
+import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.common.policies.data.ClusterData;
+import org.apache.pulsar.common.policies.data.Domain;
 import org.apache.pulsar.common.policies.data.NamespaceIsolationData;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.PropertyAdmin;
@@ -53,13 +55,19 @@ public class ConfigurationCacheService {
     private ZooKeeperDataCache<Policies> policiesCache;
     private ZooKeeperDataCache<ClusterData> clustersCache;
     private ZooKeeperChildrenCache clustersListCache;
+    private ZooKeeperChildrenCache clusterDomainListCache;
     private ZooKeeperDataCache<NamespaceIsolationPolicies> namespaceIsolationPoliciesCache;
+    private ZooKeeperDataCache<Domain> domainCache;
 
     public static final String POLICIES = "policies";
     protected static final String POLICIES_ROOT = "/admin/policies";
     private static final String CLUSTERS_ROOT = "/admin/clusters";
 
     public ConfigurationCacheService(ZooKeeperCache cache) throws PulsarServerException {
+        this(cache, null);
+    }
+
+    public ConfigurationCacheService(ZooKeeperCache cache, String configuredClusterName) throws PulsarServerException {
         this.cache = cache;
 
         initZK();
@@ -86,6 +94,11 @@ public class ConfigurationCacheService {
         };
 
         this.clustersListCache = new ZooKeeperChildrenCache(cache, CLUSTERS_ROOT);
+        
+        if (isNotBlank(configuredClusterName)) {
+            this.clusterDomainListCache = new ZooKeeperChildrenCache(cache,
+                    CLUSTERS_ROOT + "/" + configuredClusterName + "/domains");
+        }
 
         this.namespaceIsolationPoliciesCache = new ZooKeeperDataCache<NamespaceIsolationPolicies>(cache) {
             @Override
@@ -94,6 +107,13 @@ public class ConfigurationCacheService {
                 return new NamespaceIsolationPolicies((Map<String, NamespaceIsolationData>) ObjectMapperFactory
                         .getThreadLocal().readValue(content, new TypeReference<Map<String, NamespaceIsolationData>>() {
                         }));
+            }
+        };
+        
+        this.domainCache = new ZooKeeperDataCache<Domain>(cache) {
+            @Override
+            public Domain deserialize(String path, byte[] content) throws Exception {
+                return ObjectMapperFactory.getThreadLocal().readValue(content, Domain.class);
             }
         };
     }
@@ -138,11 +158,19 @@ public class ConfigurationCacheService {
         return this.clustersListCache;
     }
 
+    public ZooKeeperChildrenCache clusterDomainListCache() {
+        return this.clusterDomainListCache;
+    }
+    
     public ZooKeeper getZooKeeper() {
         return this.cache.getZooKeeper();
     }
 
     public ZooKeeperDataCache<NamespaceIsolationPolicies> namespaceIsolationPoliciesCache() {
         return this.namespaceIsolationPoliciesCache;
+    }
+    
+    public ZooKeeperDataCache<Domain> domainCache() {
+        return this.domainCache;
     }
 }

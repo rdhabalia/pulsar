@@ -32,9 +32,7 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.PulsarService;
@@ -68,6 +66,8 @@ public class LoadManagerShared {
 
     // Cache for shard brokers according to policies.
     private static final Set<String> sharedCache = new HashSet<>();
+
+    private static final String DEFAULT_DOMAIN = "default";
 
     // Don't allow construction: static method namespace only.
     private LoadManagerShared() {
@@ -285,8 +285,37 @@ public class LoadManagerShared {
         }
     }
 
-    public static void removeAntiAffinityGroupOwnedBrokers(final PulsarService pulsar, final String assignedBundleName,
-            final Set<String> candidates, final Map<String, Map<String, Set<String>>> brokerToNamespaceToBundleRange) {
+    /**
+     * It tries to filter out brokers which own namespace with same anti-affinity-group as given namespace. If all the
+     * domains own namespace with same anti-affinity group then it will try to keep brokers with domain that has least
+     * number of namespaces. It also tries to keep brokers which has least number of namespace with in domain.
+     * eg.
+     * <pre>
+     * Before:
+     * Domain-count  Brokers-count
+     * ____________  ____________
+     * d1-3          b1-2,b2-1
+     * d2-3          b3-2,b4-1
+     * d3-4          b5-2,b6-2
+     * 
+     * After filtering: "candidates" brokers
+     * Domain-count  Brokers-count
+     * ____________  ____________
+     * d1-3          b2-1
+     * d2-3          b4-1
+     * 
+     * "candidate" broker to own anti-affinity-namespace = b2 or b4
+     * 
+     * </pre>
+     * 
+     * @param pulsar
+     * @param assignedBundleName
+     * @param candidates
+     * @param brokerToNamespaceToBundleRange
+     */
+    public static void filterAntiAffinityGroupOwnedBrokers(final PulsarService pulsar, final String assignedBundleName,
+            final Set<String> candidates, final Map<String, Map<String, Set<String>>> brokerToNamespaceToBundleRange,
+            Map<String, String> brokerToDomainMap) {
         if (candidates.isEmpty()) {
             return;
         }
@@ -295,65 +324,72 @@ public class LoadManagerShared {
             final Map<String, Integer> brokerToAntiAffinityNamespaceCount = getAntiAffinityNamespaceOwnedBrokers(pulsar,
                     namespaceName, brokerToNamespaceToBundleRange).get(30, TimeUnit.SECONDS);
             if (brokerToAntiAffinityNamespaceCount == null) {
+                // none of the broker owns anti-affinity-namespace so, none of the broker will be filtered
                 return;
             }
-            filterDomainsWithHighAntiAffinityNamespace(brokerToAntiAffinityNamespaceCount);
-            int leastNamaespace = Integer.MAX_VALUE;
+            if(pulsar.getConfiguration().isClusterDomainsEnabled()) {
+                // this will remove all the brokers which are part of domains that don't have least number of
+                // anti-affinity-namespaces
+                filterDomainsNotHavingLeastNumberAntiAffinityNamespaces(brokerToAntiAffinityNamespaceCount, candidates,
+                        brokerToDomainMap);                
+            }
+            // now, "candidates" has list of brokers which are part of domain that can accept this namespace. now,
+            // with in these domains, remove brokers which don't have least number of namespaces. so, brokers with least
+            // number of namespace can be selected
+            int leastNamaespaceCount = Integer.MAX_VALUE;
             for (final String broker : candidates) {
                 if (brokerToAntiAffinityNamespaceCount.containsKey(broker)) {
                     Integer namespaceCount = brokerToAntiAffinityNamespaceCount.get(broker);
                     if (namespaceCount == null) {
                         // Assume that when the namespace is absent, there are no namespace assigned to
                         // that broker.
-                        leastNamaespace = 0;
+                        leastNamaespaceCount = 0;
                         break;
                     }
-                    leastNamaespace = Math.min(leastNamaespace, namespaceCount);
+                    leastNamaespaceCount = Math.min(leastNamaespaceCount, namespaceCount);
                 } else {
                     // Assume non-present brokers have 0 bundles.
-                    leastNamaespace = 0;
+                    leastNamaespaceCount = 0;
                     break;
                 }
             }
             // filter out broker based on namespace distribution
-            if (leastNamaespace == 0) {
-                candidates.removeIf(broker -> brokerToNamespaceToBundleRange.containsKey(broker)
-                        && brokerToNamespaceToBundleRange.get(broker).containsKey(namespaceName));
+            if (leastNamaespaceCount == 0) {
+                candidates.removeIf(broker -> brokerToAntiAffinityNamespaceCount.containsKey(broker)
+                        && brokerToAntiAffinityNamespaceCount.get(broker) > 0);
             } else {
-                final int finalLeastBundles = leastNamaespace;
-                candidates.removeIf(broker -> brokerToNamespaceToBundleRange.get(broker).get(namespaceName)
-                        .size() != finalLeastBundles);
+                final int finalLeastNamespaceCount = leastNamaespaceCount;
+                candidates
+                        .removeIf(broker -> brokerToAntiAffinityNamespaceCount.get(broker) != finalLeastNamespaceCount);
             }
         } catch (Exception e) {
             log.error("Failed to filter anti-affinity group namespace {}", e.getMessage());
         }
     }
 
-    private static void filterDomainsWithHighAntiAffinityNamespace(
-            Map<String, Integer> brokerToAntiAffinityNamespaceCount) {
-       
+    private static void filterDomainsNotHavingLeastNumberAntiAffinityNamespaces(
+            Map<String, Integer> brokerToAntiAffinityNamespaceCount, Set<String> candidates,
+            Map<String, String> brokerToDomainMap) {
+
         final Map<String, Integer> domainNamespaceCount = Maps.newHashMap();
-        int leastNamespace = Integer.MAX_VALUE;
+        int leastNamespaceCount = Integer.MAX_VALUE;
         brokerToAntiAffinityNamespaceCount.forEach((broker, count) -> {
-            final String domain = getDomain(broker);
-            domainNamespaceCount.compute(domain, (domainName, nsCount) -> nsCount == null ? 0 : nsCount + 1);
+            final String domain = brokerToDomainMap.getOrDefault(broker, DEFAULT_DOMAIN);
+            domainNamespaceCount.compute(domain, (domainName, nsCount) -> nsCount == null ? 1 : nsCount + 1);
         });
         // find leastNameSpaceCount
-        for(Entry<String, Integer> domainNsCountEntry : domainNamespaceCount.entrySet()) {
-            if(domainNsCountEntry.getValue() < leastNamespace){
-                leastNamespace = domainNsCountEntry.getValue();
+        for (Entry<String, Integer> domainNsCountEntry : domainNamespaceCount.entrySet()) {
+            if (domainNsCountEntry.getValue() < leastNamespaceCount) {
+                leastNamespaceCount = domainNsCountEntry.getValue();
             }
         }
-        // filter domain having high antiaffinity-namespace count
-        domainNamespaceCount.forEach((domainName, nsCount)->{
-            
+        final int finalLeastNamespaceCount = leastNamespaceCount;
+        // only keep domain brokers which has leastNamespaceCount
+        candidates.removeIf(broker -> {
+            Integer nsCount = domainNamespaceCount.get(brokerToDomainMap.getOrDefault(broker, DEFAULT_DOMAIN));
+            return nsCount != null && nsCount > finalLeastNamespaceCount;
         });
 
-    }
-
-    private static String getDomain(String broker) {
-        // TODO Auto-generated method stub
-        return null;
     }
 
     private static CompletableFuture<Map<String, Integer>> getAntiAffinityNamespaceOwnedBrokers(
@@ -371,28 +407,26 @@ public class LoadManagerShared {
             final String antiAffinityGroup = policies.get().antiAffinityGroup;
             final Map<String, Integer> brokerToAntiAffinityNamespaceCount = new ConcurrentHashMap<>();
             final List<CompletableFuture<Void>> futures = Lists.newArrayList();
-            //TODO: instead use forEach()
-            for (Entry<String, Map<String, Set<String>>> brokerToNs : brokerToNamespaceToBundleRange.entrySet()) {
-                for (Entry<String, Set<String>> namespaceEntry : brokerToNs.getValue().entrySet()) {
-                    String ns = namespaceEntry.getKey();
+            brokerToNamespaceToBundleRange.forEach((broker, nsToBundleRange) -> {
+                nsToBundleRange.forEach((ns, bundleRange) -> {
                     CompletableFuture<Void> future = new CompletableFuture<>();
                     futures.add(future);
                     policiesCache.getAsync(path(POLICIES, ns)).thenAccept(nsPolicies -> {
                         if (nsPolicies.isPresent() && antiAffinityGroup.equals(nsPolicies.get().antiAffinityGroup)) {
-                            brokerToAntiAffinityNamespaceCount.compute(brokerToNs.getKey(),
-                                    (broker, count) -> count == null ? 0 : count + 1);
+                            brokerToAntiAffinityNamespaceCount.compute(broker,
+                                    (brokerName, count) -> count == null ? 1 : count + 1);
                         }
                         future.complete(null);
                     }).exceptionally(ex -> {
                         future.complete(null);
                         return null;
                     });
-                }
-            }
+                });
+            });
             FutureUtil.waitForAll(futures)
                     .thenAccept(r -> antiAffinityNsBrokersResult.complete(brokerToAntiAffinityNamespaceCount));
         }).exceptionally(ex -> {
-            // TODO: log debug: because it should not happen
+            // namespace-policies has not been created yet
             antiAffinityNsBrokersResult.complete(null);
             return null;
         });

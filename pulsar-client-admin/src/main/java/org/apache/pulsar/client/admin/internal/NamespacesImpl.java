@@ -228,6 +228,18 @@ public class NamespacesImpl extends BaseResource implements Namespaces {
     }
 
     @Override
+    public void setNamespaceAntiAffinityGroup(String namespace, String namespaceAntiAffinityGroup)
+            throws PulsarAdminException {
+        try {
+            NamespaceName ns = new NamespaceName(namespace);
+            request(namespaces.path(ns.getProperty()).path(ns.getCluster()).path(ns.getLocalName()).path("antiAffinity"))
+                    .post(Entity.entity(namespaceAntiAffinityGroup, MediaType.APPLICATION_JSON), ErrorData.class);
+        } catch (Exception e) {
+            throw getApiException(e);
+        }
+    }
+
+    @Override
     public void setDeduplicationStatus(String namespace, boolean enableDeduplication) throws PulsarAdminException {
         try {
             NamespaceName ns = new NamespaceName(namespace);

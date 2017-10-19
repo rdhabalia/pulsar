@@ -19,6 +19,7 @@
 package org.apache.pulsar.broker.admin;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static org.apache.pulsar.broker.cache.ConfigurationCacheService.POLICIES;
 
 import java.net.MalformedURLException;
 import java.net.URI;
@@ -45,6 +46,7 @@ import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.partition.PartitionedTopicMetadata;
 import org.apache.pulsar.common.policies.data.BundlesData;
 import org.apache.pulsar.common.policies.data.ClusterData;
+import org.apache.pulsar.common.policies.data.Domain;
 import org.apache.pulsar.common.policies.data.LocalPolicies;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.PropertyAdmin;
@@ -64,7 +66,6 @@ import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.Lists;
-import static org.apache.pulsar.broker.cache.ConfigurationCacheService.POLICIES;
 
 public abstract class AdminResource extends PulsarWebResource {
     private static final Logger log = LoggerFactory.getLogger(AdminResource.class);
@@ -288,6 +289,14 @@ public abstract class AdminResource extends PulsarWebResource {
 
     protected ZooKeeperDataCache<NamespaceIsolationPolicies> namespaceIsolationPoliciesCache() {
         return pulsar().getConfigurationCache().namespaceIsolationPoliciesCache();
+    }
+
+    protected ZooKeeperDataCache<Domain> domainCache() {
+        return pulsar().getConfigurationCache().domainCache();
+    }
+
+    protected ZooKeeperChildrenCache clusterDomainListCache() {
+        return pulsar().getConfigurationCache().clusterDomainListCache();
     }
 
     protected PartitionedTopicMetadata getPartitionedTopicMetadata(String property, String cluster, String namespace,

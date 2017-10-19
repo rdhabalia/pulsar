@@ -49,6 +49,7 @@ import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.TimeAverageMessageData;
 import org.apache.pulsar.broker.loadbalance.LoadData;
+import org.apache.pulsar.broker.loadbalance.impl.LoadManagerShared;
 import org.apache.pulsar.broker.loadbalance.impl.ModularLoadManagerImpl;
 import org.apache.pulsar.broker.loadbalance.impl.ModularLoadManagerWrapper;
 import org.apache.pulsar.client.admin.Namespaces;
@@ -59,6 +60,8 @@ import org.apache.pulsar.common.naming.NamespaceBundleFactory;
 import org.apache.pulsar.common.naming.NamespaceBundles;
 import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.ServiceUnitId;
+import org.apache.pulsar.common.policies.data.ClusterData;
+import org.apache.pulsar.common.policies.data.PropertyAdmin;
 import org.apache.pulsar.policies.data.loadbalancer.NamespaceBundleStats;
 import org.apache.pulsar.policies.data.loadbalancer.ResourceUsage;
 import org.apache.pulsar.policies.data.loadbalancer.SystemResourceUsage;
@@ -72,9 +75,14 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
+import com.beust.jcommander.internal.Maps;
 import com.google.common.collect.BoundType;
+import com.google.common.collect.Lists;
 import com.google.common.collect.Range;
+import com.google.common.collect.Sets;
 import com.google.common.hash.Hashing;
+
+import junit.framework.Assert;
 
 public class ModularLoadManagerImplTest {
     private LocalBookkeeperEnsemble bkEnsemble;
@@ -424,5 +432,102 @@ public class ModularLoadManagerImplTest {
         ModularLoadManagerImpl loadManager = (ModularLoadManagerImpl) loadMgrField.get(loadManagerWapper);
         Set<String> avaialbeBrokers = loadManager.getAvailableBrokers();
         assertEquals(avaialbeBrokers.size(), 1);
+    }
+    
+    /**
+     * 
+     * eg.
+     * <pre>
+     * Before:
+     * Domain-count  Brokers-count
+     * ____________  ____________
+     * d1-3          b1-2,b2-1
+     * d2-3          b3-2,b4-1
+     * d3-4          b5-2,b6-2
+     * 
+     * After filtering: "candidates" brokers
+     * Domain-count  Brokers-count
+     * ____________  ____________
+     * d1-3          b2-1
+     * d2-3          b4-1
+     * 
+     * "candidate" broker to own anti-affinity-namespace = b2 or b4
+     * 
+     * </pre>
+     * 
+     */
+    @Test
+    public void testAntiAffinityNamespaceFiltering() throws Exception {
+
+        final String namespace = "my-property/use/my-ns";
+        final int totalNamespaces = 11;
+        final String namespaceAntiAffinityGroup = "my-antiaffinity";
+        final String brokerName = "broker";
+        final String bundle = "/0x00000000_0xffffffff";
+        final int totalBrokers = 3;
+
+        admin1.clusters().createCluster("use", new ClusterData("http://127.0.0.1:" + PRIMARY_BROKER_WEBSERVICE_PORT));
+        admin1.properties().createProperty("my-property",
+                new PropertyAdmin(Lists.newArrayList("appid1", "appid2"), Sets.newHashSet("use")));
+
+        for (int i = 0; i < totalNamespaces; i++) {
+            final String ns = namespace + i;
+            admin1.namespaces().createNamespace(ns);
+            admin1.namespaces().setNamespaceAntiAffinityGroup(ns, namespaceAntiAffinityGroup);
+        }
+
+        Set<String> brokers = Sets.newHashSet();
+        Set<String> candidate = Sets.newHashSet();
+        Map<String, Map<String, Set<String>>> brokerToNamespaceToBundleRange = Maps.newHashMap();
+        for (int i = 0; i < totalBrokers; i++) {
+            brokers.add(brokerName + i);
+        }
+        Assert.assertEquals(brokers.size(), totalBrokers);
+        
+        String assignedBundleName = namespace+"0"+bundle;
+        
+        // candidate totalBrokers
+        candidate.addAll(brokers);
+        LoadManagerShared.filterAntiAffinityGroupOwnedBrokers(pulsar1, assignedBundleName, brokers,
+                brokerToNamespaceToBundleRange);
+        Assert.assertEquals(brokers.size(), totalBrokers);
+        
+        
+        // add ns to 1 broker
+        addNamespaceToBroker(brokerToNamespaceToBundleRange, brokerName+"0", namespace+"0", assignedBundleName);
+        candidate.addAll(brokers);
+        
+        assignedBundleName = namespace+"1"+bundle;
+        LoadManagerShared.filterAntiAffinityGroupOwnedBrokers(pulsar1, assignedBundleName, candidate,
+                brokerToNamespaceToBundleRange);
+        Assert.assertEquals(candidate.size(), totalBrokers-1);
+        
+        // add ns to 2 broker
+        addNamespaceToBroker(brokerToNamespaceToBundleRange, brokerName+"1", namespace+"1", assignedBundleName);
+        candidate.addAll(brokers);
+        
+        assignedBundleName = namespace+"2"+bundle;
+        LoadManagerShared.filterAntiAffinityGroupOwnedBrokers(pulsar1, assignedBundleName, candidate,
+                brokerToNamespaceToBundleRange);
+        Assert.assertEquals(candidate.size(), totalBrokers-2);
+        
+        
+        // add ns to 3 broker
+        addNamespaceToBroker(brokerToNamespaceToBundleRange, brokerName+"2", namespace+"2", assignedBundleName);
+        candidate.addAll(brokers);
+        
+        assignedBundleName = namespace+"3"+bundle;
+        LoadManagerShared.filterAntiAffinityGroupOwnedBrokers(pulsar1, assignedBundleName, candidate,
+                brokerToNamespaceToBundleRange);
+        Assert.assertEquals(candidate.size(), totalBrokers);
+        
+
+    }
+
+    private void addNamespaceToBroker(Map<String, Map<String, Set<String>>> brokerToNamespaceToBundleRange,
+            String broker, String namespace, String assignedBundleName) {
+        Map<String, Set<String>> nsToBundleMap = Maps.newHashMap();
+        nsToBundleMap.put(namespace, Sets.newHashSet(assignedBundleName));
+        brokerToNamespaceToBundleRange.put(broker, nsToBundleMap);
     }
 }
