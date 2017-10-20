@@ -232,8 +232,33 @@ public class NamespacesImpl extends BaseResource implements Namespaces {
             throws PulsarAdminException {
         try {
             NamespaceName ns = new NamespaceName(namespace);
-            request(namespaces.path(ns.getProperty()).path(ns.getCluster()).path(ns.getLocalName()).path("antiAffinity"))
-                    .post(Entity.entity(namespaceAntiAffinityGroup, MediaType.APPLICATION_JSON), ErrorData.class);
+            request(namespaces.path(ns.getProperty()).path(ns.getCluster()).path(ns.getLocalName())
+                    .path("antiAffinity")).post(Entity.entity(namespaceAntiAffinityGroup, MediaType.APPLICATION_JSON),
+                            ErrorData.class);
+        } catch (Exception e) {
+            throw getApiException(e);
+        }
+    }
+
+    @Override
+    public String getNamespaceAntiAffinityGroup(String namespace) throws PulsarAdminException {
+        try {
+            NamespaceName ns = new NamespaceName(namespace);
+            return request(namespaces.path(ns.getProperty()).path(ns.getCluster()).path(ns.getLocalName())
+                    .path("antiAffinity")).get(new GenericType<String>() {
+                    });
+
+        } catch (Exception e) {
+            throw getApiException(e);
+        }
+    }
+
+    @Override
+    public void deleteNamespaceAntiAffinityGroup(String namespace) throws PulsarAdminException {
+        try {
+            NamespaceName ns = new NamespaceName(namespace);
+            request(namespaces.path(ns.getProperty()).path(ns.getCluster()).path(ns.getLocalName())
+                    .path("antiAffinity")).delete(ErrorData.class);
         } catch (Exception e) {
             throw getApiException(e);
         }

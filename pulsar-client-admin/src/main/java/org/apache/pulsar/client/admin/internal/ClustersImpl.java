@@ -30,6 +30,7 @@ import org.apache.pulsar.client.admin.Clusters;
 import org.apache.pulsar.client.admin.PulsarAdminException;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.common.policies.data.ClusterData;
+import org.apache.pulsar.common.policies.data.Domain;
 import org.apache.pulsar.common.policies.data.ErrorData;
 import org.apache.pulsar.common.policies.data.NamespaceIsolationData;
 
@@ -134,6 +135,51 @@ public class ClustersImpl extends BaseResource implements Clusters {
         try {
             return request(clusters.path(cluster).path("namespaceIsolationPolicies").path(policyName)).get(
                     NamespaceIsolationData.class);
+        } catch (Exception e) {
+            throw getApiException(e);
+        }
+    }
+
+    @Override
+    public void createDomain(String cluster, String domainName, Domain domain) throws PulsarAdminException {
+        setDomain(cluster, domainName, domain);
+    }
+
+    @Override
+    public void updateDomain(String cluster, String domainName, Domain domain) throws PulsarAdminException {
+        setDomain(cluster, domainName, domain);
+    }
+
+    @Override
+    public void deleteDomain(String cluster, String domainName) throws PulsarAdminException {
+        request(clusters.path(cluster).path("domains").path(domainName)).delete(ErrorData.class);
+    }
+
+    @Override
+    public Map<String, Domain> getDomains(String cluster) throws PulsarAdminException {
+        try {
+            return request(clusters.path(cluster).path("domains"))
+                    .get(new GenericType<Map<String, Domain>>() {
+                    });
+        } catch (Exception e) {
+            throw getApiException(e);
+        }
+    }
+
+    @Override
+    public Domain getDomain(String cluster, String domainName) throws PulsarAdminException {
+        try {
+            return request(clusters.path(cluster).path("domains").path(domainName)).get(Domain.class);
+        } catch (Exception e) {
+            throw getApiException(e);
+        }
+    }
+    
+    private void setDomain(String cluster, String domainName,
+            Domain domain) throws PulsarAdminException {
+        try {
+            request(clusters.path(cluster).path("domains").path(domainName)).post(
+                    Entity.entity(domain, MediaType.APPLICATION_JSON), ErrorData.class);
         } catch (Exception e) {
             throw getApiException(e);
         }

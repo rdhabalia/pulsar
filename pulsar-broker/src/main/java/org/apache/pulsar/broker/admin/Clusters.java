@@ -18,11 +18,15 @@
  */
 package org.apache.pulsar.broker.admin;
 
+import static org.apache.pulsar.broker.cache.ConfigurationCacheService.POLICIES;
+
 import java.io.IOException;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import javax.ws.rs.DELETE;
 import javax.ws.rs.GET;
@@ -56,7 +60,6 @@ import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import io.swagger.annotations.ApiResponse;
 import io.swagger.annotations.ApiResponses;
-import static org.apache.pulsar.broker.cache.ConfigurationCacheService.POLICIES;
 
 @Path("/clusters")
 @Api(value = "/clusters", description = "Cluster admin apis", tags = "clusters")
@@ -295,7 +298,7 @@ public class Clusters extends AdminResource {
             NamespaceIsolationPolicies nsIsolationPolicies = namespaceIsolationPoliciesCache()
                     .get(nsIsolationPolicyPath).orElseGet(() -> {
                         try {
-                            this.createZnode(nsIsolationPolicyPath, Collections.emptyMap());
+                            this.createZnodeIfNotExist(nsIsolationPolicyPath, Collections.emptyMap());
                             return new NamespaceIsolationPolicies();
                         } catch (KeeperException | InterruptedException e) {
                             throw new RestException(e);
@@ -325,15 +328,15 @@ public class Clusters extends AdminResource {
         }
     }
 
-    private void createZnode(String path, Object value)
-            throws KeeperException, InterruptedException {
+    private boolean createZnodeIfNotExist(String path, Object value) throws KeeperException, InterruptedException {
         // create persistent node on ZooKeeper
         if (globalZk().exists(path, false) == null) {
             // create all the intermediate nodes
             try {
                 ZkUtils.createFullPathOptimistic(globalZk(), path,
-                        jsonMapper().writeValueAsBytes(Collections.emptyMap()), Ids.OPEN_ACL_UNSAFE,
+                        value != null ? jsonMapper().writeValueAsBytes(value) : null, Ids.OPEN_ACL_UNSAFE,
                         CreateMode.PERSISTENT);
+                return true;
             } catch (KeeperException.NodeExistsException nee) {
                 log.debug("Other broker preempted the full path [{}] already. Continue...", path);
             } catch (JsonGenerationException e) {
@@ -342,6 +345,7 @@ public class Clusters extends AdminResource {
             } catch (IOException e) {
             }
         }
+        return false;
     }
 
     @DELETE
@@ -361,7 +365,7 @@ public class Clusters extends AdminResource {
             NamespaceIsolationPolicies nsIsolationPolicies = namespaceIsolationPoliciesCache()
                     .get(nsIsolationPolicyPath).orElseGet(() -> {
                         try {
-                            this.createZnode(nsIsolationPolicyPath, Collections.emptyMap());
+                            this.createZnodeIfNotExist(nsIsolationPolicyPath, Collections.emptyMap());
                             return new NamespaceIsolationPolicies();
                         } catch (KeeperException | InterruptedException e) {
                             throw new RestException(e);
@@ -389,21 +393,21 @@ public class Clusters extends AdminResource {
     @Path("/{cluster}/domains/{domainName}")
     @ApiOperation(value = "Set cluster's domain")
     @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission"),
+            @ApiResponse(code = 409, message = "Broker already exist into other domain"),
             @ApiResponse(code = 412, message = "Cluster doesn't exist") })
     public void setDomain(@PathParam("cluster") String cluster, @PathParam("domainName") String domainName,
             Domain domain) throws Exception {
         validateSuperUserAccess();
         validateClusterExists(cluster);
-        validatePoliciesReadOnlyAccess();
-        //TODO: validate brokers should not be part of other clusters
+        validateBrokerExistsInOtherDomain(cluster, domainName, domain);
 
         try {
+            this.createZnodeIfNotExist(path("clusters", cluster, "domains"), null);
             String domainPath = path("clusters", cluster, "domains", domainName);
-            if (globalZk().exists(domainPath, false) == null) {
-                this.createZnode(domainPath, domain);
+            if (this.createZnodeIfNotExist(domainPath, domain)) {
                 // clear children cache and reload for further watch
-                this.clusterDomainListCache().clear();
-                this.clusterDomainListCache().get();
+                //this.clusterDomainListCache().clear();
+                //this.clusterDomainListCache().get();
             } else {
                 globalZk().setData(domainPath, jsonMapper().writeValueAsBytes(domain), -1);
             }
@@ -418,7 +422,7 @@ public class Clusters extends AdminResource {
         } catch (KeeperException.NoNodeException nne) {
             log.warn("[{}] Failed to update clusters/{}/domainName: Does not exist", clientAppId(), cluster);
             throw new RestException(Status.NOT_FOUND,
-                    "NamespaceIsolationPolicies for cluster " + cluster + " does not exist");
+                    "Domain "+ domainName +" for cluster " + cluster + " does not exist");
         } catch (Exception e) {
             log.error("[{}] Failed to update clusters/{}/domainName/{}", clientAppId(), cluster, domainName, e);
             throw new RestException(e);
@@ -469,7 +473,7 @@ public class Clusters extends AdminResource {
         try {
             return domainCache().get(path("clusters", cluster, "domains", domainName))
                     .orElseThrow(() -> new RestException(Status.NOT_FOUND,
-                            "NamespaceIsolationPolicies for cluster " + cluster + " does not exist"));
+                            "Domain " + domainName + " for cluster " + cluster + " does not exist"));
         } catch (RestException re) {
             throw re;
         } catch (Exception e) {
@@ -503,6 +507,42 @@ public class Clusters extends AdminResource {
         } catch (Exception e) {
             log.error("[{}] Failed to delete domain {} in cluster {}", clientAppId(), domainName, cluster, e);
             throw new RestException(e);
+        }
+    }
+
+    private void validateBrokerExistsInOtherDomain(final String cluster, final String inputDomainName,
+            final Domain inputDomain) {
+        if (inputDomain != null && inputDomain.brokers != null) {
+            try {
+                for (String domainName : clusterDomainListCache().get()) {
+                    if (inputDomainName.equals(domainName)) {
+                        continue;
+                    }
+                    try {
+                        Optional<Domain> domain = domainCache().get(path("clusters", cluster, "domains", domainName));
+                        if (domain.isPresent() && domain.get().brokers != null) {
+                            List<String> duplicateBrokers = domain.get().brokers.stream().parallel()
+                                    .filter(inputDomain.brokers::contains).collect(Collectors.toList());
+                            if (!duplicateBrokers.isEmpty()) {
+                                throw new RestException(Status.CONFLICT,
+                                        duplicateBrokers + " already exist into " + domainName);
+                            }
+                        }
+                    } catch (Exception e) {
+                        if (e instanceof RestException) {
+                            throw e;
+                        }
+                        log.warn("Failed to get domain {}", domainName, e);
+                    }
+                }
+            } catch (KeeperException.NoNodeException e) {
+                if (log.isDebugEnabled()) {
+                    log.debug("[{}] Domain is not configured for cluster", clientAppId(), e);
+                }
+            } catch (Exception e) {
+                log.error("[{}] Failed to get domains for cluster {}", clientAppId(), e);
+                throw new RestException(e);
+            }
         }
     }
 

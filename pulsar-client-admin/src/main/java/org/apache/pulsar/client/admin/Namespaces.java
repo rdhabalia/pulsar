@@ -422,7 +422,7 @@ public interface Namespaces {
     
     
     /**
-     * Set the anti-affinity group name for a namespace
+     * Set anti-affinity group name for a namespace
      * <p>
      * Request example:
      *
@@ -439,7 +439,43 @@ public interface Namespaces {
      *             Unexpected error
      */
     void setNamespaceAntiAffinityGroup(String namespace, String namespaceAntiAffinityGroup) throws PulsarAdminException;
-    
+
+    /**
+     * Get anti-affinity group name for a namespace
+     * <p>
+     * Response example:
+     *
+     * <pre>
+     * <code>60</code>
+     * </pre>
+     *
+     * @param namespace
+     *            Namespace name
+     *
+     * @throws NotAuthorizedException
+     *             Don't have admin permission
+     * @throws NotFoundException
+     *             Namespace does not exist
+     * @throws PulsarAdminException
+     *             Unexpected error
+     */
+    String getNamespaceAntiAffinityGroup(String namespace) throws PulsarAdminException;
+
+    /**
+     * Delete anti-affinity group name for a namespace.
+     *
+     * @param namespace
+     *            Namespace name
+     *
+     * @throws NotAuthorizedException
+     *             You don't have admin permission
+     * @throws NotFoundException
+     *             Namespace does not exist
+     * @throws PulsarAdminException
+     *             Unexpected error
+     */
+    void deleteNamespaceAntiAffinityGroup(String namespace) throws PulsarAdminException;
+
     /**
      * Set the deduplication status for all topics within a namespace.
      * <p>
