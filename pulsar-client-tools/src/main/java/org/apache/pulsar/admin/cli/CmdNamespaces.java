@@ -212,6 +212,46 @@ public class CmdNamespaces extends CmdBase {
         }
     }
 
+    @Parameters(commandDescription = "Set Anti-affinity group name for a namspace")
+    private class SetAntiAffinityGroup extends CliCommand {
+        @Parameter(description = "property/cluster/namespace", required = true)
+        private java.util.List<String> params;
+
+        @Parameter(names = { "--antiAffinityGroup", "-aag" }, description = "Anti-affinity group name", required = true)
+        private String antiAffinityGroup;
+
+        @Override
+        void run() throws PulsarAdminException {
+            String namespace = validateNamespace(params);
+            admin.namespaces().setNamespaceAntiAffinityGroup(namespace, antiAffinityGroup);
+        }
+    }
+
+    @Parameters(commandDescription = "Get Anti-affinity group name for a namspace")
+    private class GetAntiAffinityGroup extends CliCommand {
+        @Parameter(description = "property/cluster/namespace\n", required = true)
+        private java.util.List<String> params;
+        
+        @Override
+        void run() throws PulsarAdminException {
+            String namespace = validateNamespace(params);
+            print(admin.namespaces().getNamespaceAntiAffinityGroup(namespace));
+        }
+    }
+
+    @Parameters(commandDescription = "Remove Anti-affinity group name for a namspace")
+    private class DeleteAntiAffinityGroup extends CliCommand {
+        @Parameter(description = "property/cluster/namespace\n", required = true)
+        private java.util.List<String> params;
+        
+        @Override
+        void run() throws PulsarAdminException {
+            String namespace = validateNamespace(params);
+            admin.namespaces().deleteNamespaceAntiAffinityGroup(namespace);
+        }
+    }
+    
+
     @Parameters(commandDescription = "Enable or disable deduplication for a namespace")
     private class SetDeduplication extends CliCommand {
         @Parameter(description = "property/cluster/namespace", required = true)
@@ -579,6 +619,10 @@ public class CmdNamespaces extends CmdBase {
 
         jcommander.addCommand("get-message-ttl", new GetMessageTTL());
         jcommander.addCommand("set-message-ttl", new SetMessageTTL());
+        
+        jcommander.addCommand("get-anti-affinity-group", new GetAntiAffinityGroup());
+        jcommander.addCommand("set-anti-affinity-group", new SetAntiAffinityGroup());
+        jcommander.addCommand("delete-anti-affinity-group", new DeleteAntiAffinityGroup());
 
         jcommander.addCommand("set-deduplication", new SetDeduplication());
 

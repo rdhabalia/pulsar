@@ -405,14 +405,13 @@ public class Clusters extends AdminResource {
             this.createZnodeIfNotExist(path("clusters", cluster, "domains"), null);
             String domainPath = path("clusters", cluster, "domains", domainName);
             if (this.createZnodeIfNotExist(domainPath, domain)) {
-                // clear children cache and reload for further watch
-                //this.clusterDomainListCache().clear();
-                //this.clusterDomainListCache().get();
+                // clear domains-children cache
+                this.clusterDomainListCache().clear();
             } else {
                 globalZk().setData(domainPath, jsonMapper().writeValueAsBytes(domain), -1);
+                // make sure that the cache content will be refreshed for the next read access
+                domainCache().invalidate(domainPath);
             }
-            // make sure that the cache content will be refreshed for the next read access
-            domainCache().invalidate(domainPath);
         } catch (IllegalArgumentException iae) {
             log.info("[{}] Failed to update clusters/{}/domainName/{}. Input data is invalid", clientAppId(), cluster,
                     domainName, iae);
@@ -422,7 +421,7 @@ public class Clusters extends AdminResource {
         } catch (KeeperException.NoNodeException nne) {
             log.warn("[{}] Failed to update clusters/{}/domainName: Does not exist", clientAppId(), cluster);
             throw new RestException(Status.NOT_FOUND,
-                    "Domain "+ domainName +" for cluster " + cluster + " does not exist");
+                    "Domain " + domainName + " for cluster " + cluster + " does not exist");
         } catch (Exception e) {
             log.error("[{}] Failed to update clusters/{}/domainName/{}", clientAppId(), cluster, domainName, e);
             throw new RestException(e);
@@ -498,8 +497,6 @@ public class Clusters extends AdminResource {
             domainCache().invalidate(domainName);
             // clear children cache and reload for further watch
             clusterDomainListCache().clear();
-            clusterDomainListCache().get();
-            //TODO: load-manager refresh brokerToDomainCache periodically
         } catch (KeeperException.NoNodeException nne) {
             log.warn("[{}] Domain {} does not exist in {}", clientAppId(), domainName, cluster);
             throw new RestException(Status.NOT_FOUND,

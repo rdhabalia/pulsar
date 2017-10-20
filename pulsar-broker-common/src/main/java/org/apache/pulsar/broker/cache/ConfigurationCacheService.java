@@ -60,6 +60,7 @@ public class ConfigurationCacheService {
     private ZooKeeperDataCache<Domain> domainCache;
 
     public static final String POLICIES = "policies";
+    public final String CLUSTER_DOMAIN_ROOT;
     protected static final String POLICIES_ROOT = "/admin/policies";
     private static final String CLUSTERS_ROOT = "/admin/clusters";
 
@@ -95,9 +96,9 @@ public class ConfigurationCacheService {
 
         this.clustersListCache = new ZooKeeperChildrenCache(cache, CLUSTERS_ROOT);
         
+        CLUSTER_DOMAIN_ROOT = CLUSTERS_ROOT + "/" + configuredClusterName + "/domains";
         if (isNotBlank(configuredClusterName)) {
-            this.clusterDomainListCache = new ZooKeeperChildrenCache(cache,
-                    CLUSTERS_ROOT + "/" + configuredClusterName + "/domains");
+            this.clusterDomainListCache = new ZooKeeperChildrenCache(cache, CLUSTER_DOMAIN_ROOT);
         }
 
         this.namespaceIsolationPoliciesCache = new ZooKeeperDataCache<NamespaceIsolationPolicies>(cache) {

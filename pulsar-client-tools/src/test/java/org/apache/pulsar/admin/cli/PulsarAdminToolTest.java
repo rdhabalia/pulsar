@@ -39,6 +39,7 @@ import org.apache.pulsar.common.policies.data.AuthAction;
 import org.apache.pulsar.common.policies.data.BacklogQuota;
 import org.apache.pulsar.common.policies.data.BacklogQuota.RetentionPolicy;
 import org.apache.pulsar.common.policies.data.ClusterData;
+import org.apache.pulsar.common.policies.data.Domain;
 import org.apache.pulsar.common.policies.data.PersistencePolicies;
 import org.apache.pulsar.common.policies.data.PropertyAdmin;
 import org.apache.pulsar.common.policies.data.ResourceQuota;
@@ -109,6 +110,24 @@ public class PulsarAdminToolTest {
 
         clusters.run(split("delete use"));
         verify(mockClusters).deleteCluster("use");
+        
+        clusters.run(split("list-domains use"));
+        verify(mockClusters).getDomains("use");
+
+        clusters.run(split("get-domain use --domain-name domain"));
+        verify(mockClusters).getDomain("use", "domain");
+
+        clusters.run(split("create-domain use --domain-name domain --broker-list b1"));
+        Domain domain = new Domain();
+        domain.setBrokers(Sets.newHashSet("b1"));
+        verify(mockClusters).createDomain("use", "domain", domain);
+
+        clusters.run(split("update-domain use --domain-name domain --broker-list b1"));
+        verify(mockClusters).updateDomain("use", "domain", domain);
+
+        clusters.run(split("delete-domain use --domain-name domain"));
+        verify(mockClusters).deleteDomain("use", "domain");
+
 
         // Re-create CmdClusters to avoid a issue.
         // See https://github.com/cbeust/jcommander/issues/271
@@ -259,6 +278,16 @@ public class PulsarAdminToolTest {
 
         namespaces.run(split("get-message-ttl myprop/clust/ns1"));
         verify(mockNamespaces).getNamespaceMessageTTL("myprop/clust/ns1");
+        
+        namespaces.run(split("set-anti-affinity-group myprop/clust/ns1 -aag group"));
+        verify(mockNamespaces).setNamespaceAntiAffinityGroup("myprop/clust/ns1", "group");
+
+        namespaces.run(split("get-anti-affinity-group myprop/clust/ns1"));
+        verify(mockNamespaces).getNamespaceAntiAffinityGroup("myprop/clust/ns1");
+
+        namespaces.run(split("delete-anti-affinity-group myprop/clust/ns1 "));
+        verify(mockNamespaces).deleteNamespaceAntiAffinityGroup("myprop/clust/ns1");
+        
 
         namespaces.run(split("set-retention myprop/clust/ns1 -t 1h -s 1M"));
         verify(mockNamespaces).setRetention("myprop/clust/ns1", new RetentionPolicies(60, 1));

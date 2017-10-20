@@ -18,41 +18,25 @@
  */
 package org.apache.pulsar.broker.loadbalance;
 
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertTrue;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.URL;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 
 import org.apache.bookkeeper.test.PortManager;
 import org.apache.bookkeeper.util.ZkUtils;
-import org.apache.pulsar.broker.BrokerData;
-import org.apache.pulsar.broker.BundleData;
-import org.apache.pulsar.broker.LocalBrokerData;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
-import org.apache.pulsar.broker.TimeAverageMessageData;
-import org.apache.pulsar.broker.loadbalance.LoadData;
 import org.apache.pulsar.broker.loadbalance.impl.LoadManagerShared;
 import org.apache.pulsar.broker.loadbalance.impl.ModularLoadManagerImpl;
-import org.apache.pulsar.broker.loadbalance.impl.ModularLoadManagerWrapper;
-import org.apache.pulsar.client.admin.Namespaces;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.common.naming.NamespaceBundle;
@@ -61,14 +45,13 @@ import org.apache.pulsar.common.naming.NamespaceBundles;
 import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.ServiceUnitId;
 import org.apache.pulsar.common.policies.data.ClusterData;
+import org.apache.pulsar.common.policies.data.Domain;
 import org.apache.pulsar.common.policies.data.PropertyAdmin;
-import org.apache.pulsar.policies.data.loadbalancer.NamespaceBundleStats;
-import org.apache.pulsar.policies.data.loadbalancer.ResourceUsage;
-import org.apache.pulsar.policies.data.loadbalancer.SystemResourceUsage;
+import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.apache.pulsar.zookeeper.LocalBookkeeperEnsemble;
 import org.apache.zookeeper.CreateMode;
-import org.apache.zookeeper.ZooDefs;
-import org.mockito.Mockito;
+import org.apache.zookeeper.ZooDefs.Ids;
+import org.apache.zookeeper.ZooKeeper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testng.annotations.AfterMethod;
@@ -137,6 +120,8 @@ public class AntiAffinityNamespaceGroupTest {
         config1.setWebServicePort(PRIMARY_BROKER_WEBSERVICE_PORT);
         config1.setZookeeperServers("127.0.0.1" + ":" + ZOOKEEPER_PORT);
         config1.setBrokerServicePort(PRIMARY_BROKER_PORT);
+        config1.setClusterDomainsEnabled(true);
+        createCluster(bkEnsemble.getZkClient(), config1);
         pulsar1 = new PulsarService(config1);
 
         pulsar1.start();
@@ -152,6 +137,7 @@ public class AntiAffinityNamespaceGroupTest {
         config2.setWebServicePort(SECONDARY_BROKER_WEBSERVICE_PORT);
         config2.setZookeeperServers("127.0.0.1" + ":" + ZOOKEEPER_PORT);
         config2.setBrokerServicePort(SECONDARY_BROKER_PORT);
+        config2.setClusterDomainsEnabled(true);
         pulsar2 = new PulsarService(config2);
         secondaryHost = String.format("%s:%d", InetAddress.getLocalHost().getHostName(),
                 SECONDARY_BROKER_WEBSERVICE_PORT);
@@ -181,12 +167,18 @@ public class AntiAffinityNamespaceGroupTest {
         bkEnsemble.stop();
     }
 
-    
+    private void createCluster(ZooKeeper zk, ServiceConfiguration config) throws Exception {
+        ZkUtils.createFullPathOptimistic(zk, "/admin/clusters/" + config.getClusterName(),
+                ObjectMapperFactory.getThreadLocal().writeValueAsBytes(
+                        new ClusterData("http://" + config.getAdvertisedAddress() + ":" + config.getWebServicePort())),
+                Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
+    }
+
     @Test
     public void testClusterDomain() {
-        
+
     }
-    
+
     /**
      * 
      * It verifies anti-affinity-namespace assignment with failure-domain
@@ -220,7 +212,6 @@ public class AntiAffinityNamespaceGroupTest {
         final int totalBrokers = 4;
 
         pulsar1.getConfiguration().setClusterDomainsEnabled(true);
-        admin1.clusters().createCluster("use", new ClusterData("http://127.0.0.1:" + PRIMARY_BROKER_WEBSERVICE_PORT));
         admin1.properties().createProperty("my-property",
                 new PropertyAdmin(Lists.newArrayList("appid1", "appid2"), Sets.newHashSet("use")));
 
@@ -317,7 +308,6 @@ public class AntiAffinityNamespaceGroupTest {
         final String namespaceAntiAffinityGroup = "my-antiaffinity";
         final String bundle = "/0x00000000_0xffffffff";
 
-        admin1.clusters().createCluster("use", new ClusterData("http://127.0.0.1:" + PRIMARY_BROKER_WEBSERVICE_PORT));
         admin1.properties().createProperty("my-property",
                 new PropertyAdmin(Lists.newArrayList("appid1", "appid2"), Sets.newHashSet("use")));
 
@@ -378,6 +368,73 @@ public class AntiAffinityNamespaceGroupTest {
         Map<String, Set<String>> nsToBundleMap = Maps.newHashMap();
         nsToBundleMap.put(namespace, Sets.newHashSet(assignedBundleName));
         brokerToNamespaceToBundleRange.put(broker, nsToBundleMap);
+    }
+
+    /**
+     * It verifies anti-affinity with failure domain enabled with 2 brokers.
+     * 
+     * <pre>
+     * 1. Register brokers to domain: domain-1: broker1 & domain-2: broker2
+     * 2. Load-Manager receives a watch and updates brokerToDomain cache with new domain data
+     * 3. Create two namespace with anti-affinity
+     * 4. Load-manager selects broker for each namespace such that from different domains
+     * 
+     * </pre>
+     * 
+     * @throws Exception
+     */
+    @Test
+    public void testBrokerSelectionForAntiAffinityGroup() throws Exception {
+
+        final String broker1 = primaryHost;
+        final String broker2 = secondaryHost;
+        final String cluster = pulsar1.getConfiguration().getClusterName();
+        final String property = "prop";
+        final String namespace1 = property + "/" + cluster + "/ns1";
+        final String namespace2 = property + "/" + cluster + "/ns2";
+        final String namespaceAntiAffinityGroup = "group";
+        Domain domain = new Domain();
+        domain.brokers = Sets.newHashSet(broker1);
+        admin1.clusters().createDomain(cluster, "domain1", domain);
+        domain.brokers = Sets.newHashSet(broker2);
+        admin1.clusters().createDomain(cluster, "domain1", domain);
+        admin1.properties().createProperty(property, new PropertyAdmin(null, Sets.newHashSet(cluster)));
+        admin1.namespaces().createNamespace(namespace1);
+        admin1.namespaces().createNamespace(namespace2);
+        admin1.namespaces().setNamespaceAntiAffinityGroup(namespace1, namespaceAntiAffinityGroup);
+        admin1.namespaces().setNamespaceAntiAffinityGroup(namespace2, namespaceAntiAffinityGroup);
+
+        // validate strategically if brokerToDomainCache updated
+        for (int i = 0; i < 5; i++) {
+            if (!isLoadManagerUpdatedDomainCache(primaryLoadManager)
+                    || !isLoadManagerUpdatedDomainCache(secondaryLoadManager) || i != 4) {
+                Thread.sleep(200);
+            }
+        }
+        assertTrue(isLoadManagerUpdatedDomainCache(primaryLoadManager));
+        assertTrue(isLoadManagerUpdatedDomainCache(secondaryLoadManager));
+
+        ServiceUnitId serviceUnit = makeBundle(property, cluster, "ns1");
+        String selectedBroker1 = primaryLoadManager.selectBrokerForAssignment(serviceUnit);
+
+        serviceUnit = makeBundle(property, cluster, "ns2");
+        String selectedBroker2 = primaryLoadManager.selectBrokerForAssignment(serviceUnit);
+
+        assertNotEquals(selectedBroker1, selectedBroker2);
+
+    }
+
+    private boolean isLoadManagerUpdatedDomainCache(ModularLoadManagerImpl loadManager) throws Exception {
+        Field mapField = ModularLoadManagerImpl.class.getDeclaredField("brokerToDomainMap");
+        mapField.setAccessible(true);
+        Map<String, String> map = (Map<String, String>) mapField.get(loadManager);
+        return !map.isEmpty();
+    }
+
+    private NamespaceBundle makeBundle(final String property, final String cluster, final String namespace) {
+        return nsFactory.getBundle(new NamespaceName(property, cluster, namespace),
+                Range.range(NamespaceBundles.FULL_LOWER_BOUND, BoundType.CLOSED, NamespaceBundles.FULL_UPPER_BOUND,
+                        BoundType.CLOSED));
     }
 
 }
