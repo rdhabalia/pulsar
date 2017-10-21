@@ -327,7 +327,7 @@ public class LoadManagerShared {
                 // none of the broker owns anti-affinity-namespace so, none of the broker will be filtered
                 return;
             }
-            if (pulsar.getConfiguration().isClusterDomainsEnabled()) {
+            if (pulsar.getConfiguration().isFailureDomainsEnabled()) {
                 // this will remove all the brokers which are part of domains that don't have least number of
                 // anti-affinity-namespaces
                 filterDomainsNotHavingLeastNumberAntiAffinityNamespaces(brokerToAntiAffinityNamespaceCount, candidates,

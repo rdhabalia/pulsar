@@ -39,7 +39,7 @@ import org.apache.pulsar.common.policies.data.AuthAction;
 import org.apache.pulsar.common.policies.data.BacklogQuota;
 import org.apache.pulsar.common.policies.data.BacklogQuota.RetentionPolicy;
 import org.apache.pulsar.common.policies.data.ClusterData;
-import org.apache.pulsar.common.policies.data.Domain;
+import org.apache.pulsar.common.policies.data.FailureDomain;
 import org.apache.pulsar.common.policies.data.PersistencePolicies;
 import org.apache.pulsar.common.policies.data.PropertyAdmin;
 import org.apache.pulsar.common.policies.data.ResourceQuota;
@@ -112,21 +112,21 @@ public class PulsarAdminToolTest {
         verify(mockClusters).deleteCluster("use");
         
         clusters.run(split("list-domains use"));
-        verify(mockClusters).getDomains("use");
+        verify(mockClusters).getFailureDomains("use");
 
         clusters.run(split("get-domain use --domain-name domain"));
-        verify(mockClusters).getDomain("use", "domain");
+        verify(mockClusters).getFailureDomain("use", "domain");
 
         clusters.run(split("create-domain use --domain-name domain --broker-list b1"));
-        Domain domain = new Domain();
+        FailureDomain domain = new FailureDomain();
         domain.setBrokers(Sets.newHashSet("b1"));
-        verify(mockClusters).createDomain("use", "domain", domain);
+        verify(mockClusters).createFailureDomain("use", "domain", domain);
 
         clusters.run(split("update-domain use --domain-name domain --broker-list b1"));
-        verify(mockClusters).updateDomain("use", "domain", domain);
+        verify(mockClusters).updateFailureDomain("use", "domain", domain);
 
         clusters.run(split("delete-domain use --domain-name domain"));
-        verify(mockClusters).deleteDomain("use", "domain");
+        verify(mockClusters).deleteFailureDomain("use", "domain");
 
 
         // Re-create CmdClusters to avoid a issue.

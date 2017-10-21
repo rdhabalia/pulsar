@@ -59,9 +59,9 @@ public class ServiceConfiguration implements PulsarConfiguration {
     // Name of the cluster to which this broker belongs to
     @FieldContext(required = true)
     private String clusterName;
-    // Enable cluster's domain which can distribute brokers into logical region
+    // Enable cluster's failure-domain which can distribute brokers into logical region
     @FieldContext(dynamic = true)
-    private boolean clusterDomainsEnabled = false;
+    private boolean failureDomainsEnabled = false;
     // Zookeeper session timeout in milliseconds
     private long zooKeeperSessionTimeoutMillis = 30000;
     // Time to wait for broker graceful shutdown. After this time elapses, the
@@ -437,12 +437,12 @@ public class ServiceConfiguration implements PulsarConfiguration {
         this.clusterName = clusterName;
     }
 
-    public boolean isClusterDomainsEnabled() {
-        return clusterDomainsEnabled;
+    public boolean isFailureDomainsEnabled() {
+        return failureDomainsEnabled;
     }
 
-    public void setClusterDomainsEnabled(boolean clusterDomainsEnabled) {
-        this.clusterDomainsEnabled = clusterDomainsEnabled;
+    public void setFailureDomainsEnabled(boolean failureDomainsEnabled) {
+        this.failureDomainsEnabled = failureDomainsEnabled;
     }
 
     public long getBrokerShutdownTimeoutMs() {

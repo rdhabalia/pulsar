@@ -658,7 +658,7 @@ public class Namespaces extends AdminResource {
 
     @POST
     @Path("/{property}/{cluster}/{namespace}/antiAffinity")
-    @ApiOperation(value = "Set anti-affinity group of a namespace")
+    @ApiOperation(value = "Set anti-affinity group for a namespace")
     @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission"),
             @ApiResponse(code = 404, message = "Property or cluster or namespace doesn't exist"),
             @ApiResponse(code = 412, message = "Invalid antiAffinityGroup") })
@@ -680,7 +680,6 @@ public class Namespaces extends AdminResource {
                     .orElseThrow(() -> new RestException(Status.NOT_FOUND, "Namespace " + nsName + " does not exist"));
             policiesNode.getKey().antiAffinityGroup = antiAffinityGroup;
 
-            //TODO: changing group: should invalidate all namespace-cache group for load-report 
             // Write back the new policies into zookeeper
             globalZk().setData(path(POLICIES, property, cluster, namespace),
                     jsonMapper().writeValueAsBytes(policiesNode.getKey()), policiesNode.getValue().getVersion());

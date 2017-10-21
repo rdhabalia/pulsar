@@ -46,7 +46,7 @@ import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.partition.PartitionedTopicMetadata;
 import org.apache.pulsar.common.policies.data.BundlesData;
 import org.apache.pulsar.common.policies.data.ClusterData;
-import org.apache.pulsar.common.policies.data.Domain;
+import org.apache.pulsar.common.policies.data.FailureDomain;
 import org.apache.pulsar.common.policies.data.LocalPolicies;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.PropertyAdmin;
@@ -291,12 +291,12 @@ public abstract class AdminResource extends PulsarWebResource {
         return pulsar().getConfigurationCache().namespaceIsolationPoliciesCache();
     }
 
-    protected ZooKeeperDataCache<Domain> domainCache() {
-        return pulsar().getConfigurationCache().domainCache();
+    protected ZooKeeperDataCache<FailureDomain> failureDomainCache() {
+        return pulsar().getConfigurationCache().failureDomainCache();
     }
 
-    protected ZooKeeperChildrenCache clusterDomainListCache() {
-        return pulsar().getConfigurationCache().clusterDomainListCache();
+    protected ZooKeeperChildrenCache failureDomainListCache() {
+        return pulsar().getConfigurationCache().failureDomainListCache();
     }
 
     protected PartitionedTopicMetadata getPartitionedTopicMetadata(String property, String cluster, String namespace,

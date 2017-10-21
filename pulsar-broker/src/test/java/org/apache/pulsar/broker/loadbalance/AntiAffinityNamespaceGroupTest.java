@@ -45,7 +45,7 @@ import org.apache.pulsar.common.naming.NamespaceBundles;
 import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.ServiceUnitId;
 import org.apache.pulsar.common.policies.data.ClusterData;
-import org.apache.pulsar.common.policies.data.Domain;
+import org.apache.pulsar.common.policies.data.FailureDomain;
 import org.apache.pulsar.common.policies.data.PropertyAdmin;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.apache.pulsar.zookeeper.LocalBookkeeperEnsemble;
@@ -120,7 +120,7 @@ public class AntiAffinityNamespaceGroupTest {
         config1.setWebServicePort(PRIMARY_BROKER_WEBSERVICE_PORT);
         config1.setZookeeperServers("127.0.0.1" + ":" + ZOOKEEPER_PORT);
         config1.setBrokerServicePort(PRIMARY_BROKER_PORT);
-        config1.setClusterDomainsEnabled(true);
+        config1.setFailureDomainsEnabled(true);
         createCluster(bkEnsemble.getZkClient(), config1);
         pulsar1 = new PulsarService(config1);
 
@@ -137,7 +137,7 @@ public class AntiAffinityNamespaceGroupTest {
         config2.setWebServicePort(SECONDARY_BROKER_WEBSERVICE_PORT);
         config2.setZookeeperServers("127.0.0.1" + ":" + ZOOKEEPER_PORT);
         config2.setBrokerServicePort(SECONDARY_BROKER_PORT);
-        config2.setClusterDomainsEnabled(true);
+        config2.setFailureDomainsEnabled(true);
         pulsar2 = new PulsarService(config2);
         secondaryHost = String.format("%s:%d", InetAddress.getLocalHost().getHostName(),
                 SECONDARY_BROKER_WEBSERVICE_PORT);
@@ -211,7 +211,7 @@ public class AntiAffinityNamespaceGroupTest {
         final String bundle = "/0x00000000_0xffffffff";
         final int totalBrokers = 4;
 
-        pulsar1.getConfiguration().setClusterDomainsEnabled(true);
+        pulsar1.getConfiguration().setFailureDomainsEnabled(true);
         admin1.properties().createProperty("my-property",
                 new PropertyAdmin(Lists.newArrayList("appid1", "appid2"), Sets.newHashSet("use")));
 
@@ -393,11 +393,11 @@ public class AntiAffinityNamespaceGroupTest {
         final String namespace1 = property + "/" + cluster + "/ns1";
         final String namespace2 = property + "/" + cluster + "/ns2";
         final String namespaceAntiAffinityGroup = "group";
-        Domain domain = new Domain();
+        FailureDomain domain = new FailureDomain();
         domain.brokers = Sets.newHashSet(broker1);
-        admin1.clusters().createDomain(cluster, "domain1", domain);
+        admin1.clusters().createFailureDomain(cluster, "domain1", domain);
         domain.brokers = Sets.newHashSet(broker2);
-        admin1.clusters().createDomain(cluster, "domain1", domain);
+        admin1.clusters().createFailureDomain(cluster, "domain1", domain);
         admin1.properties().createProperty(property, new PropertyAdmin(null, Sets.newHashSet(cluster)));
         admin1.namespaces().createNamespace(namespace1);
         admin1.namespaces().createNamespace(namespace2);
@@ -425,7 +425,7 @@ public class AntiAffinityNamespaceGroupTest {
     }
 
     private boolean isLoadManagerUpdatedDomainCache(ModularLoadManagerImpl loadManager) throws Exception {
-        Field mapField = ModularLoadManagerImpl.class.getDeclaredField("brokerToDomainMap");
+        Field mapField = ModularLoadManagerImpl.class.getDeclaredField("brokerToFailureDomainMap");
         mapField.setAccessible(true);
         Map<String, String> map = (Map<String, String>) mapField.get(loadManager);
         return !map.isEmpty();

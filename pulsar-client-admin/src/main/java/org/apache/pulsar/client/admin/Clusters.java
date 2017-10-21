@@ -26,7 +26,7 @@ import org.apache.pulsar.client.admin.PulsarAdminException.NotAuthorizedExceptio
 import org.apache.pulsar.client.admin.PulsarAdminException.NotFoundException;
 import org.apache.pulsar.client.admin.PulsarAdminException.PreconditionFailedException;
 import org.apache.pulsar.common.policies.data.ClusterData;
-import org.apache.pulsar.common.policies.data.Domain;
+import org.apache.pulsar.common.policies.data.FailureDomain;
 import org.apache.pulsar.common.policies.data.NamespaceIsolationData;
 
 /**
@@ -275,7 +275,7 @@ public interface Clusters {
      * @param domainName
      *          domain name
      *
-     * @param Domain
+     * @param FailureDomain
      *          Domain configurations
      *
      * @return
@@ -294,7 +294,7 @@ public interface Clusters {
      * @throws PulsarAdminException
      *             Unexpected error
      */
-    void createDomain(String cluster, String domainName, Domain domain)
+    void createFailureDomain(String cluster, String domainName, FailureDomain domain)
             throws PulsarAdminException;
     
     
@@ -308,7 +308,7 @@ public interface Clusters {
      * @param domainName
      *          domain name
      *
-     * @param Domain
+     * @param FailureDomain
      *          Domain configurations
      *
      * @return
@@ -327,7 +327,7 @@ public interface Clusters {
      * @throws PulsarAdminException
      *             Unexpected error
      */
-    void updateDomain(String cluster, String domainName, Domain domain)
+    void updateFailureDomain(String cluster, String domainName, FailureDomain domain)
             throws PulsarAdminException;
     
     
@@ -355,7 +355,7 @@ public interface Clusters {
      *             Unexpected error
      */
 
-    void deleteDomain(String cluster, String domainName) throws PulsarAdminException;
+    void deleteFailureDomain(String cluster, String domainName) throws PulsarAdminException;
 
     /**
      * Get all registered domains in cluster
@@ -373,7 +373,7 @@ public interface Clusters {
      * @throws PulsarAdminException
      *             Unexpected error
      */
-    Map<String, Domain> getDomains(String cluster) throws PulsarAdminException;
+    Map<String, FailureDomain> getFailureDomains(String cluster) throws PulsarAdminException;
     
     /**
      * Get the domain registered into a cluster
@@ -394,6 +394,6 @@ public interface Clusters {
      * @throws PulsarAdminException
      *             Unexpected error
      */
-    Domain getDomain(String cluster, String domainName) throws PulsarAdminException;
+    FailureDomain getFailureDomain(String cluster, String domainName) throws PulsarAdminException;
     
 }

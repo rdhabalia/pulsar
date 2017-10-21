@@ -55,7 +55,7 @@ import org.apache.pulsar.broker.loadbalance.ModularLoadManager;
 import org.apache.pulsar.broker.loadbalance.ModularLoadManagerStrategy;
 import org.apache.pulsar.broker.loadbalance.impl.LoadManagerShared.BrokerTopicLoadingPredicate;
 import org.apache.pulsar.common.naming.ServiceUnitId;
-import org.apache.pulsar.common.policies.data.Domain;
+import org.apache.pulsar.common.policies.data.FailureDomain;
 import org.apache.pulsar.common.policies.data.ResourceQuota;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.apache.pulsar.policies.data.loadbalancer.NamespaceBundleStats;
@@ -168,8 +168,8 @@ public class ModularLoadManagerImpl implements ModularLoadManager, ZooKeeperCach
     // check if given broker can load persistent/non-persistent topic
     private final BrokerTopicLoadingPredicate brokerTopicLoadingPredicate;
     
-    private Map<String, String> brokerToDomainMap;
-    private Map<String, String> tempBrokerToDomainMap;
+    private Map<String, String> brokerToFailureDomainMap;
+    private Map<String, String> tempBrokerToFailureDomainMap;
 
 
     private static final Deserializer<LocalBrokerData> loadReportDeserializer = (key, content) -> jsonMapper()
@@ -188,8 +188,8 @@ public class ModularLoadManagerImpl implements ModularLoadManager, ZooKeeperCach
         loadSheddingPipeline.add(new OverloadShedder(conf));
         preallocatedBundleToBroker = new ConcurrentHashMap<>();
         scheduler = Executors.newSingleThreadScheduledExecutor(new DefaultThreadFactory("pulsar-modular-load-manager"));
-        this.brokerToDomainMap = Maps.newHashMap();
-        this.tempBrokerToDomainMap = Maps.newHashMap();
+        this.brokerToFailureDomainMap = Maps.newHashMap();
+        this.tempBrokerToFailureDomainMap = Maps.newHashMap();
         
         this.brokerTopicLoadingPredicate = new BrokerTopicLoadingPredicate() {
             @Override
@@ -269,16 +269,16 @@ public class ModularLoadManagerImpl implements ModularLoadManager, ZooKeeperCach
         policies = new SimpleResourceAllocationPolicies(pulsar);
         zkClient = pulsar.getZkClient();
         filterPipeline.add(new BrokerVersionFilter());
-        this.loadBrokerToDomainMap();
+        this.loadBrokerToFailureDomainMap();
         
         // register listeners for domain changes
-        pulsar.getConfigurationCache().clusterDomainListCache().registerListener((path, data, stat) -> {
+        pulsar.getConfigurationCache().failureDomainListCache().registerListener((path, data, stat) -> {
             log.info("Cluster domain list updated {}", data);
-            scheduler.execute(() -> refreshBrokerToDomainMap());
+            scheduler.execute(() -> refreshBrokerToFailureDomainMap());
         });
-        pulsar.getConfigurationCache().domainCache().registerListener((path, data, stat) -> scheduler.execute(() -> {
+        pulsar.getConfigurationCache().failureDomainCache().registerListener((path, data, stat) -> scheduler.execute(() -> {
             log.info("Cluster domain {} changed to {}", path, data);
-            refreshBrokerToDomainMap();
+            refreshBrokerToFailureDomainMap();
         }));
     }
 
@@ -634,7 +634,7 @@ public class ModularLoadManagerImpl implements ModularLoadManager, ZooKeeperCach
                     brokerTopicLoadingPredicate);
             // distribute namespaces to domain and brokers according to anti-affinity-group
             LoadManagerShared.filterAntiAffinityGroupOwnedBrokers(pulsar, serviceUnit.toString(), brokerCandidateCache,
-                    brokerToNamespaceToBundleRange, brokerToDomainMap);
+                    brokerToNamespaceToBundleRange, brokerToFailureDomainMap);
             // distribute bundles evenly to candidate-brokers
             LoadManagerShared.removeMostServicingBrokersForNamespace(serviceUnit.toString(), brokerCandidateCache,
                     brokerToNamespaceToBundleRange);
@@ -769,7 +769,7 @@ public class ModularLoadManagerImpl implements ModularLoadManager, ZooKeeperCach
                 lastData.update(localData);
             }
             // refresh broker to domain Map incase watch didn't trigger it.
-            refreshBrokerToDomainMap();
+            refreshBrokerToFailureDomainMap();
         } catch (Exception e) {
             log.warn("Error writing broker data on ZooKeeper: {}", e);
         }
@@ -812,25 +812,25 @@ public class ModularLoadManagerImpl implements ModularLoadManager, ZooKeeperCach
         }
     }
 
-    public void loadBrokerToDomainMap() {
+    public void loadBrokerToFailureDomainMap() {
         try {
-            final String clusterDomainRootPath = pulsar.getConfigurationCache().CLUSTER_DOMAIN_ROOT;
+            final String clusterDomainRootPath = pulsar.getConfigurationCache().CLUSTER_FAILURE_DOMAIN_ROOT;
             if (pulsar.getGlobalZkCache().getZooKeeper().exists(clusterDomainRootPath, false) == null) {
                 // create all the intermediate nodes
                 ZkUtils.createFullPathOptimistic(pulsar.getGlobalZkCache().getZooKeeper(), clusterDomainRootPath, null,
                         Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
             }
-            refreshBrokerToDomainMap();
+            refreshBrokerToFailureDomainMap();
         } catch (Exception e) {
             log.warn("Failed to get domain-list for cluster {}", e.getMessage());
         }
     }
 
-    private synchronized void refreshBrokerToDomainMap() {
-        if (!pulsar.getConfiguration().isClusterDomainsEnabled()) {
+    private synchronized void refreshBrokerToFailureDomainMap() {
+        if (!pulsar.getConfiguration().isFailureDomainsEnabled()) {
             return;
         }
-        final String clusterDomainRootPath = pulsar.getConfigurationCache().CLUSTER_DOMAIN_ROOT;
+        final String clusterDomainRootPath = pulsar.getConfigurationCache().CLUSTER_FAILURE_DOMAIN_ROOT;
         try {
 
             if (pulsar.getGlobalZkCache().getZooKeeper().exists(clusterDomainRootPath, false) == null) {
@@ -840,23 +840,23 @@ public class ModularLoadManagerImpl implements ModularLoadManager, ZooKeeperCach
 
             }
 
-            this.tempBrokerToDomainMap.clear();
-            for (String domainName : pulsar.getConfigurationCache().clusterDomainListCache().get()) {
+            this.tempBrokerToFailureDomainMap.clear();
+            for (String domainName : pulsar.getConfigurationCache().failureDomainListCache().get()) {
                 try {
-                    Optional<Domain> domain = pulsar.getConfigurationCache().domainCache()
+                    Optional<FailureDomain> domain = pulsar.getConfigurationCache().failureDomainCache()
                             .get(clusterDomainRootPath + "/" + domainName);
                     if (domain.isPresent()) {
                         for (String broker : domain.get().brokers) {
-                            tempBrokerToDomainMap.put(broker, domainName);
+                            tempBrokerToFailureDomainMap.put(broker, domainName);
                         }
                     }
                 } catch (Exception e) {
                     log.warn("Failed to get domain {}", domainName, e);
                 }
             }
-            Map<String, String> temp = this.brokerToDomainMap;
-            this.brokerToDomainMap = tempBrokerToDomainMap;
-            this.tempBrokerToDomainMap = temp;
+            Map<String, String> temp = this.brokerToFailureDomainMap;
+            this.brokerToFailureDomainMap = tempBrokerToFailureDomainMap;
+            this.tempBrokerToFailureDomainMap = temp;
         } catch (Exception e) {
             log.warn("Failed to get domain-list for cluster {}", e.getMessage());
         }

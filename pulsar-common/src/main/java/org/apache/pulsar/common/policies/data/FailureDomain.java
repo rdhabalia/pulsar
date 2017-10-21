@@ -23,7 +23,7 @@ import java.util.Set;
 
 import com.google.common.base.Objects;
 
-public class Domain {
+public class FailureDomain {
 
     public Set<String> brokers = new HashSet<String>();
 
@@ -37,8 +37,8 @@ public class Domain {
 
     @Override
     public boolean equals(Object obj) {
-        if (obj instanceof Domain) {
-            Domain other = (Domain) obj;
+        if (obj instanceof FailureDomain) {
+            FailureDomain other = (FailureDomain) obj;
             return Objects.equal(brokers, other.brokers);
         }
 

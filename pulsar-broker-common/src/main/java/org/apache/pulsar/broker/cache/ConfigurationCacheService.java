@@ -24,7 +24,7 @@ import org.apache.bookkeeper.util.ZkUtils;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.common.policies.data.ClusterData;
-import org.apache.pulsar.common.policies.data.Domain;
+import org.apache.pulsar.common.policies.data.FailureDomain;
 import org.apache.pulsar.common.policies.data.NamespaceIsolationData;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.PropertyAdmin;
@@ -55,12 +55,13 @@ public class ConfigurationCacheService {
     private ZooKeeperDataCache<Policies> policiesCache;
     private ZooKeeperDataCache<ClusterData> clustersCache;
     private ZooKeeperChildrenCache clustersListCache;
-    private ZooKeeperChildrenCache clusterDomainListCache;
+    private ZooKeeperChildrenCache failureDomainListCache;
     private ZooKeeperDataCache<NamespaceIsolationPolicies> namespaceIsolationPoliciesCache;
-    private ZooKeeperDataCache<Domain> domainCache;
+    private ZooKeeperDataCache<FailureDomain> failureDomainCache;
 
     public static final String POLICIES = "policies";
-    public final String CLUSTER_DOMAIN_ROOT;
+    public static final String FAILURE_DOMAIN = "failureDomain";
+    public final String CLUSTER_FAILURE_DOMAIN_ROOT;
     protected static final String POLICIES_ROOT = "/admin/policies";
     private static final String CLUSTERS_ROOT = "/admin/clusters";
 
@@ -96,9 +97,9 @@ public class ConfigurationCacheService {
 
         this.clustersListCache = new ZooKeeperChildrenCache(cache, CLUSTERS_ROOT);
         
-        CLUSTER_DOMAIN_ROOT = CLUSTERS_ROOT + "/" + configuredClusterName + "/domains";
+        CLUSTER_FAILURE_DOMAIN_ROOT = CLUSTERS_ROOT + "/" + configuredClusterName + "/" + FAILURE_DOMAIN;
         if (isNotBlank(configuredClusterName)) {
-            this.clusterDomainListCache = new ZooKeeperChildrenCache(cache, CLUSTER_DOMAIN_ROOT);
+            this.failureDomainListCache = new ZooKeeperChildrenCache(cache, CLUSTER_FAILURE_DOMAIN_ROOT);
         }
 
         this.namespaceIsolationPoliciesCache = new ZooKeeperDataCache<NamespaceIsolationPolicies>(cache) {
@@ -111,10 +112,10 @@ public class ConfigurationCacheService {
             }
         };
         
-        this.domainCache = new ZooKeeperDataCache<Domain>(cache) {
+        this.failureDomainCache = new ZooKeeperDataCache<FailureDomain>(cache) {
             @Override
-            public Domain deserialize(String path, byte[] content) throws Exception {
-                return ObjectMapperFactory.getThreadLocal().readValue(content, Domain.class);
+            public FailureDomain deserialize(String path, byte[] content) throws Exception {
+                return ObjectMapperFactory.getThreadLocal().readValue(content, FailureDomain.class);
             }
         };
     }
@@ -159,8 +160,8 @@ public class ConfigurationCacheService {
         return this.clustersListCache;
     }
 
-    public ZooKeeperChildrenCache clusterDomainListCache() {
-        return this.clusterDomainListCache;
+    public ZooKeeperChildrenCache failureDomainListCache() {
+        return this.failureDomainListCache;
     }
     
     public ZooKeeper getZooKeeper() {
@@ -171,7 +172,7 @@ public class ConfigurationCacheService {
         return this.namespaceIsolationPoliciesCache;
     }
     
-    public ZooKeeperDataCache<Domain> domainCache() {
-        return this.domainCache;
+    public ZooKeeperDataCache<FailureDomain> failureDomainCache() {
+        return this.failureDomainCache;
     }
 }

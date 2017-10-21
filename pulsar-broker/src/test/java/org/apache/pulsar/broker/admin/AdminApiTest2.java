@@ -54,7 +54,7 @@ import org.apache.pulsar.common.naming.DestinationDomain;
 import org.apache.pulsar.common.naming.DestinationName;
 import org.apache.pulsar.common.naming.NamespaceBundleFactory;
 import org.apache.pulsar.common.policies.data.ClusterData;
-import org.apache.pulsar.common.policies.data.Domain;
+import org.apache.pulsar.common.policies.data.FailureDomain;
 import org.apache.pulsar.common.policies.data.NonPersistentTopicStats;
 import org.apache.pulsar.common.policies.data.PartitionedTopicStats;
 import org.apache.pulsar.common.policies.data.PersistencePolicies;
@@ -528,36 +528,36 @@ public class AdminApiTest2 extends MockedPulsarServiceBaseTest {
     }
 
     @Test
-    public void clusterDomain() throws PulsarAdminException {
+    public void clusterFailureDomain() throws PulsarAdminException {
 
         final String cluster = pulsar.getConfiguration().getClusterName();
         admin.clusters().createCluster(cluster,
                 new ClusterData(pulsar.getWebServiceAddress(), pulsar.getWebServiceAddressTls()));
         // create
-        Domain domain = new Domain();
+        FailureDomain domain = new FailureDomain();
         domain.setBrokers(Sets.newHashSet("b1", "b2", "b3"));
-        admin.clusters().createDomain(cluster, "domain-1", domain);
-        admin.clusters().updateDomain(cluster, "domain-1", domain);
+        admin.clusters().createFailureDomain(cluster, "domain-1", domain);
+        admin.clusters().updateFailureDomain(cluster, "domain-1", domain);
 
-        assertEquals(admin.clusters().getDomain(cluster, "domain-1"), domain);
+        assertEquals(admin.clusters().getFailureDomain(cluster, "domain-1"), domain);
 
-        Map<String, Domain> domains = admin.clusters().getDomains(cluster);
+        Map<String, FailureDomain> domains = admin.clusters().getFailureDomains(cluster);
         assertEquals(domains.size(), 1);
         assertTrue(domains.containsKey("domain-1"));
 
         try {
             // try to create domain with already registered brokers
-            admin.clusters().createDomain(cluster, "domain-2", domain);
+            admin.clusters().createFailureDomain(cluster, "domain-2", domain);
             fail("should have failed because of brokers are already registered");
         } catch (PulsarAdminException.ConflictException e) {
             // Ok
         }
 
-        admin.clusters().deleteDomain(cluster, "domain-1");
-        assertTrue(admin.clusters().getDomains(cluster).isEmpty());
+        admin.clusters().deleteFailureDomain(cluster, "domain-1");
+        assertTrue(admin.clusters().getFailureDomains(cluster).isEmpty());
 
-        admin.clusters().createDomain(cluster, "domain-2", domain);
-        domains = admin.clusters().getDomains(cluster);
+        admin.clusters().createFailureDomain(cluster, "domain-2", domain);
+        domains = admin.clusters().getFailureDomains(cluster);
         assertEquals(domains.size(), 1);
         assertTrue(domains.containsKey("domain-2"));
     }
