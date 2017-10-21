@@ -336,7 +336,7 @@ public class Clusters extends AdminResource {
             // create all the intermediate nodes
             try {
                 ZkUtils.createFullPathOptimistic(globalZk(), path,
-                        value.isPresent() ? jsonMapper().writeValueAsBytes(value) : null, Ids.OPEN_ACL_UNSAFE,
+                        value.isPresent() ? jsonMapper().writeValueAsBytes(value.get()) : null, Ids.OPEN_ACL_UNSAFE,
                         CreateMode.PERSISTENT);
                 return true;
             } catch (KeeperException.NodeExistsException nee) {
