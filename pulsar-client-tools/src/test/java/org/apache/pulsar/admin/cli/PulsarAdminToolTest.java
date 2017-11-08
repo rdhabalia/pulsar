@@ -279,11 +279,14 @@ public class PulsarAdminToolTest {
         namespaces.run(split("get-message-ttl myprop/clust/ns1"));
         verify(mockNamespaces).getNamespaceMessageTTL("myprop/clust/ns1");
         
-        namespaces.run(split("set-anti-affinity-group myprop/clust/ns1 -aag group"));
+        namespaces.run(split("set-anti-affinity-group myprop/clust/ns1 -g group"));
         verify(mockNamespaces).setNamespaceAntiAffinityGroup("myprop/clust/ns1", "group");
 
         namespaces.run(split("get-anti-affinity-group myprop/clust/ns1"));
         verify(mockNamespaces).getNamespaceAntiAffinityGroup("myprop/clust/ns1");
+        
+        namespaces.run(split("get-anti-affinity-namespaces -c cluster -g group"));
+        verify(mockNamespaces).getAntiAffinityNamespaces("cluster", "group");
 
         namespaces.run(split("delete-anti-affinity-group myprop/clust/ns1 "));
         verify(mockNamespaces).deleteNamespaceAntiAffinityGroup("myprop/clust/ns1");

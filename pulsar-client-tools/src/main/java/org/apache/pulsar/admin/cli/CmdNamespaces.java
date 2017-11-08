@@ -217,7 +217,7 @@ public class CmdNamespaces extends CmdBase {
         @Parameter(description = "property/cluster/namespace", required = true)
         private java.util.List<String> params;
 
-        @Parameter(names = { "--antiAffinityGroup", "-aag" }, description = "Anti-affinity group name", required = true)
+        @Parameter(names = { "--group", "-g" }, description = "Anti-affinity group name", required = true)
         private String antiAffinityGroup;
 
         @Override
@@ -236,6 +236,21 @@ public class CmdNamespaces extends CmdBase {
         void run() throws PulsarAdminException {
             String namespace = validateNamespace(params);
             print(admin.namespaces().getNamespaceAntiAffinityGroup(namespace));
+        }
+    }
+
+    @Parameters(commandDescription = "Get Anti-affinity namespaces grouped with the given anti-affinity group name")
+    private class GetAntiAffinityNamespaces extends CliCommand {
+
+        @Parameter(names = { "--cluster", "-c" }, description = "Cluster name", required = true)
+        private String cluster;
+
+        @Parameter(names = { "--group", "-g" }, description = "Anti-affinity group name", required = true)
+        private String antiAffinityGroup;
+
+        @Override
+        void run() throws PulsarAdminException {
+            print(admin.namespaces().getAntiAffinityNamespaces(cluster, antiAffinityGroup));
         }
     }
 
@@ -622,6 +637,7 @@ public class CmdNamespaces extends CmdBase {
         
         jcommander.addCommand("get-anti-affinity-group", new GetAntiAffinityGroup());
         jcommander.addCommand("set-anti-affinity-group", new SetAntiAffinityGroup());
+        jcommander.addCommand("get-anti-affinity-namespaces", new GetAntiAffinityNamespaces());
         jcommander.addCommand("delete-anti-affinity-group", new DeleteAntiAffinityGroup());
 
         jcommander.addCommand("set-deduplication", new SetDeduplication());

@@ -439,6 +439,19 @@ public interface Namespaces {
      *             Unexpected error
      */
     void setNamespaceAntiAffinityGroup(String namespace, String namespaceAntiAffinityGroup) throws PulsarAdminException;
+    
+    /**
+     * Get all namespaces that grouped with given anti-affinity group
+     * 
+     * @param cluster
+     *            cluster name
+     * @param namespaceAntiAffinityGroup
+     *            Anti-affinity group name
+     * @return list of namespace grouped under a given anti-affinity group
+     * @throws PulsarAdminException
+     */
+    List<String> getAntiAffinityNamespaces(String cluster, String namespaceAntiAffinityGroup)
+            throws PulsarAdminException;
 
     /**
      * Get anti-affinity group name for a namespace

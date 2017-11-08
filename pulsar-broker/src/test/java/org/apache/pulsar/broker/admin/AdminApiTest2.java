@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.admin;
 
+import static org.apache.commons.lang3.StringUtils.isBlank;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
@@ -25,6 +26,7 @@ import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
 
 import java.net.URL;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -32,7 +34,6 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
-import static org.apache.commons.lang3.StringUtils.isBlank;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.admin.AdminApiTest.MockedPulsarService;
 import org.apache.pulsar.broker.auth.MockedPulsarServiceBaseTest;
@@ -571,5 +572,24 @@ public class AdminApiTest2 extends MockedPulsarServiceBaseTest {
         assertEquals(admin.namespaces().getNamespaceAntiAffinityGroup(namespace), antiAffinityGroup);
         admin.namespaces().deleteNamespaceAntiAffinityGroup(namespace);
         assertTrue(isBlank(admin.namespaces().getNamespaceAntiAffinityGroup(namespace)));
+
+        final String ns1 = "prop-xyz/use/antiAG1";
+        final String ns2 = "prop-xyz/use/antiAG2";
+        final String ns3 = "prop-xyz/use/antiAG3";
+        admin.namespaces().createNamespace(ns1);
+        admin.namespaces().createNamespace(ns2);
+        admin.namespaces().createNamespace(ns3);
+        admin.namespaces().setNamespaceAntiAffinityGroup(ns1, antiAffinityGroup);
+        admin.namespaces().setNamespaceAntiAffinityGroup(ns2, antiAffinityGroup);
+        admin.namespaces().setNamespaceAntiAffinityGroup(ns3, antiAffinityGroup);
+
+        Set<String> namespaces = new HashSet<>(admin.namespaces().getAntiAffinityNamespaces("use", antiAffinityGroup));
+        assertEquals(namespaces.size(), 3);
+        assertTrue(namespaces.contains(ns1));
+        assertTrue(namespaces.contains(ns2));
+        assertTrue(namespaces.contains(ns3));
+
+        List<String> namespaces2 = admin.namespaces().getAntiAffinityNamespaces("use", "invalid-group");
+        assertEquals(namespaces2.size(), 0);
     }
 }

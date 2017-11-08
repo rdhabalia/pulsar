@@ -240,16 +240,6 @@ public class Clusters extends AdminResource {
         }
     }
 
-    private void validateClusterExists(String cluster) {
-        try {
-            if (!clustersCache().get(path("clusters", cluster)).isPresent()) {
-                throw new RestException(Status.PRECONDITION_FAILED, "Cluster " + cluster + " does not exist.");
-            }
-        } catch (Exception e) {
-            throw new RestException(e);
-        }
-    }
-
     @GET
     @Path("/{cluster}/namespaceIsolationPolicies/{policyName}")
     @ApiOperation(value = "Get a single namespace isolation policy assigned in the cluster", response = NamespaceIsolationData.class)

@@ -62,7 +62,7 @@ public class ConfigurationCacheService {
     public static final String POLICIES = "policies";
     public static final String FAILURE_DOMAIN = "failureDomain";
     public final String CLUSTER_FAILURE_DOMAIN_ROOT;
-    protected static final String POLICIES_ROOT = "/admin/policies";
+    public static final String POLICIES_ROOT = "/admin/policies";
     private static final String CLUSTERS_ROOT = "/admin/clusters";
 
     public ConfigurationCacheService(ZooKeeperCache cache) throws PulsarServerException {

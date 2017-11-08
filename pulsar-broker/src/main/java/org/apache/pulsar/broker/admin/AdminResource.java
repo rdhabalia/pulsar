@@ -20,6 +20,7 @@ package org.apache.pulsar.broker.admin;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static org.apache.pulsar.broker.cache.ConfigurationCacheService.POLICIES;
+import static org.apache.pulsar.broker.cache.ConfigurationCacheService.POLICIES_ROOT;
 
 import java.net.MalformedURLException;
 import java.net.URI;
@@ -207,6 +208,31 @@ public abstract class AdminResource extends PulsarWebResource {
         return namespaces;
     }
 
+    
+    /**
+     * It returns short name of namespaces that present under given property and cluster.
+     * 
+     * @param property
+     * @param cluster
+     * @return eg: if prop1/cluster1/ns1 -> it returns {"ns1"}
+     * @throws Exception
+     */
+    protected List<String> getListOfNamespacesName(String property, String cluster) throws Exception {
+        List<String> namespaces = Lists.newArrayList();
+        try {
+            for (String namespace : globalZk().getChildren(path(POLICIES, property, cluster), false)) {
+                namespaces.add(namespace);
+            }
+        } catch (KeeperException.NoNodeException e) {
+            // A cluster was deleted between the 2 getChildren() calls, ignoring
+        }
+        return namespaces;
+    }
+
+    protected List<String> getListOfProperties() throws Exception {
+        return globalZk().getChildren(POLICIES_ROOT, false);
+    }
+    
     /**
      * Redirect the call to the specified broker
      *
@@ -363,5 +389,14 @@ public abstract class AdminResource extends PulsarWebResource {
         }
         return metadataFuture;
     }
-    
+
+    protected void validateClusterExists(String cluster) {
+        try {
+            if (!clustersCache().get(path("clusters", cluster)).isPresent()) {
+                throw new RestException(Status.PRECONDITION_FAILED, "Cluster " + cluster + " does not exist.");
+            }
+        } catch (Exception e) {
+            throw new RestException(e);
+        }
+    }
 }

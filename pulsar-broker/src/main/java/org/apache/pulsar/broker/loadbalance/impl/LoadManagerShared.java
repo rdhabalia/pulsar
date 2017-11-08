@@ -397,7 +397,7 @@ public class LoadManagerShared {
 
     }
 
-    private static CompletableFuture<Map<String, Integer>> getAntiAffinityNamespaceOwnedBrokers(
+    public static CompletableFuture<Map<String, Integer>> getAntiAffinityNamespaceOwnedBrokers(
             final PulsarService pulsar, String namespaceName,
             Map<String, Map<String, Set<String>>> brokerToNamespaceToBundleRange) {
 
