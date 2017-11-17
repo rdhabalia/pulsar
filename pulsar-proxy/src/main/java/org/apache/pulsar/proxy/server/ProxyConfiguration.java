@@ -27,6 +27,12 @@ import com.google.common.collect.Sets;
 
 public class ProxyConfiguration implements PulsarConfiguration {
 
+    // Pulsar cluster url to connect to broker (optional if localZookeeperServers present)
+    private String serviceUrl;
+    private String serviceUrlTls;
+    private String brokerServiceUrl;
+    private String brokerServiceUrlTls;
+    
     // Local-Zookeeper quorum connection string
     private String zookeeperServers;
     // Global-Zookeeper quorum connection string
@@ -77,6 +83,38 @@ public class ProxyConfiguration implements PulsarConfiguration {
     private boolean tlsAllowInsecureConnection = false;
 
     private Properties properties = new Properties();
+
+    public String getServiceUrl() {
+        return serviceUrl;
+    }
+
+    public void setServiceUrl(String serviceUrl) {
+        this.serviceUrl = serviceUrl;
+    }
+
+    public String getServiceUrlTls() {
+        return serviceUrlTls;
+    }
+
+    public void setServiceUrlTls(String serviceUrlTls) {
+        this.serviceUrlTls = serviceUrlTls;
+    }
+
+    public String getBrokerServiceUrl() {
+        return brokerServiceUrl;
+    }
+
+    public void setBrokerServiceUrl(String brokerServiceUrl) {
+        this.brokerServiceUrl = brokerServiceUrl;
+    }
+
+    public String getBrokerServiceUrlTls() {
+        return brokerServiceUrlTls;
+    }
+
+    public void setBrokerServiceUrlTls(String brokerServiceUrlTls) {
+        this.brokerServiceUrlTls = brokerServiceUrlTls;
+    }
 
     public String getZookeeperServers() {
         return zookeeperServers;

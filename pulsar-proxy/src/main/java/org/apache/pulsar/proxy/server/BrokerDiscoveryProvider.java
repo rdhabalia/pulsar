@@ -79,7 +79,7 @@ public class BrokerDiscoveryProvider implements Closeable {
     }
 
     /**
-     * Find next broke {@link LoadReport} in round-robin fashion.
+     * Find next broker {@link LoadReport} in round-robin fashion.
      *
      * @return
      * @throws PulsarServerException
