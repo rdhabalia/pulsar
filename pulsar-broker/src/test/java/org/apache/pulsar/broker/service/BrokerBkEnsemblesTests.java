@@ -24,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
@@ -85,6 +86,7 @@ public class BrokerBkEnsemblesTests {
             config.setAuthenticationEnabled(false);
             config.setManagedLedgerMaxEntriesPerLedger(5);
             config.setManagedLedgerMinLedgerRolloverTimeMinutes(0);
+            config.setAdvertisedAddress("127.0.0.1");
 
             pulsar = new PulsarService(config);
             pulsar.start();
@@ -206,5 +208,96 @@ public class BrokerBkEnsemblesTests {
 
     }
 
+    @Test
+    public void testCrashBrokerWithEmptyCursorLedger() throws Exception {
+
+        ZooKeeper zk = bkEnsemble.getZkClient();
+        ClientConfiguration clientConf = new ClientConfiguration();
+        clientConf.setStatsInterval(0, TimeUnit.SECONDS);
+        PulsarClient client = PulsarClient.create(adminUrl.toString(), clientConf);
+
+        final String ns1 = "prop/usc/crash-broker";
+        final int totalMessages = 10;
+
+        admin.namespaces().createNamespace(ns1);
+
+        final String dn1 = "persistent://" + ns1 + "/my-topic";
+
+        // (1) create topic
+        // publish and ack messages so, cursor can create cursor-ledger and update metadata
+        Consumer consumer = client.subscribe(dn1, "my-subscriber-name");
+        Producer producer = client.createProducer(dn1);
+        for (int i = 0; i < totalMessages; i++) {
+            String message = "my-message-" + i;
+            producer.send(message.getBytes());
+        }
+
+        PersistentTopic topic = (PersistentTopic) pulsar.getBrokerService().getTopic(dn1).get();
+        ManagedCursorImpl cursor = (ManagedCursorImpl) topic.getManagedLedger().getCursors().iterator().next();
+        Field configField = ManagedCursorImpl.class.getDeclaredField("config");
+        configField.setAccessible(true);
+        ManagedLedgerConfig config = (ManagedLedgerConfig) configField.get(cursor);
+        config.setMetadataMaxEntriesPerLedger(totalMessages);
+        
+        
+        Message msg = null;
+        for (int i = 0; i < totalMessages-1; i++) {
+            msg = consumer.receive(1, TimeUnit.SECONDS);
+            consumer.acknowledge(msg);
+        }
+        // sleep for a sec so, next mark delete will not be throttled and update the cursor-metadata
+        Thread.sleep(1000);
+        msg = consumer.receive(1, TimeUnit.SECONDS);
+        consumer.acknowledge(msg);
+        
+        retryStrategically((test) -> cursor.getState().equals("Open"), 5, 100);
+
+        // (2) validate cursor ledger is created and znode is present
+        long cursorLedgerId = cursor.getCursorLedger();
+        String ledgerPath = "/ledgers" + StringUtils.getHybridHierarchicalLedgerPath(cursorLedgerId);
+        Assert.assertNotNull(zk.exists(ledgerPath, false));
+
+        // (3) remove topic and managed-ledger from broker which means topic is not closed gracefully
+        consumer.close();
+        producer.close();
+        pulsar.getBrokerService().removeTopicFromCache(dn1);
+        ManagedLedgerFactoryImpl factory = (ManagedLedgerFactoryImpl) pulsar.getManagedLedgerFactory();
+        Field field = ManagedLedgerFactoryImpl.class.getDeclaredField("ledgers");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        ConcurrentHashMap<String, CompletableFuture<ManagedLedgerImpl>> ledgers = (ConcurrentHashMap<String, CompletableFuture<ManagedLedgerImpl>>) field
+                .get(factory);
+        ledgers.clear();
+
+        // (4) Recreate topic
+        // publish and ack messages so, cursor can create cursor-ledger and update metadata
+        consumer = client.subscribe(dn1, "my-subscriber-name");
+        producer = client.createProducer(dn1);
+        for (int i = 0; i < 10; i++) {
+            String message = "my-message-" + i;
+            producer.send(message.getBytes());
+        }
+        for (int i = 0; i < 10; i++) {
+            msg = consumer.receive(1, TimeUnit.SECONDS);
+            consumer.acknowledge(msg);
+        }
+
+        // (5) Broker should create new cursor-ledger and remove old cursor-ledger
+        topic = (PersistentTopic) pulsar.getBrokerService().getTopic(dn1).get();
+        final ManagedCursorImpl cursor1 = (ManagedCursorImpl) topic.getManagedLedger().getCursors().iterator().next();
+        retryStrategically((test) -> cursor1.getState().equals("Open"), 5, 100);
+        long newCursorLedgerId = cursor1.getCursorLedger();
+        Assert.assertNotEquals(newCursorLedgerId, -1);
+        Assert.assertNotEquals(cursorLedgerId, newCursorLedgerId);
+
+        // cursor node must be deleted
+        Assert.assertNull(zk.exists(ledgerPath, false));
+
+        producer.close();
+        consumer.close();
+        client.close();
+
+    }
+    
     private static final Logger LOG = LoggerFactory.getLogger(BrokerBkEnsemblesTests.class);
 }
