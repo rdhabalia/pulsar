@@ -74,4 +74,28 @@ void ConsumerConfiguration::setUnAckedMessagesTimeoutMs(const uint64_t milliSeco
     }
     impl_->unAckedMessagesTimeoutMs = milliSeconds;
 }
+
+bool ConsumerConfiguration::isEncryptionEnabled() const {
+    if (impl_->cryptoKeyReader != NULL) {
+        return true;
+    }
+    return false;
+}
+
+const CryptoKeyReader& ConsumerConfiguration::getCryptoKeyReader() const { return *(impl_->cryptoKeyReader); }
+
+ConsumerConfiguration& ConsumerConfiguration::setCryptoKeyReader(CryptoKeyReader& cryptoKeyReader) {
+    impl_->cryptoKeyReader = &cryptoKeyReader;
+    return *this;
+}
+
+ConsumerCryptoFailureAction ConsumerConfiguration::getCryptoFailureAction() const {
+    return impl_->cryptoFailureAction;
+}
+
+ConsumerConfiguration& ConsumerConfiguration::setCryptoFailureAction(ConsumerCryptoFailureAction action) {
+    impl_->cryptoFailureAction = action;
+    return *this;
+}
+
 }  // namespace pulsar

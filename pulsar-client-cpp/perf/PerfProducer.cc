@@ -62,6 +62,8 @@ struct Arguments {
     unsigned int batchingMaxMessages;
     long batchingMaxAllowedSizeInBytes;
     long batchingMaxPublishDelayMs;
+    std::string encKeyName;
+    std::string encKeyValueFile;
 };
 
 namespace pulsar {
@@ -78,6 +80,7 @@ class PulsarFriend {
 unsigned long messagesProduced;
 unsigned long bytesProduced;
 using namespace boost::accumulators;
+using namespace pulsar;
 
 typedef accumulator_set<uint64_t, stats<tag::mean, tag::p_square_quantile> > LatencyAccumulator;
 LatencyAccumulator e2eLatencyAccumulator(quantile_probability = 0.99);
@@ -230,7 +233,12 @@ int main(int argc, char** argv) {
             "Use only is batch-size > 1, Default is 128 KB") //
 
     ("max-batch-publish-delay-in-ms", po::value<long>(&args.batchingMaxPublishDelayMs)->default_value(3000),
-            "Use only is batch-size > 1, Default is 3 seconds");
+            "Use only is batch-size > 1, Default is 3 seconds") //
+
+    ("encryption-key-name,k", po::value<std::string>(&args.encKeyName)->default_value(""), "The public key name to encrypt payload") //
+
+    ("encryption-key-value-file,f", po::value<std::string>(&args.encKeyValueFile)->default_value(""),
+            "The file which contains the public key to encrypt payload"); //
 
     po::options_description hidden;
     hidden.add_options()("topic", po::value<std::string>(&args.topic), "Topic name");
@@ -262,6 +270,37 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    class EncKeyReader: public CryptoKeyReader {
+
+      private:
+        std::string pubKeyContents;
+
+        void readFile(std::string fileName, std::string& fileContents) const {
+            std::ifstream ifs(fileName);
+            std::stringstream fileStream;
+            fileStream << ifs.rdbuf();
+            fileContents = fileStream.str();
+        }
+
+      public:
+
+        EncKeyReader(std::string keyFile) {
+            if (keyFile.empty()) {
+                return;
+            }
+            readFile(keyFile, pubKeyContents);
+        }
+
+        Result getPublicKey(const std::string &keyName, std::map<std::string, std::string>& metadata, EncryptionKeyInfo& encKeyInfo) const {
+            encKeyInfo.setKey(pubKeyContents);
+            return ResultOk;
+        }
+
+        Result getPrivateKey(const std::string &keyName, std::map<std::string, std::string>& metadata, EncryptionKeyInfo& encKeyInfo) const {
+            return ResultInvalidConfiguration;
+        }
+    };
+
     LOG_INFO("--- Producer configuration ---");
     for (po::variables_map::iterator it = map.begin(); it != map.end(); ++it) {
         if (it->second.value().type() == typeid(std::string)) {
@@ -291,6 +330,12 @@ int main(int argc, char** argv) {
 
     // Block if queue is full else we will start seeing errors in sendAsync
     producerConf.setBlockIfQueueFull(true);
+    EncKeyReader keyReader(args.encKeyValueFile);
+    if (!args.encKeyName.empty()) {
+        producerConf.addEncryptionKey(args.encKeyName);
+        producerConf.setCryptoKeyReader(keyReader);
+    }
+
     pulsar::ClientConfiguration conf;
     conf.setUseTls(args.isUseTls);
     conf.setTlsAllowInsecureConnection(args.isTlsAllowInsecureConnection);

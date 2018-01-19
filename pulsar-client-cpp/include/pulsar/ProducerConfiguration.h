@@ -23,6 +23,11 @@
 #include <pulsar/Result.h>
 #include <pulsar/Message.h>
 #include <boost/function.hpp>
+#include <pulsar/ProducerCryptoFailureAction.h>
+#include <pulsar/CryptoKeyReader.h>
+
+#include <set>
+
 #pragma GCC visibility push(default)
 
 namespace pulsar {
@@ -86,6 +91,16 @@ class ProducerConfiguration {
 
     ProducerConfiguration& setBatchingMaxPublishDelayMs(const unsigned long& batchingMaxPublishDelayMs);
     const unsigned long& getBatchingMaxPublishDelayMs() const;
+
+    const CryptoKeyReader& getCryptoKeyReader() const;
+    ProducerConfiguration& setCryptoKeyReader(CryptoKeyReader& cryptoKeyReader);
+
+    ProducerCryptoFailureAction getCryptoFailureAction() const;
+    ProducerConfiguration& setCryptoFailureAction(ProducerCryptoFailureAction action);
+
+    std::set<std::string>& getEncryptionKeys();
+    bool isEncryptionEnabled() const;
+    ProducerConfiguration& addEncryptionKey(std::string key);
 
     friend class PulsarWrapper;
 

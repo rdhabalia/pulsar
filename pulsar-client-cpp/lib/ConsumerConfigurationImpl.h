@@ -31,13 +31,17 @@ struct ConsumerConfigurationImpl {
     int receiverQueueSize;
     std::string consumerName;
     long brokerConsumerStatsCacheTimeInMs;
+    CryptoKeyReader* cryptoKeyReader;
+    ConsumerCryptoFailureAction cryptoFailureAction;
     ConsumerConfigurationImpl()
         : unAckedMessagesTimeoutMs(0),
           consumerType(ConsumerExclusive),
           messageListener(),
           hasMessageListener(false),
           brokerConsumerStatsCacheTimeInMs(30 * 1000),  // 30 seconds
-          receiverQueueSize(1000) {}
+          receiverQueueSize(1000),
+          cryptoKeyReader(NULL),
+          cryptoFailureAction(ConsumerCryptoFailureAction::FAIL) {}
 };
 }  // namespace pulsar
 #endif /* LIB_CONSUMERCONFIGURATIONIMPL_H_ */

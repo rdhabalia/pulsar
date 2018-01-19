@@ -24,6 +24,8 @@
 #include <pulsar/Result.h>
 #include <pulsar/ConsumerType.h>
 #include <pulsar/Message.h>
+#include <pulsar/ConsumerCryptoFailureAction.h>
+#include <pulsar/CryptoKeyReader.h>
 
 #pragma GCC visibility push(default)
 namespace pulsar {
@@ -124,6 +126,14 @@ class ConsumerConfiguration {
      * @return the configured timeout in milliseconds caching BrokerConsumerStats.
      */
     long getBrokerConsumerStatsCacheTimeInMs() const;
+
+    bool isEncryptionEnabled() const;
+    const CryptoKeyReader& getCryptoKeyReader() const;
+    ConsumerConfiguration& setCryptoKeyReader(CryptoKeyReader& cryptoKeyReader);
+
+    ConsumerCryptoFailureAction getCryptoFailureAction() const;
+    ConsumerConfiguration& setCryptoFailureAction(ConsumerCryptoFailureAction action);
+
     friend class PulsarWrapper;
 
    private:

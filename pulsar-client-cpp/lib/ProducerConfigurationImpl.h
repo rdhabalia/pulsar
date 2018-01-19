@@ -39,6 +39,9 @@ struct ProducerConfigurationImpl {
     unsigned int batchingMaxMessages;
     unsigned long batchingMaxAllowedSizeInBytes;
     unsigned long batchingMaxPublishDelayMs;
+    CryptoKeyReader* cryptoKeyReader;
+    std::set<std::string> encryptionKeys;
+    ProducerCryptoFailureAction cryptoFailureAction;
     ProducerConfigurationImpl()
         : sendTimeoutMs(30000),
           compressionType(CompressionNone),
@@ -48,8 +51,10 @@ struct ProducerConfigurationImpl {
           batchingEnabled(false),
           batchingMaxMessages(1000),
           batchingMaxAllowedSizeInBytes(128 * 1024),  // 128 KB
-          batchingMaxPublishDelayMs(10) {             // 10 milli seconds
-    }
+          batchingMaxPublishDelayMs(10),              // 10 milli seconds
+          cryptoKeyReader(NULL),
+          encryptionKeys(),
+          cryptoFailureAction(ProducerCryptoFailureAction::FAIL) {}
 };
 }  // namespace pulsar
 

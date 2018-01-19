@@ -40,6 +40,7 @@
 #include "ExecutorService.h"
 #include <boost/asio.hpp>
 #include "ProducerImpl.h"
+#include "MessageCrypto.h"
 
 namespace pulsar {
 
