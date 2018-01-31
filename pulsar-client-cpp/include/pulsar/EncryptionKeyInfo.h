@@ -55,6 +55,8 @@ class EncryptionKeyInfo {
     explicit EncryptionKeyInfo(EncryptionKeyInfoImplPtr);
 
     EncryptionKeyInfoImplPtr impl_;
+
+    friend class PulsarWrapper;
 };
 
 } /* namespace pulsar */

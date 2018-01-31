@@ -47,7 +47,9 @@ class CryptoKeyReader {
      *
      */
     virtual Result getPublicKey(const std::string& keyName, std::map<std::string, std::string>& metadata,
-                                EncryptionKeyInfo& encKeyInfo) const = 0;
+                                EncryptionKeyInfo& encKeyInfo) const {
+    	return Result::ResultCryptoError;
+    }
 
     /*
      * @param keyName
@@ -58,7 +60,9 @@ class CryptoKeyReader {
      * @return Result ResultOk is returned for success
      */
     virtual Result getPrivateKey(const std::string& keyName, std::map<std::string, std::string>& metadata,
-                                 EncryptionKeyInfo& encKeyInfo) const = 0;
+                                 EncryptionKeyInfo& encKeyInfo) const {
+    	return Result::ResultCryptoError;
+    }
 
 }; /* namespace pulsar */
 

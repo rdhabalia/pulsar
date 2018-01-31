@@ -23,7 +23,11 @@
 #include <iostream>
 #include <map>
 
+#pragma GCC visibility push(default)
+
 namespace pulsar {
+
+class PulsarWrapper;
 
 class EncryptionKeyInfoImpl {
    public:
@@ -41,11 +45,15 @@ class EncryptionKeyInfoImpl {
 
     void setMetadata(StringMap& metadata);
 
+    friend class PulsarWrapper;
+
    private:
     StringMap metadata_;
     std::string key_;
 };
 
 } /* namespace pulsar */
+
+#pragma GCC visibility pop
 
 #endif /* LIB_ENCRYPTIONKEYINFOIMPL_H_ */

@@ -21,6 +21,8 @@
 
 #include "EncryptionKeyInfoImpl.h"
 
+using namespace pulsar;
+
 namespace pulsar {
 
 EncryptionKeyInfo::EncryptionKeyInfo() : impl_(new EncryptionKeyInfoImpl()) {}
