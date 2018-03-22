@@ -189,6 +189,9 @@ public abstract class PulsarWebResource {
             } catch (KeeperException.NoNodeException e) {
                 log.warn("Failed to get property admin data for non existing property {}", property);
                 throw new RestException(Status.NOT_FOUND, "Property does not exist");
+            } catch (Exception e) {
+                log.warn("Failed to read data from property {}", property);
+                throw new RestException(Status.INTERNAL_SERVER_ERROR, "Failed to read property " + property);
             }
 
             if (!isClientAuthenticated(clientAppId)) {

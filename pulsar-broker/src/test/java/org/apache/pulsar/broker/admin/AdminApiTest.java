@@ -669,11 +669,16 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
         producer = pulsarClient.newProducer().topic("persistent://prop-xyz/use/ns2/my-topic").create();
         producer.close();
         admin.persistentTopics().delete("persistent://prop-xyz/use/ns2/my-topic");
-
-        // both unload and delete should succeed for ns2 on other broker with a redirect
-        // otheradmin.namespaces().unload("prop-xyz/use/ns2");
     }
 
+    @Test
+    public void testNamespaceWithUnknownProperty() throws Exception{
+        admin.namespaces().createNamespace("unknownProperty/global/replNamespace");
+        conf.setAuthenticationEnabled(true);
+        conf.setAuthorizationEnabled(true);
+        admin.namespaces().setNamespaceReplicationClusters("unknownProperty/global/replNamespace", Lists.newArrayList("use"));
+    }
+    
     @Test(dataProvider = "topicName")
     public void persistentTopics(String topicName) throws Exception {
         assertEquals(admin.persistentTopics().getList("prop-xyz/use/ns1"), Lists.newArrayList());
