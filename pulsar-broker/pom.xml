@@ -264,6 +264,16 @@
       <version>${project.version}</version>
       <scope>test</scope>
     </dependency>
+    
+    <!-- pulsar function test -->
+    
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>pulsar-client-tools</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    
   </dependencies>
 
   <build>

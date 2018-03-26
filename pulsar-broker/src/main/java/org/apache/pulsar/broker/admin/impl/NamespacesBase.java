@@ -57,11 +57,13 @@ import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.policies.data.AuthAction;
 import org.apache.pulsar.common.policies.data.BacklogQuota;
 import org.apache.pulsar.common.policies.data.BacklogQuota.BacklogQuotaType;
+import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
 import org.apache.pulsar.common.policies.data.BundlesData;
 import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.policies.data.DispatchRate;
 import org.apache.pulsar.common.policies.data.PersistencePolicies;
 import org.apache.pulsar.common.policies.data.Policies;
+import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.SubscriptionAuthMode;
 import org.apache.pulsar.common.util.FutureUtil;
@@ -73,6 +75,8 @@ import org.slf4j.LoggerFactory;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.google.common.collect.Sets.SetView;
+
+import dlshade.com.google.common.collect.Maps;
 
 public abstract class NamespacesBase extends AdminResource {
 
@@ -413,6 +417,51 @@ public abstract class NamespacesBase extends AdminResource {
         }
     }
 
+	protected void internalAddExternalReplicatorPolicies(ReplicatorType replicatorType,
+			ReplicatorPolicies replicatorPolicies) {
+		validateAdminAccessOnProperty(namespaceName.getProperty());
+		validatePoliciesReadOnlyAccess();
+
+		// TODO: validate : replicatorType and replicatorPolicies
+		if (!namespaceName.isGlobal()) {
+			throw new RestException(Status.PRECONDITION_FAILED, "Cannot set replication on a non-global namespace");
+		}
+
+		Entry<Policies, Stat> policiesNode = null;
+
+		try {
+			// Force to read the data s.t. the watch to the cache content is setup.
+			policiesNode = policiesCache().getWithStat(path(POLICIES, namespaceName.toString())).orElseThrow(
+					() -> new RestException(Status.NOT_FOUND, "Namespace " + namespaceName + " does not exist"));
+			if (policiesNode.getKey().replicatorPolicies == null) {
+				policiesNode.getKey().replicatorPolicies = Maps.newHashMap();
+			}
+			policiesNode.getKey().replicatorPolicies.put(replicatorType, replicatorPolicies);
+
+			// Write back the new policies into zookeeper
+			globalZk().setData(path(POLICIES, namespaceName.toString()),
+					jsonMapper().writeValueAsBytes(policiesNode.getKey()), policiesNode.getValue().getVersion());
+			policiesCache().invalidate(path(POLICIES, namespaceName.toString()));
+
+			log.info("[{}] Successfully updated {} replicator policies on namespace {}", clientAppId(), replicatorType,
+					namespaceName);
+		} catch (KeeperException.NoNodeException e) {
+			log.warn("[{}] Failed to update the replication clusters for namespace {}: does not exist", clientAppId(),
+					namespaceName);
+			throw new RestException(Status.NOT_FOUND, "Namespace does not exist");
+		} catch (KeeperException.BadVersionException e) {
+			log.warn(
+					"[{}] Failed to update the replication clusters on namespace {} expected policy node version={} : concurrent modification",
+					clientAppId(), namespaceName, policiesNode.getValue().getVersion());
+
+			throw new RestException(Status.CONFLICT, "Concurrent modification");
+		} catch (Exception e) {
+			log.error("[{}] Failed to update the replication clusters on namespace {}", clientAppId(), namespaceName,
+					e);
+			throw new RestException(e);
+		}
+	}
+    
     protected void internalSetNamespaceMessageTTL(int messageTTL) {
         validateAdminAccessOnProperty(namespaceName.getProperty());
         validatePoliciesReadOnlyAccess();

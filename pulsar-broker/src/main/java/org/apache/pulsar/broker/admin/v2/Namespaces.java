@@ -39,10 +39,12 @@ import org.apache.pulsar.broker.web.RestException;
 import org.apache.pulsar.common.policies.data.AuthAction;
 import org.apache.pulsar.common.policies.data.BacklogQuota;
 import org.apache.pulsar.common.policies.data.BacklogQuota.BacklogQuotaType;
+import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
 import org.apache.pulsar.common.policies.data.BundlesData;
 import org.apache.pulsar.common.policies.data.DispatchRate;
 import org.apache.pulsar.common.policies.data.PersistencePolicies;
 import org.apache.pulsar.common.policies.data.Policies;
+import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.SubscriptionAuthMode;
 import org.slf4j.Logger;
@@ -205,6 +207,19 @@ public class Namespaces extends NamespacesBase {
         internalSetNamespaceReplicationClusters(clusterIds);
     }
 
+    
+    @POST
+    @Path("/{property}/{namespace}/externalReplication")
+    @ApiOperation(value = "Set external replication for a namespace")
+    @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission"),
+            @ApiResponse(code = 404, message = "Property or cluster or namespace doesn't exist"),
+            @ApiResponse(code = 412, message = "Namespace is not global") })
+    public void addNamespaceExternReplication(@PathParam("property") String property, @PathParam("namespace") String namespace,
+            @QueryParam("replicatorType") ReplicatorType replicatorType, ReplicatorPolicies replicatorPolicies) {
+        validateNamespaceName(property, namespace);
+        internalAddExternalReplicatorPolicies(replicatorType, replicatorPolicies);
+    }
+    
     @GET
     @Path("/{property}/{namespace}/messageTTL")
     @ApiOperation(value = "Get the message TTL for the namespace")
