@@ -74,18 +74,17 @@ public class KinesisProducerManager implements Function<Throwable, Void>, java.u
 		// TODO: change subscriber name
 		inputConsumer = pulsarClient.newConsumer().topic(topicName).subscriptionName("my-subscriber-name").subscribe();
 		ReplicatorPolicies replicatorPolicies = getReplicatorPolicies(topicName);
-		String kinesisStreamName = replicatorPolicies.topicNameMapping.get(TopicName.get(this.topicName).getLocalName());
-		startProducer(kinesisStreamName, replicatorPolicies);
+		startProducer(this.topicName, replicatorPolicies);
 	}
 
-	private void startProducer(String kinesisStreamName, ReplicatorPolicies replicatorPolicies) {
-		(new KinesisReplicatorProvider()).createProducerAsync(kinesisStreamName, replicatorPolicies)
+	private void startProducer(String topicName, ReplicatorPolicies replicatorPolicies) {
+		(new KinesisReplicatorProvider()).createProducerAsync(topicName, replicatorPolicies)
 				.thenAccept(producer -> {
 					this.producer = producer;
 					readMessage();
 				}).exceptionally(ex -> {
 					pulsarClient.timer().newTimeout(timeout -> {
-						startProducer(kinesisStreamName, replicatorPolicies);
+						startProducer(topicName, replicatorPolicies);
 					}, READ_DELAY_BACKOFF_MS, TimeUnit.MILLISECONDS);
 					return null;
 				});
