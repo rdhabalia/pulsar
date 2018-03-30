@@ -20,6 +20,8 @@ package org.apache.pulsar.functions.worker;
 
 import dlshade.org.apache.zookeeper.KeeperException.Code;
 import lombok.extern.slf4j.Slf4j;
+
+import org.apache.commons.io.IOUtils;
 import org.apache.distributedlog.AppendOnlyStreamWriter;
 import org.apache.distributedlog.DistributedLogConfiguration;
 import org.apache.distributedlog.api.DistributedLogManager;
@@ -35,6 +37,10 @@ import org.apache.pulsar.functions.worker.dlog.DLOutputStream;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
@@ -99,6 +105,12 @@ public final class Utils {
                                          String destPkgPath)
             throws IOException {
 
+    		//For testing
+    		if(destPkgPath!=null) {
+    			writeToFile(uploadedInputStream,destPkgPath);
+    			return;
+    		}
+    	
         // if the dest directory does not exist, create it.
         if (dlogNamespace.logExists(destPkgPath)) {
             // if the destination file exists, write a log message
@@ -125,9 +137,46 @@ public final class Utils {
         }
     }
 
-    public static void downloadFromBookkeeper(Namespace namespace,
+	private static void writeToFile(InputStream inputStream, String destPkgPath) throws IOException {
+
+		OutputStream outputStream = new FileOutputStream(new File("/tmp/fun.jar"));
+
+		int read = 0;
+		byte[] bytes = new byte[1024];
+
+		try {
+			while ((read = inputStream.read(bytes)) != -1) {
+				outputStream.write(bytes, 0, read);
+			}
+		} finally {
+			if (inputStream != null) {
+				try {
+					inputStream.close();
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}
+			if (outputStream != null) {
+				try {
+					// outputStream.flush();
+					outputStream.close();
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+
+			}
+		}
+	}
+
+	public static void downloadFromBookkeeper(Namespace namespace,
                                                  OutputStream outputStream,
                                                  String packagePath) throws Exception {
+		
+		if(packagePath!=null) {
+			readFile(outputStream,packagePath);
+			return;
+		}
+		
         DistributedLogManager dlm = namespace.openLog(packagePath);
         InputStream in = new DLInputStream(dlm);
         int read = 0;
@@ -138,7 +187,12 @@ public final class Utils {
         outputStream.flush();
     }
 
-    public static DistributedLogConfiguration getDlogConf(WorkerConfig workerConfig) {
+	private static void readFile(OutputStream outputStream, String packagePath) throws IOException {
+		InputStream fileInputStream = new FileInputStream("/tmp/fun.jar");
+		IOUtils.copy(fileInputStream, outputStream);
+	}
+
+	public static DistributedLogConfiguration getDlogConf(WorkerConfig workerConfig) {
         int numReplicas = workerConfig.getNumFunctionPackageReplicas();
 
         DistributedLogConfiguration conf = new DistributedLogConfiguration()

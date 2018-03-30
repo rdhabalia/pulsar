@@ -114,7 +114,7 @@
       <artifactId>pulsar-broker-common</artifactId>
       <version>${project.version}</version>
     </dependency>
-
+    
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>managed-ledger</artifactId>
@@ -122,6 +122,8 @@
       <type>test-jar</type>
       <scope>test</scope>
     </dependency>
+    
+    
 
     <dependency>
       <groupId>${project.groupId}</groupId>
@@ -289,6 +291,12 @@
       <version>${project.version}</version>
       <scope>test</scope>
     </dependency>
+    
+    <dependency>
+	  <groupId>yahoo.yinst.yjava_yca</groupId>
+	  <artifactId>yjava_yca</artifactId>
+	  <version>0.33.93</version><!-- the latest available version for RHEL-6.x -->
+	</dependency>
     
   </dependencies>
 
