@@ -16,68 +16,11 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.pulsar.broker.loadbalance;
-
-import static org.mockito.Mockito.spy;
-
-import java.io.File;
-import java.net.InetAddress;
-import java.net.URL;
-import java.util.Collection;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-
-import org.apache.bookkeeper.test.PortManager;
-import org.apache.pulsar.broker.PulsarService;
-import org.apache.pulsar.broker.ServiceConfiguration;
-import org.apache.pulsar.broker.ServiceConfigurationUtils;
-import org.apache.pulsar.broker.loadbalance.impl.SimpleLoadManagerImpl;
-import org.apache.pulsar.client.admin.BrokerStats;
-import org.apache.pulsar.client.admin.PulsarAdmin;
-import org.apache.pulsar.client.admin.PulsarAdminWithFunctions;
-import org.apache.pulsar.client.api.Authentication;
-import org.apache.pulsar.client.api.Consumer;
-import org.apache.pulsar.client.api.Message;
-import org.apache.pulsar.client.api.MessageId;
-import org.apache.pulsar.client.api.Producer;
-import org.apache.pulsar.client.api.ProducerBuilder;
-import org.apache.pulsar.client.api.PulsarClient;
-import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
-import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
-import org.apache.pulsar.common.policies.data.PropertyAdmin;
-import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
-import org.apache.pulsar.functions.api.Context;
-import org.apache.pulsar.functions.api.utils.DefaultSerDe;
-import org.apache.pulsar.functions.proto.Function.FunctionConfig;
-import org.apache.pulsar.functions.proto.Function.FunctionConfig.Builder;
-import org.apache.pulsar.functions.worker.WorkerConfig;
-import org.apache.pulsar.functions.worker.WorkerService;
-import org.apache.pulsar.replicator.api.kinesis.KinesisReplicatorManager;
-import org.apache.pulsar.replicator.auth.DefaultAuthorizationKeyStore;
-import org.apache.pulsar.replicator.kinesis.function.ReplicatorFunction;
-import org.apache.pulsar.zookeeper.LocalBookkeeperEnsemble;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.testng.annotations.AfterMethod;
-import org.testng.annotations.BeforeMethod;
-import org.testng.annotations.Test;
-
-import com.google.common.collect.Maps;
-import com.google.common.collect.Sets;
-
-import jersey.repackaged.com.google.common.collect.Lists;
+package org.apache.pulsar.replicator.kinesis;
 
 /**
  */
-public class PulsarFunctionTest {
+public class PulsarFunctionTest {/*
 	LocalBookkeeperEnsemble bkEnsemble;
 
 	ServiceConfiguration config;
@@ -121,7 +64,6 @@ public class PulsarFunctionTest {
 		config.setZookeeperServers("127.0.0.1" + ":" + ZOOKEEPER_PORT);
 		// config1.setZookeeperServers("127.0.0.1" + ":" + 2181);
 		config.setBrokerServicePort(PRIMARY_BROKER_PORT);
-		config.setLoadManagerClassName(SimpleLoadManagerImpl.class.getName());
 		WorkerService functionsWorkerService = createPulsarFunctionWorker(config);
 		pulsar = new PulsarService(config, Optional.of(functionsWorkerService));
 
@@ -230,113 +172,27 @@ public class PulsarFunctionTest {
 
 	}
 
-	
-	@Test(enabled = true)
-	public void testPulsarFunctionE2EKinesis() throws Exception {
-
-		final String tenant = "prop";
-		final String namespace = "ns";
-		final String inputSerdeClassName = DefaultSerDe.class.getName();
-		final String outputSerdeClassName = DefaultSerDe.class.getName();
-		final String testFile = "/yh/git/july/pulsar/pulsar-replicator/function/target/pulsar-replicator-function.jar";
-		//final String testFile = "/yh/temp/function/kinesis.jar";
-		final String className = ReplicatorFunction.class.getName();
-
-		
-		final String replNamespace = property + "/global/replicator";
-		final String topicName = "replTopic";
-		final String replTopicName = "persistent://" + replNamespace +"/"+topicName;
-		admin.namespaces().createNamespace(replNamespace);
-		admin.namespaces().setNamespaceReplicationClusters(replNamespace, Lists.newArrayList("use"));
-		ReplicatorPolicies replicatorPolicies = new ReplicatorPolicies();
-		Map<String, String> replicationProperties = Maps.newHashMap();
-		Map<String, String> topicMapping = Maps.newHashMap();
-		topicMapping.put(topicName, "KineisFunction:us-west-2");
-		replicationProperties.put("accessKey", "AK");
-		replicationProperties.put("secretKey", "SK");
-		replicatorPolicies.topicNameMapping = topicMapping;
-		replicatorPolicies.replicationProperties = replicationProperties;
-		replicatorPolicies.authPluginName = DefaultAuthorizationKeyStore.class.getName();
-		admin.namespaces().addExternalReplicator(replNamespace, ReplicatorType.Kinesis, replicatorPolicies);
-		
-		
-		Map<String,String> userConfig = Maps.newHashMap();
-		final File kinesisReplicatorFile = new File("../pulsar-replicator/providers/pulsar-replicator-provider-kinesis/target/pulsar-replicator-provider-kinesis.jar");
-		userConfig.put(ReplicatorFunction.CONF_BROKER_SERVICE_URL, url.toString());
-		userConfig.put(ReplicatorFunction.CONF_ZK_SERVER_URL, config.getZookeeperServers());
-		userConfig.put(ReplicatorFunction.CONF_REPLICATION_TOPIC_NAME, replTopicName);
-		userConfig.put(ReplicatorFunction.CONF_REPLICATOR_JAR_NAME, kinesisReplicatorFile.getAbsolutePath());
-		userConfig.put(ReplicatorFunction.CONF_REPLICATOR_MANAGER_CLASS_NAME, KinesisReplicatorManager.class.getName());
-		
-		Builder functionConfigBuilder = FunctionConfig.newBuilder();
-		functionConfigBuilder.putAllUserConfig(userConfig);
-		FunctionConfig functionConfig = functionConfigBuilder.setTenant(tenant).setNamespace(namespace)
-				.setName(function).setOutput(outputTopic).putCustomSerdeInputs(inputTopic, inputSerdeClassName)
-				.setOutputSerdeClassName(outputSerdeClassName).setClassName(className).setParallelism(1).build();
-
-		funAdmin.functions().createFunction(functionConfig, testFile);
-		System.out.println("Finish function uploading");
-
-		Thread.sleep(3000);
-
-		
-		// trigger function
-		Producer<byte[]> kinesisFunctionTopic = pulsarClient.newProducer().topic(inputTopic).create();
-		kinesisFunctionTopic.send("start".getBytes());
-		
-		Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(outputTopic).subscriptionName("my-subscriber-name")
-				.subscribe();
-
-		ProducerBuilder<byte[]> producerBuilder = pulsarClient.newProducer().topic(replTopicName);
-
-		Producer<byte[]> producer = producerBuilder.create();
-		List<Future<MessageId>> futures = Lists.newArrayList();
-
-		// Asynchronously produce messages
-		for (int i = 0; i < 10; i++) {
-			final String message = "my-message-" + i;
-			Future<MessageId> future = producer.sendAsync(message.getBytes());
-			futures.add(future);
-		}
-
-		log.info("Waiting for async publish to complete");
-		for (Future<MessageId> future : futures) {
-			future.get();
-		}
-
-		System.out.println("finish");
-
-	}
-	
 	@Test
 	public void testKinesisReplicatorFunction() throws Exception {
-		final String replNamespace = property + "/global/replicator";
+		final String namespace = property + "/global/replicator";
 		final String topicName = "replTopic";
-		final String replTopicName = "persistent://" + replNamespace +"/"+topicName;
+		final String replTopicName = "persistent://" + namespace +"/"+topicName;
 		
-		admin.namespaces().createNamespace(replNamespace);
-		admin.namespaces().setNamespaceReplicationClusters(replNamespace, Lists.newArrayList("use"));
+		admin.namespaces().createNamespace(namespace);
+		admin.namespaces().setNamespaceReplicationClusters(namespace, Lists.newArrayList("use"));
 		ReplicatorPolicies replicatorPolicies = new ReplicatorPolicies();
 		Map<String, String> topicMapping = Maps.newHashMap();
-		Map<String, String> replicationProperties = Maps.newHashMap();
-		topicMapping.put(topicName, "KineisFunction:us-west-2");
-		replicationProperties.put("accessKey", "AK");
-		replicationProperties.put("secretKey", "SK");
+		topicMapping.put(topicName, "ws-east:test");
 		replicatorPolicies.topicNameMapping = topicMapping;
-		replicatorPolicies.replicationProperties = replicationProperties;
-		replicatorPolicies.authPluginName = DefaultAuthorizationKeyStore.class.getName();
-		admin.namespaces().addExternalReplicator(replNamespace, ReplicatorType.Kinesis, replicatorPolicies);
+		admin.namespaces().addExternalReplicator(namespace, ReplicatorType.Kinesis, replicatorPolicies);
 		
-		ReplicatorFunction function = new ReplicatorFunction();
+		KinesisReplicatorFunction function = new KinesisReplicatorFunction();
 		Map<String,String> userConfig = Maps.newHashMap();
-		final File kinesisReplicatorFile = new File("../pulsar-replicator/providers/pulsar-replicator-provider-kinesis/target/pulsar-replicator-provider-kinesis.jar");
-		userConfig.put(ReplicatorFunction.CONF_BROKER_SERVICE_URL, url.toString());
-		userConfig.put(ReplicatorFunction.CONF_ZK_SERVER_URL, config.getZookeeperServers());
-		userConfig.put(ReplicatorFunction.CONF_REPLICATION_TOPIC_NAME, replTopicName);
-		userConfig.put(ReplicatorFunction.CONF_REPLICATOR_JAR_NAME, kinesisReplicatorFile.getAbsolutePath());
-		userConfig.put(ReplicatorFunction.CONF_REPLICATOR_MANAGER_CLASS_NAME, KinesisReplicatorManager.class.getName());
+		userConfig.put("brokerServiceUrl", url.toString());
+		userConfig.put("zkServerUrl", config.getZookeeperServers());
+		userConfig.put("replTopicName", replTopicName);
 		Context context = new ContextImpl(userConfig);
-		function.process(ReplicatorFunction.Action.start.toString(), context);
+		function.process("start", context);
 		
 		ProducerBuilder<byte[]> producerBuilder = pulsarClient.newProducer().topic(replTopicName);
 
@@ -457,4 +313,4 @@ public class PulsarFunctionTest {
 		
 	}
 	
-}
+*/}

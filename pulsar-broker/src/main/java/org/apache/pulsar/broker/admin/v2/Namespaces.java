@@ -214,7 +214,7 @@ public class Namespaces extends NamespacesBase {
     @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission"),
             @ApiResponse(code = 404, message = "Property or cluster or namespace doesn't exist"),
             @ApiResponse(code = 412, message = "Namespace is not global") })
-    public void addNamespaceExternReplication(@PathParam("property") String property, @PathParam("namespace") String namespace,
+    public void addNamespaceExternalReplication(@PathParam("property") String property, @PathParam("namespace") String namespace,
             @QueryParam("replicatorType") ReplicatorType replicatorType, ReplicatorPolicies replicatorPolicies) {
         validateNamespaceName(property, namespace);
         internalAddExternalReplicatorPolicies(replicatorType, replicatorPolicies);

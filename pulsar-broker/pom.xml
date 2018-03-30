@@ -274,6 +274,22 @@
       <scope>test</scope>
     </dependency>
     
+    <!-- pulsar replicator test -->
+    
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>pulsar-replicator-provider-kinesis</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    
+     <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>pulsar-replicator-function</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    
   </dependencies>
 
   <build>

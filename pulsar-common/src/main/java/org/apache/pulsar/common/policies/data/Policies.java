@@ -34,6 +34,7 @@ public class Policies {
     public Map<BacklogQuota.BacklogQuotaType, BacklogQuota> backlog_quota_map = Maps.newHashMap();
     public Map<String, DispatchRate> clusterDispatchRate = Maps.newHashMap();
     public PersistencePolicies persistence = null;
+    public Map<ReplicatorType, ReplicatorPolicies> replicatorPolicies;
 
     // If set, it will override the broker settings for enabling deduplication
     public Boolean deduplicationEnabled = null;
@@ -104,4 +105,8 @@ public class Policies {
                 .add("max_consumers_per_topic", max_consumers_per_topic)
                 .add("max_consumers_per_subscription", max_consumers_per_topic).toString();
     }
+    
+    public static enum ReplicatorType {
+		Kinesis, DynamoDB;
+	}
 }
