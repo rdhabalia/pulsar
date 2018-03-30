@@ -34,11 +34,13 @@ import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.policies.data.AuthAction;
 import org.apache.pulsar.common.policies.data.BacklogQuota;
 import org.apache.pulsar.common.policies.data.BacklogQuota.BacklogQuotaType;
+import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
 import org.apache.pulsar.common.policies.data.BundlesData;
 import org.apache.pulsar.common.policies.data.DispatchRate;
 import org.apache.pulsar.common.policies.data.ErrorData;
 import org.apache.pulsar.common.policies.data.PersistencePolicies;
 import org.apache.pulsar.common.policies.data.Policies;
+import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.SubscriptionAuthMode;
 
@@ -316,6 +318,18 @@ public class NamespacesImpl extends BaseResource implements Namespaces {
         }
     }
 
+	public void addExternalReplicator(String namespace, ReplicatorType replicatorType,
+			ReplicatorPolicies replicatorPolicies) throws PulsarAdminException {
+		try {
+			NamespaceName ns = NamespaceName.get(namespace);
+			WebTarget path = namespacePath(ns, "externalReplication");
+			request(path.queryParam("replicatorType", replicatorType.toString()))
+					.post(Entity.entity(replicatorPolicies, MediaType.APPLICATION_JSON), ErrorData.class);
+		} catch (Exception e) {
+			throw getApiException(e);
+		}
+	}
+    
     @Override
     public void setPersistence(String namespace, PersistencePolicies persistence) throws PulsarAdminException {
         try {

@@ -19,23 +19,31 @@
 package org.apache.pulsar.admin.cli;
 
 import java.io.IOException;
+import java.lang.reflect.Type;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
+import org.apache.bookkeeper.shaded.com.google.common.collect.Maps;
 import org.apache.pulsar.admin.cli.utils.IOUtils;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.admin.PulsarAdminException;
 import org.apache.pulsar.common.policies.data.BacklogQuota;
 import org.apache.pulsar.common.policies.data.DispatchRate;
 import org.apache.pulsar.common.policies.data.PersistencePolicies;
+import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
+import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.SubscriptionAuthMode;
+import org.inferred.freebuilder.shaded.org.apache.commons.lang3.StringUtils;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.ParameterException;
 import com.beust.jcommander.Parameters;
 import com.beust.jcommander.converters.CommaParameterSplitter;
 import com.google.common.collect.Lists;
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 
 @Parameters(commandDescription = "Operations about namespaces")
 public class CmdNamespaces extends CmdBase {
@@ -462,6 +470,87 @@ public class CmdNamespaces extends CmdBase {
         }
     }
 
+    @Parameters(commandDescription = "Add replicator policies for external replication")
+    private class AddReplicatorPolicies extends CliCommand {
+        @Parameter(description = "property/cluster/namespace", required = true)
+        private java.util.List<String> params;
+
+        @Parameter(names = { "-r", "--replicator" }, description = "type of replicator to replicate message to targeted system (eg: Kinesis, DynamoDB)", required = true)
+        private String replicatorTypeStr;
+        
+        @Parameter(names = { "-p", "--properties" }, description = "Replicator properties. json map (eg: {prop1=val1, prop2=val2} ) ", required = false)
+        private String replicationProperties;
+        
+        @Parameter(names = { "-t", "--topic-map" }, description = "Topic name mapping. json map (eg: {top1=rep-top1, top2=rep=top2} )", required = false)
+        private String topicNameMapping;
+        
+        @Parameter(names = { "-an", "--auth-plugin-name" }, description = "FQ class name of plugin name to get authentication credential", required = false)
+        private String authPluginName;
+        
+        @Parameter(names = { "-ap", "--auth-plugin-param" }, description = "Authentication plugin param", required = false)
+        private String authParamName;
+       
+
+        @Override
+		void run() throws PulsarAdminException {
+			ReplicatorType replicatorType;
+			ReplicatorPolicies replicatorPolicies = new ReplicatorPolicies();
+
+			try {
+				replicatorType = ReplicatorType.valueOf(replicatorTypeStr);
+			} catch (IllegalArgumentException e) {
+				throw new ParameterException(String.format("Invalid replicator type '%s'. Valid options are: %s",
+						replicatorTypeStr, Arrays.toString(ReplicatorType.values())));
+			}
+
+			if (StringUtils.isNotBlank(replicationProperties)) {
+				System.out.println(replicationProperties);
+				replicatorPolicies.replicationProperties = new Gson().fromJson(replicationProperties, new TypeToken<Map<String, String>>(){}.getType());
+			}
+			
+			if (StringUtils.isNotBlank(topicNameMapping)) {
+				System.out.println(topicNameMapping);
+				replicatorPolicies.topicNameMapping = new Gson().fromJson(topicNameMapping, new TypeToken<Map<String, String>>(){}.getType());
+			}
+			
+			/*if (StringUtils.isNotBlank(replicationProperties)) {
+				String[] properties = replicationProperties.split(",");
+				for (String property : properties) {
+					if (!property.contains("=")) {
+						throw new IllegalArgumentException("Property key/value must be separated with = " + property);
+					}
+					String[] keyValue = property.split("=");
+					if (replicatorPolicies.replicationProperties == null) {
+						replicatorPolicies.replicationProperties = Maps.newHashMap();
+					}
+					replicatorPolicies.replicationProperties.put(keyValue[0], keyValue[1]);
+				}
+			}
+
+			if (StringUtils.isNotBlank(topicNameMapping)) {
+				String[] topics = topicNameMapping.split(",");
+				for (String topic : topics) {
+					if (!topic.contains("=")) {
+						throw new IllegalArgumentException(
+								"topicNameMapping key/value must be separated with = " + topic);
+					}
+					String[] keyValue = topic.split("=");
+					if (replicatorPolicies.topicNameMapping == null) {
+						replicatorPolicies.topicNameMapping = Maps.newHashMap();
+					}
+					replicatorPolicies.topicNameMapping.put(keyValue[0], keyValue[1]);
+				}
+			}*/
+
+			replicatorPolicies.authPluginName = authPluginName;
+			replicatorPolicies.authParamName = authParamName;
+			
+			String namespace = validateNamespace(params);
+			admin.namespaces().addExternalReplicator(namespace, replicatorType, replicatorPolicies);
+		}
+    }
+
+    
     @Parameters(commandDescription = "Remove a backlog quota policy from a namespace")
     private class RemoveBacklogQuota extends CliCommand {
         @Parameter(description = "property/cluster/namespace", required = true)
@@ -758,6 +847,8 @@ public class CmdNamespaces extends CmdBase {
 
         jcommander.addCommand("set-clusters", new SetReplicationClusters());
         jcommander.addCommand("get-clusters", new GetReplicationClusters());
+        jcommander.addCommand("add-replicator", new AddReplicatorPolicies());
+        
 
         jcommander.addCommand("get-backlog-quotas", new GetBacklogQuotaMap());
         jcommander.addCommand("set-backlog-quota", new SetBacklogQuota());

@@ -32,4 +32,12 @@ public interface Function<I, O> {
      * @return the output
      */
     O process(I input, Context context) throws Exception;
+    
+	/**
+	 * It gets triggered when function gets assigned first time to worker
+	 * 
+	 * @param context
+	 */
+	default void init(Context context) throws Exception {
+	}
 }

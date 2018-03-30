@@ -28,10 +28,10 @@ pulsarServiceUrl: pulsar://localhost:6650
 pulsarWebServiceUrl: http://localhost:8080
 numFunctionPackageReplicas: 1
 downloadDirectory: /tmp/pulsar_functions
-#threadContainerFactory:
-#  threadGroupName: "Thread Function Container Group"
-processContainerFactory:
-  logDirectory:
+threadContainerFactory:
+  threadGroupName: "Thread Function Container Group"
+#processContainerFactory:
+#  logDirectory:
   
 schedulerClassName: "org.apache.pulsar.functions.worker.scheduler.RoundRobinScheduler"
 functionAssignmentTopicName: "assignments"
