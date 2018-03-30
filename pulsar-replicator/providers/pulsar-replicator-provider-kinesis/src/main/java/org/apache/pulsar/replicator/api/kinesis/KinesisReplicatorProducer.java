@@ -5,14 +5,13 @@ import java.util.concurrent.CompletableFuture;
 
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.replicator.api.ReplicatorProducer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.AWSCredentialsProvider;
 import com.amazonaws.regions.Region;
-import com.amazonaws.regions.Regions;
 import com.amazonaws.services.kinesis.AmazonKinesisClient;
-import com.amazonaws.services.kinesis.model.DescribeStreamRequest;
-import com.amazonaws.services.kinesis.model.DescribeStreamResult;
 import com.amazonaws.services.kinesis.producer.KinesisProducer;
 import com.amazonaws.services.kinesis.producer.KinesisProducerConfiguration;
 import com.amazonaws.services.kinesis.producer.UserRecordResult;
@@ -25,6 +24,7 @@ public class KinesisReplicatorProducer implements ReplicatorProducer {
 
 	private String streamName;
 	private KinesisProducer kinesisProducer;
+	private volatile long partitionKeySequence = 0;
 
 	public KinesisReplicatorProducer(String streamName, Region region, AWSCredentials credentials) {
 		this.streamName = streamName;
@@ -32,15 +32,16 @@ public class KinesisReplicatorProducer implements ReplicatorProducer {
 		AmazonKinesisClient kinesis = new AmazonKinesisClient(credentials);
 		kinesis.setRegion(region);
 
-		/*DescribeStreamRequest describeStreamRequest = new DescribeStreamRequest();
-		describeStreamRequest.setStreamName(streamName);
-		DescribeStreamResult describeStreamResponse = kinesis.describeStream(describeStreamRequest);
-
-		String streamStatus = describeStreamResponse.getStreamDescription().getStreamStatus();
-		if (!"ACTIVE".equals(streamStatus)) {
-			// TODO: throw exception
-			throw new IllegalStateException(streamName + " is not activated");
-		}*/
+		/*
+		 * DescribeStreamRequest describeStreamRequest = new DescribeStreamRequest();
+		 * describeStreamRequest.setStreamName(streamName); DescribeStreamResult
+		 * describeStreamResponse = kinesis.describeStream(describeStreamRequest);
+		 * 
+		 * String streamStatus =
+		 * describeStreamResponse.getStreamDescription().getStreamStatus(); if
+		 * (!"ACTIVE".equals(streamStatus)) { // TODO: throw exception throw new
+		 * IllegalStateException(streamName + " is not activated"); }
+		 */
 
 		KinesisProducerConfiguration config = new KinesisProducerConfiguration();
 		config.setRegion(region.getName());
@@ -56,38 +57,59 @@ public class KinesisReplicatorProducer implements ReplicatorProducer {
 			}
 		};
 		config.setCredentialsProvider(credentialProvider);
+		config.setAggregationEnabled(true);
+		config.setMetricsLevel("none");
+		config.setLogLevel("info");
+		config.setFailIfThrottled(true);
 		this.kinesisProducer = new KinesisProducer(config);
+		log.info("Kinesis producer created on {}", streamName);
 
 	}
 
 	@Override
 	public CompletableFuture<Void> send(Message message) {
-		System.out.println("****** Sending with kinesis producer: ****" + new String(message.getData()));
+		log.info("sending message replicator {}-{}", this.streamName, message.getData().length);
 		CompletableFuture<Void> future = new CompletableFuture<>();
-		ListenableFuture<UserRecordResult> addRecordResult = kinesisProducer.addUserRecord(this.streamName,
-				"partitioned-key", ByteBuffer.wrap(message.getData()));
-		Futures.addCallback(addRecordResult, new FutureCallback<UserRecordResult>() {
-			@Override
-			public void onSuccess(UserRecordResult result) {
-				System.out.println("successfully sent ="+new String(message.getData()));
-				future.complete(null);
+		try {
+			ListenableFuture<UserRecordResult> addRecordResult = kinesisProducer.addUserRecord(this.streamName,
+					Long.toString(partitionKeySequence++), ByteBuffer.wrap(message.getData()));
+			
+			if(partitionKeySequence<-1) {
+				log.info("sent a kinesis message part-key{} - {}", partitionKeySequence, addRecordResult.get());	
+			} else {
+				log.info("sent a kinesis message part-key{} - {}", partitionKeySequence);//, addRecordResult.get());	
 			}
-			@Override
-			public void onFailure(Throwable ex) {
-				System.out.println("failed sent ="+new String(message.getData()));
-				future.completeExceptionally(ex);
-			}
-		}, MoreExecutors.sameThreadExecutor());
+			Futures.addCallback(addRecordResult, new FutureCallback<UserRecordResult>() {
+				@Override
+				public void onSuccess(UserRecordResult result) {
+					log.info("successfully sent = {} size", message.getData().length);
+					future.complete(null);
+				}
+
+				@Override
+				public void onFailure(Throwable ex) {
+					log.info("Failed to sent = {} size", message.getData().length);
+					future.completeExceptionally(ex);
+				}
+			}, MoreExecutors.sameThreadExecutor());
+		} catch (Exception e) {
+			e.printStackTrace();
+			log.info("Failed to sent = {} size", message.getData().length, e);
+			future.completeExceptionally(e);
+		}
+
 		return future;
 	}
 
 	@Override
 	public void close() {
-		System.out.println("****** closing replicator producer for *****"+ streamName);
+		System.out.println("****** closing replicator producer for *****" + streamName);
+		log.info("closing replicator {}", streamName);
 		if (kinesisProducer != null) {
 			kinesisProducer.flush();
 			kinesisProducer.destroy();
 		}
 	}
-	
+
+	private static final Logger log = LoggerFactory.getLogger(KinesisReplicatorProducer.class);
 }

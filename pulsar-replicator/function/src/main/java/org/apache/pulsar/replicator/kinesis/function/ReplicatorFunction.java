@@ -62,7 +62,7 @@ public class ReplicatorFunction implements Function<String, Boolean> {
 	@Override
 	public void init(Context context) throws Exception {
 		System.out.println("init triggered " + context);
-		startReplicator(context);
+		process(Action.start.toString(), context);
 	}
 
 	/**
