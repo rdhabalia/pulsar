@@ -1,49 +1,77 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
 package org.apache.pulsar.replicator.api.kinesis;
+
+import static com.google.common.util.concurrent.Futures.addCallback;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.replicator.api.ReplicatorProducer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.AWSCredentialsProvider;
 import com.amazonaws.regions.Region;
-import com.amazonaws.regions.Regions;
-import com.amazonaws.services.kinesis.AmazonKinesisClient;
-import com.amazonaws.services.kinesis.model.DescribeStreamRequest;
-import com.amazonaws.services.kinesis.model.DescribeStreamResult;
 import com.amazonaws.services.kinesis.producer.KinesisProducer;
 import com.amazonaws.services.kinesis.producer.KinesisProducerConfiguration;
 import com.amazonaws.services.kinesis.producer.UserRecordResult;
 import com.google.common.util.concurrent.FutureCallback;
-import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.MoreExecutors;
 
+import io.netty.util.Recycler;
+import io.netty.util.Recycler.Handle;
+import io.netty.util.concurrent.DefaultThreadFactory;
+
+/**
+ * Kinesis producer that reads pulsar message and publishes to configured
+ * kinesis stream.
+ *
+ */
 public class KinesisReplicatorProducer implements ReplicatorProducer {
 
+	// TODO: document it
+	public static final String KINESIS_PARTITIONED_KEY = "kinesis.partitioned.key";
+	private String topicName;
 	private String streamName;
 	private KinesisProducer kinesisProducer;
+	private final ScheduledExecutorService executor = Executors.newScheduledThreadPool(20,
+			new DefaultThreadFactory("kinesis-replicator"));
 
-	public KinesisReplicatorProducer(String streamName, Region region, AWSCredentials credentials) {
+	public KinesisReplicatorProducer(String topicName, String streamName, Region region, AWSCredentials credentials) {
+		this.topicName = topicName;
 		this.streamName = streamName;
-
-		AmazonKinesisClient kinesis = new AmazonKinesisClient(credentials);
-		kinesis.setRegion(region);
-
-		/*DescribeStreamRequest describeStreamRequest = new DescribeStreamRequest();
-		describeStreamRequest.setStreamName(streamName);
-		DescribeStreamResult describeStreamResponse = kinesis.describeStream(describeStreamRequest);
-
-		String streamStatus = describeStreamResponse.getStreamDescription().getStreamStatus();
-		if (!"ACTIVE".equals(streamStatus)) {
-			// TODO: throw exception
-			throw new IllegalStateException(streamName + " is not activated");
-		}*/
 
 		KinesisProducerConfiguration config = new KinesisProducerConfiguration();
 		config.setRegion(region.getName());
+		config.setMetricsLevel("none");
+		config.setLogLevel("info");
+		config.setFailIfThrottled(true);
+		// to maintain message-ordering: we are sending message sequentially which
+		// requires aggregation disabled
+		config.setAggregationEnabled(false);
 		AWSCredentialsProvider credentialProvider = new AWSCredentialsProvider() {
 			@Override
 			public AWSCredentials getCredentials() {
@@ -52,42 +80,87 @@ public class KinesisReplicatorProducer implements ReplicatorProducer {
 
 			@Override
 			public void refresh() {
-				// TODO : no-op
+				// No-op
 			}
 		};
 		config.setCredentialsProvider(credentialProvider);
 		this.kinesisProducer = new KinesisProducer(config);
-
 	}
 
 	@Override
 	public CompletableFuture<Void> send(Message message) {
-		System.out.println("****** Sending with kinesis producer: ****" + new String(message.getData()));
+		if (log.isDebugEnabled()) {
+			log.debug("[{}] Sending message to stream {} with size {}", this.topicName, this.streamName,
+					message.getData().length);
+		}
 		CompletableFuture<Void> future = new CompletableFuture<>();
+		final String partitionedKey = message.hasProperty(KINESIS_PARTITIONED_KEY)
+				? message.getProperty(KINESIS_PARTITIONED_KEY)
+				: Long.toString(System.currentTimeMillis());
 		ListenableFuture<UserRecordResult> addRecordResult = kinesisProducer.addUserRecord(this.streamName,
-				"partitioned-key", ByteBuffer.wrap(message.getData()));
-		Futures.addCallback(addRecordResult, new FutureCallback<UserRecordResult>() {
-			@Override
-			public void onSuccess(UserRecordResult result) {
-				System.out.println("successfully sent ="+new String(message.getData()));
-				future.complete(null);
-			}
-			@Override
-			public void onFailure(Throwable ex) {
-				System.out.println("failed sent ="+new String(message.getData()));
-				future.completeExceptionally(ex);
-			}
-		}, MoreExecutors.sameThreadExecutor());
+				partitionedKey, ByteBuffer.wrap(message.getData()));
+		addCallback(addRecordResult, ProducerSendCallback.create(this.streamName, future, System.nanoTime()),
+				directExecutor());
 		return future;
 	}
 
 	@Override
 	public void close() {
-		System.out.println("****** closing replicator producer for *****"+ streamName);
 		if (kinesisProducer != null) {
 			kinesisProducer.flush();
 			kinesisProducer.destroy();
 		}
 	}
-	
+
+	private static final class ProducerSendCallback implements FutureCallback<UserRecordResult> {
+
+		private CompletableFuture<Void> result;
+		private String streamName;
+		private final Handle<ProducerSendCallback> recyclerHandle;
+		private long startTime = 0;
+
+		private ProducerSendCallback(Handle<ProducerSendCallback> recyclerHandle) {
+			this.recyclerHandle = recyclerHandle;
+		}
+
+		static ProducerSendCallback create(String streamName, CompletableFuture<Void> result, long startTime) {
+			ProducerSendCallback sendCallback = RECYCLER.get();
+			sendCallback.result = result;
+			sendCallback.streamName = streamName;
+			sendCallback.startTime = startTime;
+			return sendCallback;
+		}
+
+		private void recycle() {
+			result = null;
+			streamName = null;
+			recyclerHandle.recycle(this);
+		}
+
+		private static final Recycler<ProducerSendCallback> RECYCLER = new Recycler<ProducerSendCallback>() {
+			@Override
+			protected ProducerSendCallback newObject(Handle<ProducerSendCallback> handle) {
+				return new ProducerSendCallback(handle);
+			}
+		};
+
+		@Override
+		public void onSuccess(UserRecordResult result) {
+			if (log.isDebugEnabled()) {
+				log.debug("Successfully published message for replicator of {}-{} with latency", this.streamName,
+						result.getShardId(), TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - startTime)));
+			}
+			this.result.complete(null);
+			recycle();
+		}
+
+		@Override
+		public void onFailure(Throwable exception) {
+			this.result.completeExceptionally(exception);
+			log.error("Failed to published message for replicator of {} ", this.streamName);
+			recycle();
+		}
+	}
+
+	private static final Logger log = LoggerFactory.getLogger(KinesisReplicatorProducer.class);
 }

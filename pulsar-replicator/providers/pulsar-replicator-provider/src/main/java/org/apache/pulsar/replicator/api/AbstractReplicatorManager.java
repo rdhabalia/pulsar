@@ -1,132 +1,163 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
 package org.apache.pulsar.replicator.api;
 
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.pulsar.broker.cache.ConfigurationCacheService.POLICIES;
-import static org.apache.pulsar.zookeeper.ZooKeeperCache.cacheTimeOutInSec;
 
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Function;
 
+import org.apache.bookkeeper.common.util.OrderedExecutor;
 import org.apache.bookkeeper.common.util.OrderedScheduler;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.impl.PulsarClientImpl;
-import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.Policies;
-import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
 import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
-import org.apache.pulsar.zookeeper.GlobalZooKeeperCache;
 import org.apache.pulsar.zookeeper.ZooKeeperClientFactory;
-import org.apache.pulsar.zookeeper.ZooKeeperDataCache;
+import org.apache.pulsar.zookeeper.ZooKeeperClientFactory.SessionType;
 import org.apache.pulsar.zookeeper.ZookeeperBkClientFactoryImpl;
-import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.KeeperException.NoNodeException;
+import org.apache.zookeeper.ZooKeeper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Joiner;
+import com.google.common.collect.Maps;
 
-import io.netty.util.concurrent.DefaultThreadFactory;
-
+/**
+ * Base class for ReplicatorManager : manages pulsar consumer to consume pulsar
+ * messages and push to appropriate replicator producer to publish them to
+ * targeted system.
+ * 
+ * 
+ *
+ */
 public abstract class AbstractReplicatorManager
 		implements ReplicatorManager, Function<Throwable, Void>, java.util.function.Consumer<Message> {
 
-	protected ReplicatorProducer producer;
+	private static final Map<String, PulsarClientImpl> pulsarClients = Maps.newConcurrentMap();
 	protected PulsarClientImpl pulsarClient;
+	protected ReplicatorProducer producer;
 	protected String topicName;
 	protected ReplicatorConfig config;
 
 	private Consumer inputConsumer;
-	private ZooKeeperClientFactory zkClientFactory = null;
-	private ZooKeeperDataCache<Policies> policiesCache;
-	private OrderedScheduler orderedExecutor;
-	private ScheduledExecutorService cacheExecutor;
-	private GlobalZooKeeperCache globalZkCache;
+	protected static final AtomicReferenceFieldUpdater<AbstractReplicatorManager, State> STATE_UPDATER = AtomicReferenceFieldUpdater
+			.newUpdater(AbstractReplicatorManager.class, State.class, "state");
+	private volatile State state = State.Stopped;
 
-	// TODO: this should come from the user-config
 	public static final String replPrefix = "pulsar";
 	protected static final long READ_DELAY_BACKOFF_MS = 100;
 	private static final int ZK_SESSION_TIME_OUT_MS = 30_000;
 	private static final int MAX_ACK_RETRY = 10;
 
-	// TODO:
-	// protected String state;
+	private enum State {
+		Stopped, Starting, Started;
+	}
+
+	/**
+	 * Initialize replicator producer resource and start message replication
+	 * 
+	 * @param topicName
+	 *            Pulsar topic-name from which it reads message and sends to
+	 *            targeted system
+	 * @param replicatorPolicies
+	 *            Replicator policies to initialize replicator produecr
+	 * @throws Exception
+	 */
+	protected abstract void startProducer(String topicName, ReplicatorPolicies replicatorPolicies) throws Exception;
+
+	/**
+	 * Stops replicator producer
+	 * 
+	 * @throws Exception
+	 */
+	protected abstract void stopProducer() throws Exception;
 
 	@Override
 	public void start(ReplicatorConfig config) throws Exception {
 
-		this.config = config;
-		this.topicName = config.getTopicName();
-
-		this.orderedExecutor = OrderedScheduler.newSchedulerBuilder().numThreads(1).name("pulsar-replicator-ordered")
-				.build();
-		this.cacheExecutor = Executors.newScheduledThreadPool(1,
-				new DefaultThreadFactory("replicator-zk-cache-callback"));
-		this.globalZkCache = new GlobalZooKeeperCache(getZooKeeperClientFactory(), ZK_SESSION_TIME_OUT_MS,
-				config.getZkServiceUrl(), orderedExecutor, this.cacheExecutor);
-		globalZkCache.start();
-
-		this.policiesCache = new ZooKeeperDataCache<Policies>(globalZkCache) {
-			@Override
-			public Policies deserialize(String path, byte[] content) throws Exception {
-				return ObjectMapperFactory.getThreadLocal().readValue(content, Policies.class);
-			}
-		};
-		this.policiesCache.registerListener((path, data, stat) -> {
-			// TODO: restart kinesis producer if repl properties have been changed
-		});
-
-		pulsarClient = (PulsarClientImpl) PulsarClient.builder().serviceUrl(config.getBrokerServiceUrl())
-				.statsInterval(0, TimeUnit.SECONDS).build();
-		String subscriberName = String.format("%s.%s", replPrefix, config.getReplicatorType().toString());
-		inputConsumer = pulsarClient.newConsumer().topic(topicName).subscriptionName(subscriberName).subscribe();
-		ReplicatorPolicies replicatorPolicies = getReplicatorPolicies(topicName);
-		try {
-			startProducer(this.topicName, replicatorPolicies);
-		} catch (Exception e) {
-			// cleanup resources
-			close();
-			throw e;
+		if (!STATE_UPDATER.compareAndSet(this, State.Stopped, State.Starting)) {
+			log.info(" Replicator-manager {} topic {} is already ", getType(), topicName, state);
+			return;
 		}
 
+		try {
+			this.config = config;
+			this.topicName = config.getTopicName();
+			final String zkPolicyPath = path(POLICIES, TopicName.get(this.topicName).getNamespaceObject().toString());
+
+			pulsarClient = pulsarClients.computeIfAbsent(config.getBrokerServiceUrl(), (url) -> {
+				try {
+					return ((PulsarClientImpl) PulsarClient.builder().serviceUrl(config.getBrokerServiceUrl())
+							.statsInterval(0, TimeUnit.SECONDS).build());
+				} catch (PulsarClientException e) {
+					log.error("Failed to create pulsar-client for url {}", url, e);
+					return null;
+				}
+			});
+
+			inputConsumer = pulsarClient.newConsumer().topic(topicName)
+					.subscriptionName(String.format("%s.%s", replPrefix, getType().toString())).receiverQueueSize(10)
+					.subscribe();
+
+			startProducer(this.topicName, getReplicatorPolicies(zkPolicyPath));
+
+			STATE_UPDATER.set(this, State.Started);
+
+		} catch (Exception e) {
+			// cleanup resources
+			stop();
+			throw e;
+		}
 	}
 
 	@Override
-	public void close() throws Exception {
+	public void stop() throws Exception {
 		if (this.inputConsumer != null) {
 			this.inputConsumer.close();
 		}
 		if (this.producer != null) {
 			this.producer.close();
 		}
-		if (this.pulsarClient != null) {
-			this.pulsarClient.close();
-		}
-		if (this.globalZkCache != null) {
-			this.globalZkCache.close();
-		}
-		if (this.orderedExecutor != null) {
-			this.orderedExecutor.shutdown();
-		}
-		if (this.cacheExecutor != null) {
-			this.cacheExecutor.shutdown();
-		}
+		STATE_UPDATER.set(this, State.Stopped);
 	}
 
-	protected abstract void startProducer(String topicName, ReplicatorPolicies replicatorPolicies) throws Exception;
-
+	@SuppressWarnings("rawtypes")
 	@Override
 	public void accept(Message message) {
 		producer.send(message).thenAccept((res) -> {
+			if (log.isDebugEnabled()) {
+				log.debug("Successfully published message for replicator of {} ", this.topicName);
+			}
 			acknowledgeMessageWithRetry(message, 0);
 			readMessage();
 		}).exceptionally(ex -> {
-			// TODO: log exception and retry with backoff
-			System.out.println("failed  =" + new String(message.getData()) + "  and retry =" + READ_DELAY_BACKOFF_MS);
+			log.error("Failed to publish on replicator of {} retry after {}", this.topicName, READ_DELAY_BACKOFF_MS);
 			pulsarClient.timer().newTimeout(timeout -> {
 				accept(message);
 			}, READ_DELAY_BACKOFF_MS, TimeUnit.MILLISECONDS);
@@ -134,60 +165,78 @@ public abstract class AbstractReplicatorManager
 		});
 	}
 
+	@SuppressWarnings("unchecked")
 	protected void readMessage() {
+		if (state == State.Stopped) {
+			log.info("[{}} replicator {} is already stopped", this.topicName, getType());
+			return;
+		}
 		inputConsumer.receiveAsync().thenAccept(this).exceptionally(this);
 	}
 
+	@SuppressWarnings({ "rawtypes", "unchecked" })
 	private void acknowledgeMessageWithRetry(Message message, int retry) {
-
+		if (retry > MAX_ACK_RETRY || state == State.Stopped) {
+			log.error("[{}] Failed to ack for {} after {} retry, state {} ", this.topicName, message.getMessageId(),
+					MAX_ACK_RETRY, state);
+			return;
+		}
 		try {
-			if (retry > MAX_ACK_RETRY) {
-				return;
-			}
 			inputConsumer.acknowledge(message);
 		} catch (PulsarClientException e) {
-			// TODO: log
+			log.error("[{}] Failed to ack for {}, will retry after ms", this.topicName, message.getMessageId(),
+					READ_DELAY_BACKOFF_MS);
 			pulsarClient.timer().newTimeout(timeout -> {
 				acknowledgeMessageWithRetry(message, retry + 1);
 			}, READ_DELAY_BACKOFF_MS, TimeUnit.MILLISECONDS);
 		}
-
 	}
 
 	@Override
 	public Void apply(Throwable t) {
-		// TODO log and retry with backoff
+		log.error("[{}} Failed to read message, will retry after {} ms", this.topicName, READ_DELAY_BACKOFF_MS);
 		pulsarClient.timer().newTimeout(timeout -> readMessage(), READ_DELAY_BACKOFF_MS, TimeUnit.MILLISECONDS);
 		return null;
 	}
 
-	private ReplicatorPolicies getReplicatorPolicies(String topicName) {
-		final NamespaceName namespace = TopicName.get(this.topicName).getNamespaceObject();
-		final String path = path(POLICIES, namespace.toString());
+	private ReplicatorPolicies getReplicatorPolicies(String zkPolicyPath) throws Exception {
+		OrderedScheduler orderedExecutor = null;
+		ZooKeeper zk = null;
+		ReplicatorPolicies replicatorPolicies = null;
 		try {
-			Policies policies = this.policiesCache.getAsync(path).get(cacheTimeOutInSec, SECONDS)
-					.orElseThrow(() -> new KeeperException.NoNodeException());
-			if (policies.replicatorPolicies.containsKey(ReplicatorType.Kinesis)) {
-				return policies.replicatorPolicies.get(ReplicatorType.Kinesis);
-			} else {
-				// TODO: throw exception
+			orderedExecutor = OrderedScheduler.newSchedulerBuilder().numThreads(1).name("pulsar-replicator-ordered")
+					.build();
+			zk = getZooKeeperClient(config.getZkServiceUrl(), orderedExecutor);
+			replicatorPolicies = getReplicatorPolicies(zk, zkPolicyPath);
+		} finally {
+			if (orderedExecutor != null) {
+				orderedExecutor.shutdown();
 			}
-		} catch (NoNodeException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (Exception e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+			if (zk != null) {
+				zk.close();
+			}
 		}
-		return null;
+		return replicatorPolicies;
 	}
 
-	private ZooKeeperClientFactory getZooKeeperClientFactory() {
-		if (zkClientFactory == null) {
-			zkClientFactory = new ZookeeperBkClientFactoryImpl(orderedExecutor);
+	private ReplicatorPolicies getReplicatorPolicies(ZooKeeper zk, String zkPolicyPath) throws Exception {
+		try {
+			byte[] data = zk.getData(zkPolicyPath, false, null);
+			Policies policies = ObjectMapperFactory.getThreadLocal().readValue(data, Policies.class);
+			if (policies != null && policies.replicatorPolicies.containsKey(getType())) {
+				return policies.replicatorPolicies.get(getType());
+			} else {
+				log.error("[{}] couldn't find replicator policies for {}", this.topicName, getType());
+				throw new IllegalStateException(
+						"couldn't find replicator policies for " + this.topicName + ", " + getType());
+			}
+		} catch (NoNodeException e) {
+			log.error("[{}] couldn't find policies for {}", this.topicName, getType());
+			throw e;
+		} catch (Exception e) {
+			log.error("[{}] Failed to find policies for {}", this.topicName, getType());
+			throw e;
 		}
-		// Return default factory
-		return zkClientFactory;
 	}
 
 	public static String path(String... parts) {
@@ -197,4 +246,17 @@ public abstract class AbstractReplicatorManager
 		return sb.toString();
 	}
 
+	private ZooKeeper getZooKeeperClient(String zkServiceUrl, OrderedExecutor executor) throws Exception {
+		ZooKeeperClientFactory zkf = new ZookeeperBkClientFactoryImpl(executor);
+		CompletableFuture<ZooKeeper> zkFuture = zkf.create(zkServiceUrl, SessionType.AllowReadOnly,
+				(int) ZK_SESSION_TIME_OUT_MS);
+		try {
+			return zkFuture.get(ZK_SESSION_TIME_OUT_MS, TimeUnit.MILLISECONDS);
+		} catch (Exception e) {
+			log.error("[{}] Failed to start zk on {} ", this.topicName, zkServiceUrl, e);
+			throw e;
+		}
+	}
+
+	private static final Logger log = LoggerFactory.getLogger(AbstractReplicatorManager.class);
 }

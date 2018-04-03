@@ -18,7 +18,6 @@
  */
 package org.apache.pulsar.replicator.api;
 
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
@@ -34,18 +33,29 @@ public interface ReplicatorProvider {
 	public ReplicatorType getType();
 
 	/**
-	 * Validates topic-properties and credential-properties which must be compliance
-	 * with This method will be called by broker to validate
-	 * replicator-configuration while onboarding replication configuration.
+	 * 
+	 * Replicator-provider will require correct properties and credential to
+	 * initialize replicator-producers so, this method validates topic-properties
+	 * and credential-properties.
+	 * 
+	 * @param namespace
+	 *            namespace name
+	 * @param ReplicatorPolicies
+	 *            ReplicatorPolicies that contains replication metadata
 	 * 
 	 * @throws IllegalArgumentException
 	 */
-	public void validateProperties(Map<String, String> topicProperties, Map<String, String> credentialProperties)
+	public void validateProperties(String namespace, ReplicatorPolicies replicatorPolicies)
 			throws IllegalArgumentException;
 
 	/**
+	 * 
 	 * Create Replicator-producer async which will publish messages to targeted
 	 * replication-system.
+	 * 
+	 * @param topic
+	 * @param replicatorPolicies
+	 * @return
 	 */
 	public CompletableFuture<ReplicatorProducer> createProducerAsync(final String topic,
 			final ReplicatorPolicies replicatorPolicies);

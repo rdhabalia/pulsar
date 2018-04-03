@@ -202,7 +202,7 @@ public class NamespaceBundleFactory implements ZooKeeperCacheListener<LocalPolic
      * @throws Exception
      */
     public Pair<NamespaceBundles, List<NamespaceBundle>> splitBundles(NamespaceBundle targetBundle, int numBundles)
-            throws Exception {
+             {
         checkArgument(canSplitBundle(targetBundle), "%s bundle can't be split further", targetBundle);
         checkNotNull(targetBundle, "can't split null bundle");
         checkNotNull(targetBundle.getNamespaceObject(), "namespace must be present");

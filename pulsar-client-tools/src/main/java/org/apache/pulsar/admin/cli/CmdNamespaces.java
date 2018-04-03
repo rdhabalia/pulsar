@@ -513,37 +513,7 @@ public class CmdNamespaces extends CmdBase {
 				replicatorPolicies.topicNameMapping = new Gson().fromJson(topicNameMapping, new TypeToken<Map<String, String>>(){}.getType());
 			}
 			
-			/*if (StringUtils.isNotBlank(replicationProperties)) {
-				String[] properties = replicationProperties.split(",");
-				for (String property : properties) {
-					if (!property.contains("=")) {
-						throw new IllegalArgumentException("Property key/value must be separated with = " + property);
-					}
-					String[] keyValue = property.split("=");
-					if (replicatorPolicies.replicationProperties == null) {
-						replicatorPolicies.replicationProperties = Maps.newHashMap();
-					}
-					replicatorPolicies.replicationProperties.put(keyValue[0], keyValue[1]);
-				}
-			}
-
-			if (StringUtils.isNotBlank(topicNameMapping)) {
-				String[] topics = topicNameMapping.split(",");
-				for (String topic : topics) {
-					if (!topic.contains("=")) {
-						throw new IllegalArgumentException(
-								"topicNameMapping key/value must be separated with = " + topic);
-					}
-					String[] keyValue = topic.split("=");
-					if (replicatorPolicies.topicNameMapping == null) {
-						replicatorPolicies.topicNameMapping = Maps.newHashMap();
-					}
-					replicatorPolicies.topicNameMapping.put(keyValue[0], keyValue[1]);
-				}
-			}*/
-
 			replicatorPolicies.authPluginName = authPluginName;
-			replicatorPolicies.authParamName = authParamName;
 			
 			String namespace = validateNamespace(params);
 			admin.namespaces().addExternalReplicator(namespace, replicatorType, replicatorPolicies);

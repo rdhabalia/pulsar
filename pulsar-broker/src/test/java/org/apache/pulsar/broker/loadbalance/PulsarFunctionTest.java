@@ -336,7 +336,7 @@ public class PulsarFunctionTest {
 		userConfig.put(ReplicatorFunction.CONF_REPLICATOR_JAR_NAME, kinesisReplicatorFile.getAbsolutePath());
 		userConfig.put(ReplicatorFunction.CONF_REPLICATOR_MANAGER_CLASS_NAME, KinesisReplicatorManager.class.getName());
 		Context context = new ContextImpl(userConfig);
-		function.process(ReplicatorFunction.Action.start.toString(), context);
+		function.process(ReplicatorFunction.Action.Start.toString(), context);
 		
 		ProducerBuilder<byte[]> producerBuilder = pulsarClient.newProducer().topic(replTopicName);
 
