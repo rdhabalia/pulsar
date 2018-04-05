@@ -148,6 +148,28 @@
     </dependency>
 
     <!-- functions related dependencies (end) -->
+    
+    <!-- pulsar replicator (begin) -->
+    
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>pulsar-replicator-provider-kinesis</artifactId>
+      <version>${project.version}</version>
+      <exclusions>
+      	<exclusion>
+      		<groupId>*</groupId>
+      		<artifactId>*</artifactId>
+      	</exclusion>
+      </exclusions>
+    </dependency>
+    
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>pulsar-replicator-function</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    
+    <!-- pulsar replicator (end) -->
 
     <dependency>
       <groupId>org.eclipse.jetty</groupId>
@@ -275,28 +297,6 @@
       <version>${project.version}</version>
       <scope>test</scope>
     </dependency>
-    
-    <!-- pulsar replicator test -->
-    
-    <dependency>
-      <groupId>${project.groupId}</groupId>
-      <artifactId>pulsar-replicator-provider-kinesis</artifactId>
-      <version>${project.version}</version>
-      <scope>test</scope>
-    </dependency>
-    
-     <dependency>
-      <groupId>${project.groupId}</groupId>
-      <artifactId>pulsar-replicator-function</artifactId>
-      <version>${project.version}</version>
-      <scope>test</scope>
-    </dependency>
-    
-    <dependency>
-	  <groupId>yahoo.yinst.yjava_yca</groupId>
-	  <artifactId>yjava_yca</artifactId>
-	  <version>0.33.93</version><!-- the latest available version for RHEL-6.x -->
-	</dependency>
     
   </dependencies>
 

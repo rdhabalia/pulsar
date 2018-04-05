@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.replicator.api;
 
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
@@ -33,7 +34,6 @@ public interface ReplicatorProvider {
 	public ReplicatorType getType();
 
 	/**
-	 * 
 	 * Replicator-provider will require correct properties and credential to
 	 * initialize replicator-producers so, this method validates topic-properties
 	 * and credential-properties.
@@ -42,11 +42,13 @@ public interface ReplicatorProvider {
 	 *            namespace name
 	 * @param ReplicatorPolicies
 	 *            ReplicatorPolicies that contains replication metadata
+	 * @param authData
+	 *            AuthData requires replicator to connect with trageted system
 	 * 
 	 * @throws IllegalArgumentException
 	 */
-	public void validateProperties(String namespace, ReplicatorPolicies replicatorPolicies)
-			throws IllegalArgumentException;
+	public void validateProperties(String namespace, ReplicatorPolicies replicatorPolicies,
+			Map<String, String> authData) throws IllegalArgumentException;
 
 	/**
 	 * 

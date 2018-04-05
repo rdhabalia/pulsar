@@ -49,24 +49,27 @@ import org.apache.pulsar.broker.service.persistent.PersistentReplicator;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.broker.web.RestException;
 import org.apache.pulsar.client.admin.PulsarAdminException;
-import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.naming.NamespaceBundleFactory;
 import org.apache.pulsar.common.naming.NamespaceBundles;
 import org.apache.pulsar.common.naming.NamespaceName;
+import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.AuthAction;
 import org.apache.pulsar.common.policies.data.BacklogQuota;
 import org.apache.pulsar.common.policies.data.BacklogQuota.BacklogQuotaType;
-import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
 import org.apache.pulsar.common.policies.data.BundlesData;
 import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.policies.data.DispatchRate;
 import org.apache.pulsar.common.policies.data.PersistencePolicies;
 import org.apache.pulsar.common.policies.data.Policies;
+import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
 import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.SubscriptionAuthMode;
 import org.apache.pulsar.common.util.FutureUtil;
+import org.apache.pulsar.replicator.api.kinesis.KinesisReplicatorProvider;
+import org.apache.pulsar.replicator.auth.AuthParamKeyStore;
+import org.apache.pulsar.replicator.auth.AuthParamKeyStoreFactory;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.data.Stat;
 import org.slf4j.Logger;
@@ -417,15 +420,18 @@ public abstract class NamespacesBase extends AdminResource {
         }
     }
 
-	protected void internalAddExternalReplicatorPolicies(ReplicatorType replicatorType,
-			ReplicatorPolicies replicatorPolicies) {
+	protected void internalReplicatorPolicies(ReplicatorType replicatorType,
+			ReplicatorPolicies replicatorPolicies, Map<String,String> authParamData) {
 		validateAdminAccessOnProperty(namespaceName.getProperty());
 		validatePoliciesReadOnlyAccess();
 
-		// TODO: validate : replicatorType and replicatorPolicies
 		if (!namespaceName.isGlobal()) {
 			throw new RestException(Status.PRECONDITION_FAILED, "Cannot set replication on a non-global namespace");
 		}
+		
+		validateReplicatorPolicies(namespaceName.toString(), replicatorType, replicatorPolicies, authParamData);
+		
+		storeAuthParamData(namespaceName.toString(), replicatorType, replicatorPolicies, authParamData);
 
 		Entry<Policies, Stat> policiesNode = null;
 
@@ -453,7 +459,6 @@ public abstract class NamespacesBase extends AdminResource {
 			log.warn(
 					"[{}] Failed to update the replication clusters on namespace {} expected policy node version={} : concurrent modification",
 					clientAppId(), namespaceName, policiesNode.getValue().getVersion());
-
 			throw new RestException(Status.CONFLICT, "Concurrent modification");
 		} catch (Exception e) {
 			log.error("[{}] Failed to update the replication clusters on namespace {}", clientAppId(), namespaceName,
@@ -1415,5 +1420,36 @@ public abstract class NamespacesBase extends AdminResource {
         }
     }
 
+	private void validateReplicatorPolicies(String namespace, ReplicatorType replicatorType,
+			ReplicatorPolicies replicatorPolicies, Map<String, String> authParamData) {
+		switch (replicatorType) {
+		case Kinesis:
+			try {
+				KinesisReplicatorProvider.instance().validateProperties(namespace, replicatorPolicies, authParamData);
+			} catch (IllegalArgumentException e) {
+				throw new RestException(Status.BAD_REQUEST,
+						"Validation failed on kinesis properties " + e.getMessage());
+			}
+			break;
+		default:
+			throw new RestException(Status.BAD_REQUEST, "Invalid replicator type");
+		}
+	}
+
+	private void storeAuthParamData(String namespace, ReplicatorType replicatorType,
+			ReplicatorPolicies replicatorPolicies, Map<String, String> authParamData) {
+		try {
+			AuthParamKeyStore authParamStore = AuthParamKeyStoreFactory
+					.create(replicatorPolicies.authParamStorePluginName);
+			authParamStore.storeAuthData(namespace, replicatorPolicies.replicationProperties, authParamData);
+		} catch (IllegalArgumentException e) {
+			throw new RestException(Status.BAD_REQUEST,
+					"Invalid AuthParamKeyStore " + replicatorPolicies.authParamStorePluginName);
+		} catch (Exception e) {
+			log.error("Failed to store auth-data to authDataStore {}", replicatorPolicies.authParamStorePluginName, e);
+			throw new RestException(e);
+		}
+	}
+	
     private static final Logger log = LoggerFactory.getLogger(NamespacesBase.class);
 }

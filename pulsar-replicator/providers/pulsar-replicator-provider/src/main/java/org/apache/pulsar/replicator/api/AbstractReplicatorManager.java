@@ -150,6 +150,10 @@ public abstract class AbstractReplicatorManager
 	@SuppressWarnings("rawtypes")
 	@Override
 	public void accept(Message message) {
+		if (state == State.Stopped) {
+			log.info("[{}} replicator {} is already stopped so, can't send messages", this.topicName, getType());
+			return;
+		}
 		producer.send(message).thenAccept((res) -> {
 			if (log.isDebugEnabled()) {
 				log.debug("Successfully published message for replicator of {} ", this.topicName);
@@ -168,7 +172,7 @@ public abstract class AbstractReplicatorManager
 	@SuppressWarnings("unchecked")
 	protected void readMessage() {
 		if (state == State.Stopped) {
-			log.info("[{}} replicator {} is already stopped", this.topicName, getType());
+			log.info("[{}} replicator {} is already stopped so, can't read messages", this.topicName, getType());
 			return;
 		}
 		inputConsumer.receiveAsync().thenAccept(this).exceptionally(this);
@@ -176,6 +180,10 @@ public abstract class AbstractReplicatorManager
 
 	@SuppressWarnings({ "rawtypes", "unchecked" })
 	private void acknowledgeMessageWithRetry(Message message, int retry) {
+		if (state == State.Stopped) {
+			log.info("[{}} replicator {} is already stopped so, can't ack", this.topicName, getType());
+			return;
+		}
 		if (retry > MAX_ACK_RETRY || state == State.Stopped) {
 			log.error("[{}] Failed to ack for {} after {} retry, state {} ", this.topicName, message.getMessageId(),
 					MAX_ACK_RETRY, state);
@@ -194,6 +202,10 @@ public abstract class AbstractReplicatorManager
 
 	@Override
 	public Void apply(Throwable t) {
+		if (state == State.Stopped) {
+			log.info("[{}} replicator {} is already stopped so, can't retry", this.topicName, getType());
+			return null;
+		}
 		log.error("[{}} Failed to read message, will retry after {} ms", this.topicName, READ_DELAY_BACKOFF_MS);
 		pulsarClient.timer().newTimeout(timeout -> readMessage(), READ_DELAY_BACKOFF_MS, TimeUnit.MILLISECONDS);
 		return null;

@@ -32,10 +32,10 @@ import org.apache.pulsar.common.policies.data.BundlesData;
 import org.apache.pulsar.common.policies.data.DispatchRate;
 import org.apache.pulsar.common.policies.data.PersistencePolicies;
 import org.apache.pulsar.common.policies.data.Policies;
-import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
+import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
+import org.apache.pulsar.common.policies.data.ReplicatorPoliciesRequest;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.SubscriptionAuthMode;
-import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
 
 /**
  * Admin interface for namespaces management
@@ -607,12 +607,12 @@ public interface Namespaces {
 	 *            Namespace name
 	 * @param replicatorType
 	 *            type of external replicator
-	 * @param replicatorPolicies
-	 *            replicator policies
+	 * @param ReplicatorPoliciesRequest
+	 *            replicator policies request
 	 * @throws PulsarAdminException
 	 */
 	void addExternalReplicator(String namespace, ReplicatorType replicatorType,
-			ReplicatorPolicies replicatorPolicies) throws PulsarAdminException;
+			ReplicatorPoliciesRequest replicatorPoliciesRequest) throws PulsarAdminException;
 
     /**
      * Remove a backlog quota policy from a namespace.

@@ -20,10 +20,13 @@ package org.apache.pulsar.common.policies.data;
 
 import java.util.Map;
 
-public class ReplicatorPolicies {
+public class ReplicatorPoliciesRequest {
 
-	public Map<String, String> replicationProperties;
-	public String authParamStorePluginName; // auth plugin name using which provider can store/fetch credentials
-	public Map<String, String> topicNameMapping;
-
+	public ReplicatorPolicies replicatorPolicies;
+	public Map<String,String> authParamData;
+	
+	public enum Action {
+		Start, Stop, Restart;
+	}
 }
+ 

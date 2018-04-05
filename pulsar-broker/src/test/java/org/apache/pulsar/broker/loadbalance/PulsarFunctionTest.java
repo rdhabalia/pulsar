@@ -54,6 +54,7 @@ import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
 import org.apache.pulsar.common.policies.data.PropertyAdmin;
 import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
+import org.apache.pulsar.common.policies.data.ReplicatorPoliciesRequest;
 import org.apache.pulsar.functions.api.Context;
 import org.apache.pulsar.functions.api.utils.DefaultSerDe;
 import org.apache.pulsar.functions.proto.Function.FunctionConfig;
@@ -61,8 +62,10 @@ import org.apache.pulsar.functions.proto.Function.FunctionConfig.Builder;
 import org.apache.pulsar.functions.worker.WorkerConfig;
 import org.apache.pulsar.functions.worker.WorkerService;
 import org.apache.pulsar.replicator.api.kinesis.KinesisReplicatorManager;
-import org.apache.pulsar.replicator.auth.DefaultAuthorizationKeyStore;
+import org.apache.pulsar.replicator.auth.DefaultAuthParamKeyStore;
 import org.apache.pulsar.replicator.kinesis.function.ReplicatorFunction;
+import org.apache.pulsar.replicator.kinesis.function.ReplicatorTopicData;
+import org.apache.pulsar.replicator.kinesis.function.utils.ReplicatorTopicDataSerDe;
 import org.apache.pulsar.zookeeper.LocalBookkeeperEnsemble;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -251,13 +254,17 @@ public class PulsarFunctionTest {
 		ReplicatorPolicies replicatorPolicies = new ReplicatorPolicies();
 		Map<String, String> replicationProperties = Maps.newHashMap();
 		Map<String, String> topicMapping = Maps.newHashMap();
+		Map<String, String> authParamData = Maps.newHashMap();
 		topicMapping.put(topicName, "KineisFunction:us-west-2");
-		replicationProperties.put("accessKey", "AK");
-		replicationProperties.put("secretKey", "SK");
+		authParamData.put("accessKey", "AK");
+		authParamData.put("secretKey", "SK");
 		replicatorPolicies.topicNameMapping = topicMapping;
 		replicatorPolicies.replicationProperties = replicationProperties;
-		replicatorPolicies.authPluginName = DefaultAuthorizationKeyStore.class.getName();
-		admin.namespaces().addExternalReplicator(replNamespace, ReplicatorType.Kinesis, replicatorPolicies);
+		replicatorPolicies.authParamStorePluginName = DefaultAuthParamKeyStore.class.getName();
+		ReplicatorPoliciesRequest replicatorPolicieRequest = new ReplicatorPoliciesRequest();
+		replicatorPolicieRequest.replicatorPolicies = replicatorPolicies;
+		replicatorPolicieRequest.authParamData = authParamData;
+		admin.namespaces().addExternalReplicator(replNamespace, ReplicatorType.Kinesis, replicatorPolicieRequest);
 		
 		
 		Map<String,String> userConfig = Maps.newHashMap();
@@ -319,13 +326,17 @@ public class PulsarFunctionTest {
 		ReplicatorPolicies replicatorPolicies = new ReplicatorPolicies();
 		Map<String, String> topicMapping = Maps.newHashMap();
 		Map<String, String> replicationProperties = Maps.newHashMap();
+		Map<String, String> authParamData = Maps.newHashMap();
 		topicMapping.put(topicName, "KineisFunction:us-west-2");
-		replicationProperties.put("accessKey", "AK");
-		replicationProperties.put("secretKey", "SK");
+		authParamData.put("accessKey", "AK");
+		authParamData.put("secretKey", "SK");
 		replicatorPolicies.topicNameMapping = topicMapping;
 		replicatorPolicies.replicationProperties = replicationProperties;
-		replicatorPolicies.authPluginName = DefaultAuthorizationKeyStore.class.getName();
-		admin.namespaces().addExternalReplicator(replNamespace, ReplicatorType.Kinesis, replicatorPolicies);
+		replicatorPolicies.authParamStorePluginName = DefaultAuthParamKeyStore.class.getName();
+		ReplicatorPoliciesRequest replicatorPolicieRequest = new ReplicatorPoliciesRequest();
+		replicatorPolicieRequest.replicatorPolicies = replicatorPolicies;
+		replicatorPolicieRequest.authParamData = authParamData;
+		admin.namespaces().addExternalReplicator(replNamespace, ReplicatorType.Kinesis, replicatorPolicieRequest);
 		
 		ReplicatorFunction function = new ReplicatorFunction();
 		Map<String,String> userConfig = Maps.newHashMap();
@@ -336,7 +347,9 @@ public class PulsarFunctionTest {
 		userConfig.put(ReplicatorFunction.CONF_REPLICATOR_JAR_NAME, kinesisReplicatorFile.getAbsolutePath());
 		userConfig.put(ReplicatorFunction.CONF_REPLICATOR_MANAGER_CLASS_NAME, KinesisReplicatorManager.class.getName());
 		Context context = new ContextImpl(userConfig);
-		function.process(ReplicatorFunction.Action.Start.toString(), context);
+		ReplicatorTopicData data = new ReplicatorTopicData();
+		data.action = ReplicatorPoliciesRequest.Action.Start;
+		function.process(data, context);
 		
 		ProducerBuilder<byte[]> producerBuilder = pulsarClient.newProducer().topic(replTopicName);
 
@@ -358,6 +371,65 @@ public class PulsarFunctionTest {
 		System.out.println("finish");
 	}
 
+	
+	@Test(enabled = true)
+	public void testOnboard() throws Exception {
+
+		final String testFile = "/yh/git/july/pulsar/pulsar-replicator/function/target/pulsar-replicator-function.jar";
+
+		final String replNamespace = property + "/global/replicator";
+		final String topicName = "replTopic";
+		final String replTopicName = "persistent://" + replNamespace +"/"+topicName;
+		final ReplicatorType replicatorType = ReplicatorType.Kinesis;
+		admin.namespaces().createNamespace(replNamespace);
+		admin.namespaces().setNamespaceReplicationClusters(replNamespace, Lists.newArrayList("use"));
+		ReplicatorPolicies replicatorPolicies = new ReplicatorPolicies();
+		Map<String, String> topicMapping = Maps.newHashMap();
+		Map<String, String> replicationProperties = Maps.newHashMap();
+		Map<String, String> authParamData = Maps.newHashMap();
+		topicMapping.put(topicName, "KineisFunction:us-west-2");
+		authParamData.put("accessKey", "a");
+		authParamData.put("secretKey", "s");
+		replicatorPolicies.topicNameMapping = topicMapping;
+		replicatorPolicies.replicationProperties = replicationProperties;
+		replicatorPolicies.authParamStorePluginName = DefaultAuthParamKeyStore.class.getName();
+		ReplicatorPoliciesRequest replicatorPolicieRequest = new ReplicatorPoliciesRequest();
+		replicatorPolicieRequest.replicatorPolicies = replicatorPolicies;
+		replicatorPolicieRequest.authParamData = authParamData;
+		admin.namespaces().addExternalReplicator(replNamespace, ReplicatorType.Kinesis, replicatorPolicieRequest);
+		
+		admin.persistentTopics().registerReplicator(replTopicName, replicatorType);
+		
+		Thread.sleep(3000);
+
+		// start replicator
+		String replicatorTopic = String.format("non-persistent://%s/%s/%s/%s", ReplicatorFunction.CONF_REPLICATOR_TENANT_VAL,ReplicatorFunction.CONF_REPLICATOR_CLUSTER_VAL, ReplicatorFunction.CONF_REPLICATOR_NAMESPACE_VAL,replicatorType);
+				
+		Producer<byte[]> replicatorTopicProducer = pulsarClient.newProducer().topic(replicatorTopic).create();
+		ReplicatorTopicData action = new ReplicatorTopicData();
+		action.action = ReplicatorPoliciesRequest.Action.Start;
+		replicatorTopicProducer.send((new ReplicatorTopicDataSerDe()).serialize(action));
+		
+		ProducerBuilder<byte[]> producerBuilder = pulsarClient.newProducer().topic(replTopicName);
+
+		Producer<byte[]> producer = producerBuilder.create();
+		List<Future<MessageId>> futures = Lists.newArrayList();
+
+		// Asynchronously produce messages
+		for (int i = 0; i < 10; i++) {
+			final String message = "my-message-" + i;
+			Future<MessageId> future = producer.sendAsync(message.getBytes());
+			futures.add(future);
+		}
+
+		log.info("Waiting for async publish to complete");
+		for (Future<MessageId> future : futures) {
+			future.get();
+		}
+
+		System.out.println("finish");
+	}
+	
 	class ContextImpl implements Context {
 
 		Map<String,String> userConfig;
@@ -454,7 +526,7 @@ public class PulsarFunctionTest {
 		@Override
 		public void recordMetric(String arg0, double arg1) {
 		}
-		
+	
 	}
 	
 }

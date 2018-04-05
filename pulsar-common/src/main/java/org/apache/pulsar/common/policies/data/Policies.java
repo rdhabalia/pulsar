@@ -107,6 +107,6 @@ public class Policies {
     }
     
     public static enum ReplicatorType {
-		Kinesis, DynamoDB;
+		Kinesis;
 	}
 }

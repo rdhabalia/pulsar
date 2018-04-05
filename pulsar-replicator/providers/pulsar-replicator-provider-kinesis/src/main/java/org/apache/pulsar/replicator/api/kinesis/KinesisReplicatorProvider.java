@@ -31,6 +31,7 @@ import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.replicator.api.ReplicatorProducer;
 import org.apache.pulsar.replicator.api.ReplicatorProvider;
 import org.apache.pulsar.replicator.auth.AuthParamKeyStore;
+import org.apache.pulsar.replicator.auth.AuthParamKeyStoreFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,17 +49,22 @@ public class KinesisReplicatorProvider implements ReplicatorProvider {
 	public static final String ACCESS_KEY_NAME = "accessKey";
 	public static final String CREDENTIAL_KEY_NAME = "secretKey";
 
+	private static final KinesisReplicatorProvider instance = new KinesisReplicatorProvider();
+
+	public static KinesisReplicatorProvider instance() {
+		return instance;
+	}
+
 	@Override
 	public ReplicatorType getType() {
 		return ReplicatorType.Kinesis;
 	}
 
 	@Override
-	public void validateProperties(String namespace, ReplicatorPolicies replicatorPolicies)
+	public void validateProperties(String namespace, ReplicatorPolicies replicatorPolicies, Map<String, String> authData)
 			throws IllegalArgumentException {
 		Map<String, String> topicProperties = replicatorPolicies.topicNameMapping;
 		try {
-			Map<String, String> authData = getAuthData(namespace, replicatorPolicies);
 			if (authData == null || !authData.containsKey(ACCESS_KEY_NAME)
 					|| !authData.containsKey(CREDENTIAL_KEY_NAME)) {
 				throw new IllegalArgumentException(
@@ -127,10 +133,8 @@ public class KinesisReplicatorProvider implements ReplicatorProvider {
 	}
 
 	private Map<String, String> getAuthData(String namespace, ReplicatorPolicies replicatorPolicies) throws Exception {
-		String pluginName = replicatorPolicies.authPluginName;
-		Class<?> clazz = Class.forName(pluginName);
-		Constructor<?> ctor = clazz.getConstructor();
-		AuthParamKeyStore authKeyStore = (AuthParamKeyStore) ctor.newInstance(new Object[] {});
+		String pluginName = replicatorPolicies.authParamStorePluginName;
+		AuthParamKeyStore authKeyStore = AuthParamKeyStoreFactory.create(pluginName);
 		return authKeyStore.fetchAuthData(namespace, replicatorPolicies.replicationProperties);
 	}
 

@@ -33,6 +33,7 @@ import org.apache.pulsar.common.policies.data.DispatchRate;
 import org.apache.pulsar.common.policies.data.PersistencePolicies;
 import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
 import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
+import org.apache.pulsar.common.policies.data.ReplicatorPoliciesRequest;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.SubscriptionAuthMode;
 import org.inferred.freebuilder.shaded.org.apache.commons.lang3.StringUtils;
@@ -475,7 +476,7 @@ public class CmdNamespaces extends CmdBase {
         @Parameter(description = "property/cluster/namespace", required = true)
         private java.util.List<String> params;
 
-        @Parameter(names = { "-r", "--replicator" }, description = "type of replicator to replicate message to targeted system (eg: Kinesis, DynamoDB)", required = true)
+        @Parameter(names = { "-r", "--replicator" }, description = "type of replicator to replicate message to targeted system (eg: Kinesis)", required = true)
         private String replicatorTypeStr;
         
         @Parameter(names = { "-p", "--properties" }, description = "Replicator properties. json map (eg: {prop1=val1, prop2=val2} ) ", required = false)
@@ -484,18 +485,19 @@ public class CmdNamespaces extends CmdBase {
         @Parameter(names = { "-t", "--topic-map" }, description = "Topic name mapping. json map (eg: {top1=rep-top1, top2=rep=top2} )", required = false)
         private String topicNameMapping;
         
-        @Parameter(names = { "-an", "--auth-plugin-name" }, description = "FQ class name of plugin name to get authentication credential", required = false)
+        @Parameter(names = { "-an", "--auth-plugin-name" }, description = "FQ class name of plugin name that manages(stores/fetch) auth-param-data (impl of AuthParamKeyStore)", required = false)
         private String authPluginName;
         
-        @Parameter(names = { "-ap", "--auth-plugin-param" }, description = "Authentication plugin param", required = false)
-        private String authParamName;
-       
-
+		@Parameter(names = { "-a",
+				"--auth-param-data" }, description = "Auth param data (credential requires to connect to targeted replication system). json map (eg: {accessKey=key1, secrectKey=key2} )", required = false)
+		private String authParamData;
+        
         @Override
 		void run() throws PulsarAdminException {
 			ReplicatorType replicatorType;
 			ReplicatorPolicies replicatorPolicies = new ReplicatorPolicies();
-
+			ReplicatorPoliciesRequest replicatorPolicieRequest = new ReplicatorPoliciesRequest();
+			
 			try {
 				replicatorType = ReplicatorType.valueOf(replicatorTypeStr);
 			} catch (IllegalArgumentException e) {
@@ -504,19 +506,22 @@ public class CmdNamespaces extends CmdBase {
 			}
 
 			if (StringUtils.isNotBlank(replicationProperties)) {
-				System.out.println(replicationProperties);
 				replicatorPolicies.replicationProperties = new Gson().fromJson(replicationProperties, new TypeToken<Map<String, String>>(){}.getType());
 			}
 			
 			if (StringUtils.isNotBlank(topicNameMapping)) {
-				System.out.println(topicNameMapping);
 				replicatorPolicies.topicNameMapping = new Gson().fromJson(topicNameMapping, new TypeToken<Map<String, String>>(){}.getType());
 			}
 			
-			replicatorPolicies.authPluginName = authPluginName;
+			if (StringUtils.isNotBlank(authParamData)) {
+				replicatorPolicieRequest.authParamData = new Gson().fromJson(authParamData, new TypeToken<Map<String, String>>(){}.getType());
+			}
+			
+			replicatorPolicies.authParamStorePluginName = authPluginName;
 			
 			String namespace = validateNamespace(params);
-			admin.namespaces().addExternalReplicator(namespace, replicatorType, replicatorPolicies);
+			replicatorPolicieRequest.replicatorPolicies = replicatorPolicies;
+			admin.namespaces().addExternalReplicator(namespace, replicatorType, replicatorPolicieRequest);
 		}
     }
 

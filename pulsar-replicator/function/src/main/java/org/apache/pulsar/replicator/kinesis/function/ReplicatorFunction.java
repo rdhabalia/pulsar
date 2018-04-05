@@ -25,6 +25,9 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import org.apache.commons.lang3.StringUtils;
+import org.apache.pulsar.common.naming.TopicDomain;
+import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
+import org.apache.pulsar.common.policies.data.ReplicatorPoliciesRequest.Action;
 import org.apache.pulsar.functions.api.Context;
 import org.apache.pulsar.functions.api.Function;
 import org.apache.pulsar.replicator.api.ReplicatorConfig;
@@ -34,8 +37,7 @@ import org.slf4j.LoggerFactory;
 
 import com.google.common.collect.Maps;
 
-
-public class ReplicatorFunction implements Function<String, Boolean> {
+public class ReplicatorFunction implements Function<ReplicatorTopicData, Boolean> {
 
 	public static final String CONF_BROKER_SERVICE_URL = "brokerServiceUrl";
 	public static final String CONF_ZK_SERVER_URL = "zkServerUrl";
@@ -43,6 +45,11 @@ public class ReplicatorFunction implements Function<String, Boolean> {
 	public static final String CONF_REPLICATOR_TYPE = "replType";
 	public static final String CONF_REPLICATOR_JAR_NAME = "replJar";
 	public static final String CONF_REPLICATOR_MANAGER_CLASS_NAME = "replManagerClassName";
+
+	public static final String CONF_REPLICATOR_TENANT_VAL = "pulsar";
+	public static final String CONF_REPLICATOR_CLUSTER_VAL = "global";
+	public static final String CONF_REPLICATOR_NAMESPACE_VAL = "replicator";
+
 	public final static Map<String, ReplicatorManager> replicatorMap = Maps.newConcurrentMap();
 
 	private String topicName;
@@ -50,22 +57,22 @@ public class ReplicatorFunction implements Function<String, Boolean> {
 			.newUpdater(ReplicatorFunction.class, State.class, "state");
 	private volatile State state = State.Stopped;
 
-	public enum Action {
-		Start, Stop, Restart;
-	}
-
 	private enum State {
 		Stopped, Starting, Started;
 	}
 
 	@Override
-	public Boolean process(String action, Context context) throws Exception {
+	public Boolean process(ReplicatorTopicData data, Context context) throws Exception {
 		final String replProcessId = replicatorProcessId(context);
 		this.topicName = context.getUserConfigValue(CONF_REPLICATION_TOPIC_NAME);
-		log.info("[{}] Received replicator action {} for {}", replProcessId, action, this.topicName);
+		if(StringUtils.isBlank(this.topicName) || !this.topicName.equals(data.topicName)) {
+			// this request is not for expected topic
+			return false;
+		}
+		log.info("[{}] Received replicator action {} for {}", replProcessId, data.action, this.topicName);
 		ReplicatorManager replicatorManager = replicatorMap.get(replProcessId);
 
-		Action processAction = Action.valueOf(action);
+		Action processAction = data.action;
 
 		switch (processAction) {
 		case Stop:
@@ -120,6 +127,9 @@ public class ReplicatorFunction implements Function<String, Boolean> {
 		log.info("[{}] starting replicator {}", replProcessId, topicName);
 
 		ClassLoader classLoader = this.getClass().getClassLoader();
+		// sometimes, classLoader couldn't find all classes from jar so, loading jar
+		// explicitly to make sure classLoader loads all classes
+		jarPath = StringUtils.isNotBlank(jarPath) ? jarPath : getJarPath(replManagerClassName);
 		try {
 			if (StringUtils.isNotBlank(jarPath)) {
 				URL[] urls = { new File(jarPath).toURL() };
@@ -127,23 +137,33 @@ public class ReplicatorFunction implements Function<String, Boolean> {
 			}
 			ReplicatorManager replicatorManager = (ReplicatorManager) Class
 					.forName(replManagerClassName, true, classLoader).getConstructor().newInstance();
-			log.info("[{}] Successfully started replicator manager {}", replProcessId, topicName);
 			ReplicatorConfig replConfig = new ReplicatorConfig();
 			replConfig.setTopicName(topicName);
 			replConfig.setBrokerServiceUrl(brokerServiceUrl);
 			replConfig.setZkServiceUrl(zkServerUrl);
+
 			replicatorManager.start(replConfig);
+			log.info("[{}] Successfully started replicator manager {}", replProcessId, topicName);
 			replicatorMap.put(replProcessId, replicatorManager);
 			STATE_UPDATER.set(this, State.Started);
 		} catch (Exception e) {
 			log.error("[{}} Failed to start replicator manager for {}-{}", replProcessId, topicName);
 			throw e;
 		} finally {
-			// TODO: check if classLoader requires to close
+			// TODO: check if classLoader requires to be closed
 			if (classLoader instanceof URLClassLoader) {
 				((URLClassLoader) classLoader).close();
 			}
 		}
+	}
+
+	private String getJarPath(String className) {
+		try {
+			return Class.forName(className).getProtectionDomain().getCodeSource().getLocation().getPath();
+		} catch (Exception e) {
+			log.warn("Couldn't find {} in classpath", className);
+		}
+		return null;
 	}
 
 	private void close(ReplicatorManager replicatorManager) {
@@ -163,5 +183,12 @@ public class ReplicatorFunction implements Function<String, Boolean> {
 		return context != null ? String.format("%s-%s", context.getInstanceId(), context.getFunctionId()) : null;
 	}
 
+	public static String getFunctionTopicName(ReplicatorType replicatorType) {
+		/*return String.format("%s://%s/%s/%s/%s", TopicDomain.non_persistent.value(), CONF_REPLICATOR_TENANT_VAL,
+				CONF_REPLICATOR_CLUSTER_VAL, CONF_REPLICATOR_NAMESPACE_VAL, replicatorType.toString());*/
+	    return String.format("%s://%s/%s/%s", TopicDomain.non_persistent.value(), CONF_REPLICATOR_TENANT_VAL,
+                 CONF_REPLICATOR_NAMESPACE_VAL, replicatorType.toString());
+	}
+	
 	private static final Logger log = LoggerFactory.getLogger(ReplicatorFunction.class);
 }

@@ -45,6 +45,7 @@ import org.apache.pulsar.common.policies.data.DispatchRate;
 import org.apache.pulsar.common.policies.data.PersistencePolicies;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
+import org.apache.pulsar.common.policies.data.ReplicatorPoliciesRequest;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.SubscriptionAuthMode;
 import org.slf4j.Logger;
@@ -209,15 +210,15 @@ public class Namespaces extends NamespacesBase {
 
     
     @POST
-    @Path("/{property}/{namespace}/externalReplication")
-    @ApiOperation(value = "Set external replication for a namespace")
+    @Path("/{property}/{namespace}/replicator")
+    @ApiOperation(value = "Set external replicator for a namespace")
     @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission"),
             @ApiResponse(code = 404, message = "Property or cluster or namespace doesn't exist"),
             @ApiResponse(code = 412, message = "Namespace is not global") })
-    public void addNamespaceExternalReplication(@PathParam("property") String property, @PathParam("namespace") String namespace,
-            @QueryParam("replicatorType") ReplicatorType replicatorType, ReplicatorPolicies replicatorPolicies) {
+    public void addNamespaceReplicator(@PathParam("property") String property, @PathParam("namespace") String namespace,
+            @QueryParam("replicatorType") ReplicatorType replicatorType, ReplicatorPoliciesRequest replicatorPoliciesRequest) {
         validateNamespaceName(property, namespace);
-        internalAddExternalReplicatorPolicies(replicatorType, replicatorPolicies);
+        internalReplicatorPolicies(replicatorType, replicatorPoliciesRequest.replicatorPolicies, replicatorPoliciesRequest.authParamData);
     }
     
     @GET

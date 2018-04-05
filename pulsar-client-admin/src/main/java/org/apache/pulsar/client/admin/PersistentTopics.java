@@ -35,9 +35,11 @@ import org.apache.pulsar.common.policies.data.AuthAction;
 import org.apache.pulsar.common.policies.data.PartitionedTopicStats;
 import org.apache.pulsar.common.policies.data.PersistentTopicInternalStats;
 import org.apache.pulsar.common.policies.data.PersistentTopicStats;
+import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
 import org.omg.CosNaming.NamingContextPackage.NotFound;
 
 import com.google.gson.JsonObject;
+import org.apache.pulsar.common.policies.data.ReplicatorPoliciesRequest.Action;
 
 public interface PersistentTopics {
 
@@ -327,7 +329,7 @@ public interface PersistentTopics {
      *             Unexpected error
      */
     void unload(String topic) throws PulsarAdminException;
-
+    
     /**
      * Unload a topic asynchronously.
      * <p>
@@ -900,4 +902,33 @@ public interface PersistentTopics {
      *            reset subscription to messageId (or previous nearest messageId if given messageId is not valid)
      */
     CompletableFuture<Void> resetCursorAsync(String topic, String subName, MessageId messageId);
+    
+    /**
+     * Register a replicator for a topic.
+     * 
+     * @param topic
+     * @param replicatorType
+     * @throws PulsarAdminException
+     */
+    void registerReplicator(String topic, ReplicatorType replicatorType) throws PulsarAdminException;
+    
+    /**
+     * Update a replicator for a status (sop/start/restart).
+     * 
+     * @param topic
+     * @param replicatorType
+     * @param action
+     * @throws PulsarAdminException
+     */
+    void updateReplicator(String topic, ReplicatorType replicatorType, Action action) throws PulsarAdminException;
+    
+    
+    /**
+     * De-register a replicator for a topic.
+     * 
+     * @param topic
+     * @param replicatorType
+     * @throws PulsarAdminException
+     */
+    void deregisterReplicator(String topic, ReplicatorType replicatorType) throws PulsarAdminException;
 }

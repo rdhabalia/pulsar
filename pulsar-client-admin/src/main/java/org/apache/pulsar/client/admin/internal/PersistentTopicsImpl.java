@@ -54,14 +54,16 @@ import org.apache.pulsar.common.api.Commands;
 import org.apache.pulsar.common.api.proto.PulsarApi;
 import org.apache.pulsar.common.api.proto.PulsarApi.KeyValue;
 import org.apache.pulsar.common.api.proto.PulsarApi.SingleMessageMetadata;
-import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.naming.NamespaceName;
+import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.partition.PartitionedTopicMetadata;
 import org.apache.pulsar.common.policies.data.AuthAction;
 import org.apache.pulsar.common.policies.data.ErrorData;
 import org.apache.pulsar.common.policies.data.PartitionedTopicStats;
 import org.apache.pulsar.common.policies.data.PersistentTopicInternalStats;
 import org.apache.pulsar.common.policies.data.PersistentTopicStats;
+import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
+import org.apache.pulsar.common.policies.data.ReplicatorPoliciesRequest.Action;
 import org.apache.pulsar.common.util.Codec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -711,6 +713,31 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
         return future;
     }
 
+	@Override
+	public void registerReplicator(String topic, ReplicatorType replicatorType) throws PulsarAdminException {
+		TopicName tn = validateTopic(topic);
+		WebTarget path = topicPath(tn, "replicator");
+		request(path.queryParam("replicatorType", replicatorType.toString()))
+				.post(Entity.entity("", MediaType.APPLICATION_JSON), ErrorData.class);
+	}
+
+	@Override
+	public void updateReplicator(String topic, ReplicatorType replicatorType, Action action)
+			throws PulsarAdminException {
+		TopicName tn = validateTopic(topic);
+		WebTarget path = topicPath(tn, "replicator");
+		request(path.queryParam("replicatorType", replicatorType.toString()).queryParam("action", action.toString()))
+				.put(Entity.entity("", MediaType.APPLICATION_JSON), ErrorData.class);
+	}
+
+	@Override
+	public void deregisterReplicator(String topic, ReplicatorType replicatorType) throws PulsarAdminException {
+		TopicName tn = validateTopic(topic);
+		WebTarget path = topicPath(tn, "replicator");
+		request(path.queryParam("replicatorType", replicatorType.toString())).delete(ErrorData.class);
+
+	}
+    
     private WebTarget namespacePath(NamespaceName namespace, String... parts) {
         final WebTarget base = namespace.isV2() ? adminV2PersistentTopics : adminPersistentTopics;
         WebTarget namespacePath = base.path(namespace.toString());

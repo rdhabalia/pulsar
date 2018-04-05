@@ -16,14 +16,16 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.pulsar.common.policies.data;
 
-import java.util.Map;
+package org.apache.pulsar.replicator.kinesis.function;
 
-public class ReplicatorPolicies {
+import lombok.ToString;
+import org.apache.pulsar.common.policies.data.ReplicatorPoliciesRequest.Action;
 
-	public Map<String, String> replicationProperties;
-	public String authParamStorePluginName; // auth plugin name using which provider can store/fetch credentials
-	public Map<String, String> topicNameMapping;
-
+@ToString
+public class ReplicatorTopicData {
+	
+	public Action action;
+	public String topicName;
+	
 }

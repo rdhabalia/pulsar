@@ -41,6 +41,7 @@ import org.apache.pulsar.common.policies.data.ErrorData;
 import org.apache.pulsar.common.policies.data.PersistencePolicies;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
+import org.apache.pulsar.common.policies.data.ReplicatorPoliciesRequest;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.SubscriptionAuthMode;
 
@@ -319,12 +320,12 @@ public class NamespacesImpl extends BaseResource implements Namespaces {
     }
 
 	public void addExternalReplicator(String namespace, ReplicatorType replicatorType,
-			ReplicatorPolicies replicatorPolicies) throws PulsarAdminException {
+			ReplicatorPoliciesRequest replicatorPoliciesRequest) throws PulsarAdminException {
 		try {
 			NamespaceName ns = NamespaceName.get(namespace);
-			WebTarget path = namespacePath(ns, "externalReplication");
+			WebTarget path = namespacePath(ns, "replicator");
 			request(path.queryParam("replicatorType", replicatorType.toString()))
-					.post(Entity.entity(replicatorPolicies, MediaType.APPLICATION_JSON), ErrorData.class);
+					.post(Entity.entity(replicatorPoliciesRequest, MediaType.APPLICATION_JSON), ErrorData.class);
 		} catch (Exception e) {
 			throw getApiException(e);
 		}

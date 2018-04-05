@@ -27,7 +27,7 @@ import java.util.Map;
  * 
  *
  */
-public class DefaultAuthorizationKeyStore implements AuthParamKeyStore {
+public class DefaultAuthParamKeyStore implements AuthParamKeyStore {
 
 	/**
 	 * Merge auth-data into replicatorProperties which will be stored into namespace
