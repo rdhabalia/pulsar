@@ -114,6 +114,7 @@ public class PulsarService implements AutoCloseable {
     private ScheduledFuture<?> loadResourceQuotaTask = null;
     private final AtomicReference<LoadManager> loadManager = new AtomicReference<>();
     private PulsarAdmin adminClient = null;
+    private PulsarAdmin functionAdminClient = null;
     private ZooKeeperClientFactory zkClientFactory = null;
     private final String bindAddress;
     private final String advertisedAddress;
@@ -215,6 +216,11 @@ public class PulsarService implements AutoCloseable {
             if (adminClient != null) {
                 adminClient.close();
                 adminClient = null;
+            }
+            
+            if (functionAdminClient != null) {
+                functionAdminClient.close();
+                functionAdminClient = null;
             }
 
             nsservice = null;
@@ -635,6 +641,24 @@ public class PulsarService implements AutoCloseable {
         return this.adminClient;
     }
 
+    public synchronized PulsarAdmin getFunctionAdminClient() throws PulsarServerException {
+        if (this.functionAdminClient == null) {
+            try {
+                String funAdminApiUrl = config.getFunctionWorkerServiceUrl();
+                if (funAdminApiUrl == null) {
+                    throw new PulsarServerException("Function admin api url not present");
+                }
+                this.functionAdminClient = new PulsarAdmin(new URL(funAdminApiUrl),
+                        this.getConfiguration().getBrokerClientAuthenticationPlugin(),
+                        this.getConfiguration().getBrokerClientAuthenticationParameters());
+                LOG.info("Function Admin api url: " + funAdminApiUrl);
+            } catch (Exception e) {
+                throw new PulsarServerException(e);
+            }
+        }
+        return this.functionAdminClient;
+    }
+    
     public MetricsGenerator getMetricsGenerator() {
         return metricsGenerator;
     }

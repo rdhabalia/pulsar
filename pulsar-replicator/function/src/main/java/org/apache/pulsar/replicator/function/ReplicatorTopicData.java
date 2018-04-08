@@ -17,15 +17,30 @@
  * under the License.
  */
 
-package org.apache.pulsar.replicator.kinesis.function;
+package org.apache.pulsar.replicator.function;
 
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.ToString;
 import org.apache.pulsar.common.policies.data.ReplicatorPoliciesRequest.Action;
 
 @ToString
+@EqualsAndHashCode
+@Getter
+@Setter
 public class ReplicatorTopicData {
 	
-	public Action action;
-	public String topicName;
+	private Action action;
+	private String topicName;
+	
+	public ReplicatorTopicData() {}
+
+    public ReplicatorTopicData(Action action, String topicName) {
+        super();
+        this.action = action;
+        this.topicName = topicName;
+    }
+	
 	
 }

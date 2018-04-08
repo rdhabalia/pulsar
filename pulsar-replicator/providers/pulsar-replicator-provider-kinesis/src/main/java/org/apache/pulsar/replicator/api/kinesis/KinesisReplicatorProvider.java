@@ -18,7 +18,6 @@
  */
 package org.apache.pulsar.replicator.api.kinesis;
 
-import java.lang.reflect.Constructor;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.concurrent.CompletableFuture;
@@ -40,104 +39,107 @@ import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 
 /**
- * Kinesis replicator provider that validates replicator
- * configuration/properties and creates replication producer.
+ * Kinesis replicator provider that validates replicator configuration/properties and creates replication producer.
  *
  */
 public class KinesisReplicatorProvider implements ReplicatorProvider {
 
-	public static final String ACCESS_KEY_NAME = "accessKey";
-	public static final String CREDENTIAL_KEY_NAME = "secretKey";
+    public static final String ACCESS_KEY_NAME = "accessKey";
+    public static final String SECRET_KEY_NAME = "secretKey";
 
-	private static final KinesisReplicatorProvider instance = new KinesisReplicatorProvider();
+    private static final KinesisReplicatorProvider instance = new KinesisReplicatorProvider();
 
-	public static KinesisReplicatorProvider instance() {
-		return instance;
-	}
+    public static KinesisReplicatorProvider instance() {
+        return instance;
+    }
 
-	@Override
-	public ReplicatorType getType() {
-		return ReplicatorType.Kinesis;
-	}
+    @Override
+    public ReplicatorType getType() {
+        return ReplicatorType.Kinesis;
+    }
 
-	@Override
-	public void validateProperties(String namespace, ReplicatorPolicies replicatorPolicies, Map<String, String> authData)
-			throws IllegalArgumentException {
-		Map<String, String> topicProperties = replicatorPolicies.topicNameMapping;
-		try {
-			if (authData == null || !authData.containsKey(ACCESS_KEY_NAME)
-					|| !authData.containsKey(CREDENTIAL_KEY_NAME)) {
-				throw new IllegalArgumentException(
-						String.format("Auth data requires %s and %s to authenticate to kinesis stream", ACCESS_KEY_NAME,
-								CREDENTIAL_KEY_NAME));
-			}
-		} catch (IllegalArgumentException e) {
-			log.error("Failed to validate auth data for {}, {}", namespace, e.getMessage());
-		} catch (Exception e) {
-			log.error("Failed to fetch auth data for {}", namespace, e);
-			throw new IllegalArgumentException(e);
-		}
+    @Override
+    public void validateProperties(String namespace, ReplicatorPolicies replicatorPolicies) throws IllegalArgumentException {
 
-		if (topicProperties != null) {
-			for (Entry<String, String> topicEntry : topicProperties.entrySet()) {
-				String streamName = topicEntry.getValue();
-				if (StringUtils.isBlank(streamName) || !streamName.contains(":")) {
-					throw new IllegalArgumentException(String.format(
-							"Invalid stream name %s Kinesis stream must be <streamName>:<regionName> for topic %s",
-							streamName, topicEntry.getKey()));
-				}
-			}
-		}
+        if (replicatorPolicies == null) {
+            throw new IllegalArgumentException("ReplicatorPolicies can't be null");
+        }
 
-	}
+        try {
+            AWSCredentials awsCredential = fetchCredential(namespace, replicatorPolicies);
+            if (awsCredential == null || StringUtils.isBlank(awsCredential.getAWSAccessKeyId())
+                    || StringUtils.isBlank(awsCredential.getAWSSecretKey())) {
+                throw new IllegalArgumentException(
+                        String.format("Auth data requires %s and %s to authenticate to kinesis stream", ACCESS_KEY_NAME,
+                                SECRET_KEY_NAME));
+            }
+        } catch (IllegalArgumentException e) {
+            log.error("Failed to validate auth data for {}, {}", replicatorPolicies, e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            log.error("Failed to fetch auth data for {}", replicatorPolicies, e);
+            throw new IllegalArgumentException(e);
+        }
 
-	@Override
-	public CompletableFuture<ReplicatorProducer> createProducerAsync(String topicName,
-			ReplicatorPolicies replicatorPolicies) {
+        if (replicatorPolicies.topicNameMapping != null) {
+            for (Entry<String, String> topicEntry : replicatorPolicies.topicNameMapping.entrySet()) {
+                String streamName = topicEntry.getValue();
+                if (StringUtils.isBlank(streamName) || !streamName.contains(":")) {
+                    throw new IllegalArgumentException(String.format(
+                            "Invalid stream name %s Kinesis stream must be <streamName>:<regionName> for topic %s",
+                            streamName, topicEntry.getKey()));
+                }
+            }
+        }
 
-		if (replicatorPolicies == null || replicatorPolicies.topicNameMapping == null) {
-			throw new IllegalStateException("Topic-mapping of ReplicatorPolicies can't be empty");
-		}
-		String streamParam = replicatorPolicies.topicNameMapping.get(TopicName.get(topicName).getLocalName());
-		if (StringUtils.isBlank(streamParam) || !streamParam.contains(":")) {
-			throw new IllegalStateException("invalid stream param [streamName:regionName] " + streamParam);
-		}
-		int splitIndex = streamParam.lastIndexOf(":");
-		String streamName = streamParam.substring(0, splitIndex);
-		String regionName = streamParam.substring(splitIndex + 1);
-		Region region = Region.getRegion(Regions.fromName(regionName));
-		try {
-			AWSCredentials credentials = fetchCredential(topicName, replicatorPolicies);
-			return CompletableFuture
-					.completedFuture(new KinesisReplicatorProducer(topicName, streamName, region, credentials));
-		} catch (Exception e) {
-			log.error("Failed to fetch auth data for {}", topicName, e);
-			return FutureUtil.failedFuture(e);
-		}
-	}
+    }
 
-	private AWSCredentials fetchCredential(String topicName, ReplicatorPolicies replicatorPolicies) throws Exception {
-		Map<String, String> authDataMap = getAuthData(TopicName.get(topicName).getNamespaceObject().toString(),
-				replicatorPolicies);
-		return new AWSCredentials() {
-			@Override
-			public String getAWSAccessKeyId() {
-				return authDataMap.get(ACCESS_KEY_NAME);
-			}
+    @Override
+    public CompletableFuture<ReplicatorProducer> createProducerAsync(String topicName,
+            ReplicatorPolicies replicatorPolicies) {
 
-			@Override
-			public String getAWSSecretKey() {
-				return authDataMap.get(CREDENTIAL_KEY_NAME);
-			}
-		};
-	}
+        if (replicatorPolicies == null || replicatorPolicies.topicNameMapping == null) {
+            throw new IllegalArgumentException("Topic-mapping of ReplicatorPolicies can't be empty");
+        }
+        String streamParam = replicatorPolicies.topicNameMapping.get(TopicName.get(topicName).getLocalName());
+        if (StringUtils.isBlank(streamParam) || !streamParam.contains(":")) {
+            throw new IllegalArgumentException("invalid stream param [streamName:regionName] " + streamParam);
+        }
+        int splitIndex = streamParam.lastIndexOf(":");
+        String streamName = streamParam.substring(0, splitIndex);
+        String regionName = streamParam.substring(splitIndex + 1);
+        Region region = Region.getRegion(Regions.fromName(regionName));
+        try {
+            AWSCredentials credentials = fetchCredential(TopicName.get(topicName).getNamespace(), replicatorPolicies);
+            return CompletableFuture
+                    .completedFuture(new KinesisReplicatorProducer(topicName, streamName, region, credentials));
+        } catch (Exception e) {
+            log.error("Failed to fetch auth data for {}", topicName, e);
+            return FutureUtil.failedFuture(e);
+        }
+    }
 
-	private Map<String, String> getAuthData(String namespace, ReplicatorPolicies replicatorPolicies) throws Exception {
-		String pluginName = replicatorPolicies.authParamStorePluginName;
-		AuthParamKeyStore authKeyStore = AuthParamKeyStoreFactory.create(pluginName);
-		return authKeyStore.fetchAuthData(namespace, replicatorPolicies.replicationProperties);
-	}
+    private AWSCredentials fetchCredential(String namespace, ReplicatorPolicies replicatorPolicies) throws Exception {
+        Map<String, String> authDataMap = getAuthData(namespace, replicatorPolicies);
+        return new AWSCredentials() {
+            @Override
+            public String getAWSAccessKeyId() {
+                return authDataMap.get(ACCESS_KEY_NAME);
+            }
 
-	private static final Logger log = LoggerFactory.getLogger(KinesisReplicatorProvider.class);
+            @Override
+            public String getAWSSecretKey() {
+                return authDataMap.get(SECRET_KEY_NAME);
+            }
+        };
+    }
+
+    private Map<String, String> getAuthData(String namespace, ReplicatorPolicies replicatorPolicies) throws Exception {
+        String pluginName = replicatorPolicies.authParamStorePluginName;
+        AuthParamKeyStore authKeyStore = AuthParamKeyStoreFactory.create(pluginName);
+        return authKeyStore.fetchAuthData(namespace, replicatorPolicies.replicationProperties);
+    }
+
+    private static final Logger log = LoggerFactory.getLogger(KinesisReplicatorProvider.class);
 
 }

@@ -17,11 +17,11 @@
  * under the License.
  */
 
-package org.apache.pulsar.replicator.kinesis.function.utils;
+package org.apache.pulsar.replicator.function.utils;
 
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.apache.pulsar.functions.api.SerDe;
-import org.apache.pulsar.replicator.kinesis.function.ReplicatorTopicData;
+import org.apache.pulsar.replicator.function.ReplicatorTopicData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

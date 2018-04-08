@@ -63,9 +63,9 @@ import org.apache.pulsar.functions.worker.WorkerConfig;
 import org.apache.pulsar.functions.worker.WorkerService;
 import org.apache.pulsar.replicator.api.kinesis.KinesisReplicatorManager;
 import org.apache.pulsar.replicator.auth.DefaultAuthParamKeyStore;
-import org.apache.pulsar.replicator.kinesis.function.ReplicatorFunction;
-import org.apache.pulsar.replicator.kinesis.function.ReplicatorTopicData;
-import org.apache.pulsar.replicator.kinesis.function.utils.ReplicatorTopicDataSerDe;
+import org.apache.pulsar.replicator.function.ReplicatorFunction;
+import org.apache.pulsar.replicator.function.ReplicatorTopicData;
+import org.apache.pulsar.replicator.function.utils.ReplicatorTopicDataSerDe;
 import org.apache.pulsar.zookeeper.LocalBookkeeperEnsemble;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -348,7 +348,7 @@ public class PulsarFunctionTest {
 		userConfig.put(ReplicatorFunction.CONF_REPLICATOR_MANAGER_CLASS_NAME, KinesisReplicatorManager.class.getName());
 		Context context = new ContextImpl(userConfig);
 		ReplicatorTopicData data = new ReplicatorTopicData();
-		data.action = ReplicatorPoliciesRequest.Action.Start;
+		data.setAction(ReplicatorPoliciesRequest.Action.Start);
 		function.process(data, context);
 		
 		ProducerBuilder<byte[]> producerBuilder = pulsarClient.newProducer().topic(replTopicName);
@@ -407,7 +407,7 @@ public class PulsarFunctionTest {
 				
 		Producer<byte[]> replicatorTopicProducer = pulsarClient.newProducer().topic(replicatorTopic).create();
 		ReplicatorTopicData action = new ReplicatorTopicData();
-		action.action = ReplicatorPoliciesRequest.Action.Start;
+		action.setAction(ReplicatorPoliciesRequest.Action.Start);
 		replicatorTopicProducer.send((new ReplicatorTopicDataSerDe()).serialize(action));
 		
 		ProducerBuilder<byte[]> producerBuilder = pulsarClient.newProducer().topic(replTopicName);

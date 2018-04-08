@@ -67,6 +67,7 @@ import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.SubscriptionAuthMode;
 import org.apache.pulsar.common.util.FutureUtil;
+import org.apache.pulsar.replicator.api.ReplicatorProvider;
 import org.apache.pulsar.replicator.api.kinesis.KinesisReplicatorProvider;
 import org.apache.pulsar.replicator.auth.AuthParamKeyStore;
 import org.apache.pulsar.replicator.auth.AuthParamKeyStoreFactory;
@@ -429,10 +430,10 @@ public abstract class NamespacesBase extends AdminResource {
 			throw new RestException(Status.PRECONDITION_FAILED, "Cannot set replication on a non-global namespace");
 		}
 		
-		validateReplicatorPolicies(namespaceName.toString(), replicatorType, replicatorPolicies, authParamData);
-		
 		storeAuthParamData(namespaceName.toString(), replicatorType, replicatorPolicies, authParamData);
-
+		
+		validateReplicatorPolicies(namespaceName.toString(), replicatorType, replicatorPolicies);
+		
 		Entry<Policies, Stat> policiesNode = null;
 
 		try {
@@ -1421,19 +1422,22 @@ public abstract class NamespacesBase extends AdminResource {
     }
 
 	private void validateReplicatorPolicies(String namespace, ReplicatorType replicatorType,
-			ReplicatorPolicies replicatorPolicies, Map<String, String> authParamData) {
+			ReplicatorPolicies replicatorPolicies) {
+	    ReplicatorProvider provider = null;
+	    //TODO: move to registry class
 		switch (replicatorType) {
 		case Kinesis:
-			try {
-				KinesisReplicatorProvider.instance().validateProperties(namespace, replicatorPolicies, authParamData);
-			} catch (IllegalArgumentException e) {
-				throw new RestException(Status.BAD_REQUEST,
-						"Validation failed on kinesis properties " + e.getMessage());
-			}
+		    provider = KinesisReplicatorProvider.instance();
 			break;
 		default:
 			throw new RestException(Status.BAD_REQUEST, "Invalid replicator type");
 		}
+		try {
+		    provider.validateProperties(namespace, replicatorPolicies);
+        } catch (IllegalArgumentException e) {
+            throw new RestException(Status.BAD_REQUEST,
+                    "Validation failed on kinesis properties " + e.getMessage());
+        }
 	}
 
 	private void storeAuthParamData(String namespace, ReplicatorType replicatorType,

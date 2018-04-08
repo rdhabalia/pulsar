@@ -23,8 +23,6 @@ import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.pulsar.client.api.Message;
@@ -43,7 +41,6 @@ import com.google.common.util.concurrent.ListenableFuture;
 
 import io.netty.util.Recycler;
 import io.netty.util.Recycler.Handle;
-import io.netty.util.concurrent.DefaultThreadFactory;
 
 /**
  * Kinesis producer that reads pulsar message and publishes to configured
@@ -57,8 +54,6 @@ public class KinesisReplicatorProducer implements ReplicatorProducer {
 	private String topicName;
 	private String streamName;
 	private KinesisProducer kinesisProducer;
-	private final ScheduledExecutorService executor = Executors.newScheduledThreadPool(20,
-			new DefaultThreadFactory("kinesis-replicator"));
 
 	public KinesisReplicatorProducer(String topicName, String streamName, Region region, AWSCredentials credentials) {
 		this.topicName = topicName;

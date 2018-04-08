@@ -18,43 +18,35 @@
  */
 package org.apache.pulsar.replicator.api.kinesis;
 
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
 
 import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
 import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
 import org.apache.pulsar.replicator.api.AbstractReplicatorManager;
+import org.apache.pulsar.replicator.api.ReplicatorProducer;
 
 /**
- * Kinesis Replicator Manager that starts Kinesis producer and start reading
- * message from pulsar and replicate to targeted replication system
+ * Kinesis Replicator Manager that starts Kinesis producer and start reading message from pulsar and replicate to
+ * targeted replication system
  *
  */
 public class KinesisReplicatorManager extends AbstractReplicatorManager {
 
-	@Override
-	public void startProducer(String topicName, ReplicatorPolicies replicatorPolicies) {
-		(new KinesisReplicatorProvider()).createProducerAsync(topicName, replicatorPolicies).thenAccept(producer -> {
-			this.producer = producer;
-			// producer started successfully.. trigger reading message
-			readMessage();
-		}).exceptionally(ex -> {
-			pulsarClient.timer().newTimeout(timeout -> {
-				startProducer(topicName, replicatorPolicies);
-			}, READ_DELAY_BACKOFF_MS, TimeUnit.MILLISECONDS);
-			return null;
-		});
-	}
+    @Override
+    public CompletableFuture<ReplicatorProducer> startProducer(String topicName, ReplicatorPolicies replicatorPolicies) {
+        CompletableFuture<ReplicatorProducer> result = new CompletableFuture<>();
+        (new KinesisReplicatorProvider()).createProducerAsync(topicName, replicatorPolicies).thenAccept(producer -> {
+            result.complete(producer);
+        }).exceptionally(ex -> {
+            result.completeExceptionally(ex);
+            return null;
+        });
+        return result;
+    }
 
-	@Override
-	public ReplicatorType getType() {
-		return ReplicatorType.Kinesis;
-	}
-
-	@Override
-	protected void stopProducer() throws Exception {
-		if (this.producer != null) {
-			this.producer.close();
-		}
-	}
+    @Override
+    public ReplicatorType getType() {
+        return ReplicatorType.Kinesis;
+    }
 
 }

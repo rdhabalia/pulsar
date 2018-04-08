@@ -53,7 +53,6 @@ import com.google.common.collect.Maps;
  * messages and push to appropriate replicator producer to publish them to
  * targeted system.
  * 
- * 
  *
  */
 public abstract class AbstractReplicatorManager
@@ -65,7 +64,7 @@ public abstract class AbstractReplicatorManager
 	protected String topicName;
 	protected ReplicatorConfig config;
 
-	private Consumer inputConsumer;
+	protected Consumer inputConsumer;
 	protected static final AtomicReferenceFieldUpdater<AbstractReplicatorManager, State> STATE_UPDATER = AtomicReferenceFieldUpdater
 			.newUpdater(AbstractReplicatorManager.class, State.class, "state");
 	private volatile State state = State.Stopped;
@@ -89,14 +88,7 @@ public abstract class AbstractReplicatorManager
 	 *            Replicator policies to initialize replicator produecr
 	 * @throws Exception
 	 */
-	protected abstract void startProducer(String topicName, ReplicatorPolicies replicatorPolicies) throws Exception;
-
-	/**
-	 * Stops replicator producer
-	 * 
-	 * @throws Exception
-	 */
-	protected abstract void stopProducer() throws Exception;
+	protected abstract CompletableFuture<ReplicatorProducer> startProducer(String topicName, ReplicatorPolicies replicatorPolicies);
 
 	@Override
 	public void start(ReplicatorConfig config) throws Exception {
@@ -125,9 +117,7 @@ public abstract class AbstractReplicatorManager
 					.subscriptionName(String.format("%s.%s", replPrefix, getType().toString())).receiverQueueSize(10)
 					.subscribe();
 
-			startProducer(this.topicName, getReplicatorPolicies(zkPolicyPath));
-
-			STATE_UPDATER.set(this, State.Started);
+			startProducer(getReplicatorPolicies(zkPolicyPath));
 
 		} catch (Exception e) {
 			// cleanup resources
@@ -136,6 +126,33 @@ public abstract class AbstractReplicatorManager
 		}
 	}
 
+    protected void startProducer(ReplicatorPolicies policies) {
+
+        startProducer(this.topicName, policies).thenAccept(producer -> {
+            this.producer = producer;
+            STATE_UPDATER.set(this, State.Started);
+            // producer started successfully.. trigger reading message
+            readMessage();
+        }).exceptionally(ex -> {
+            pulsarClient.timer().newTimeout(timeout -> {
+                startProducer(policies);
+            }, READ_DELAY_BACKOFF_MS, TimeUnit.MILLISECONDS);
+            return null;
+        });
+
+    }
+
+    /**
+     * Stops replicator producer
+     * 
+     * @throws Exception
+     */
+    protected void stopProducer() throws Exception {
+        if (this.producer != null) {
+            this.producer.close();
+        }
+    }
+	
 	@Override
 	public void stop() throws Exception {
 		if (this.inputConsumer != null) {
@@ -190,6 +207,7 @@ public abstract class AbstractReplicatorManager
 			return;
 		}
 		try {
+		    //TODO: make it async
 			inputConsumer.acknowledge(message);
 		} catch (PulsarClientException e) {
 			log.error("[{}] Failed to ack for {}, will retry after ms", this.topicName, message.getMessageId(),
@@ -269,6 +287,6 @@ public abstract class AbstractReplicatorManager
 			throw e;
 		}
 	}
-
+	
 	private static final Logger log = LoggerFactory.getLogger(AbstractReplicatorManager.class);
 }

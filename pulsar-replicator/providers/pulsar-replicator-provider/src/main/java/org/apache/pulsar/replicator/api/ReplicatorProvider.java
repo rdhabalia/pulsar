@@ -18,48 +18,42 @@
  */
 package org.apache.pulsar.replicator.api;
 
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import org.apache.pulsar.common.policies.data.Policies.ReplicatorType;
 import org.apache.pulsar.common.policies.data.ReplicatorPolicies;
 
 public interface ReplicatorProvider {
-	/**
-	 * Returns Enum-type of replicator-provider so, replicator-service can map
-	 * provider with its type
-	 * 
-	 * @return Enum-type of provider eg: Kinesis, KAFKA
-	 */
-	public ReplicatorType getType();
+    /**
+     * Returns Enum-type of replicator-provider so, replicator-service can map provider with its type
+     * 
+     * @return Enum-type of provider eg: Kinesis, KAFKA
+     */
+    public ReplicatorType getType();
 
-	/**
-	 * Replicator-provider will require correct properties and credential to
-	 * initialize replicator-producers so, this method validates topic-properties
-	 * and credential-properties.
-	 * 
-	 * @param namespace
-	 *            namespace name
-	 * @param ReplicatorPolicies
-	 *            ReplicatorPolicies that contains replication metadata
-	 * @param authData
-	 *            AuthData requires replicator to connect with trageted system
-	 * 
-	 * @throws IllegalArgumentException
-	 */
-	public void validateProperties(String namespace, ReplicatorPolicies replicatorPolicies,
-			Map<String, String> authData) throws IllegalArgumentException;
+    /**
+     * Replicator-provider will require correct properties and credential to initialize replicator-producers so, this
+     * method validates topic-properties and credential-properties.
+     * 
+     * @param namespace
+     *            namespace of the topic to provide a reference to fetch authData from keystore
+     * @param ReplicatorPolicies
+     *            ReplicatorPolicies that contains replication metadata
+     * 
+     * @throws IllegalArgumentException
+     */
+    public void validateProperties(String namespace, ReplicatorPolicies replicatorPolicies)
+            throws IllegalArgumentException;
 
-	/**
-	 * 
-	 * Create Replicator-producer async which will publish messages to targeted
-	 * replication-system.
-	 * 
-	 * @param topic
-	 * @param replicatorPolicies
-	 * @return
-	 */
-	public CompletableFuture<ReplicatorProducer> createProducerAsync(final String topic,
-			final ReplicatorPolicies replicatorPolicies);
+    /**
+     * 
+     * Create Replicator-producer async which will publish messages to targeted replication-system.
+     * 
+     * @param topic
+     * @param replicatorPolicies
+     * @return
+     */
+    public CompletableFuture<ReplicatorProducer> createProducerAsync(final String topic,
+            final ReplicatorPolicies replicatorPolicies);
 
 }

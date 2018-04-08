@@ -56,7 +56,7 @@ import org.apache.pulsar.functions.worker.WorkerConfig;
 import org.apache.pulsar.functions.worker.WorkerService;
 import org.apache.pulsar.replicator.api.kinesis.KinesisReplicatorProvider;
 import org.apache.pulsar.replicator.auth.DefaultAuthParamKeyStore;
-import org.apache.pulsar.replicator.kinesis.function.ReplicatorFunction;
+import org.apache.pulsar.replicator.function.ReplicatorFunction;
 import org.apache.pulsar.zookeeper.LocalBookkeeperEnsemble;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -176,8 +176,8 @@ public class ReplicatorFunctionTest {
         return new WorkerService(workerConfig);
     }
 
-    @Test(enabled = true)
-    public void testOnboard() throws Exception {
+    @Test
+    public void testExternalReplicatorE2E() throws Exception {
 
         final String replNamespace = property + "/global/replicator";
         final String topicName = "pulsarTopic";
@@ -191,7 +191,7 @@ public class ReplicatorFunctionTest {
         Map<String, String> authParamData = Maps.newHashMap();
         topicMapping.put(topicName, "KineisFunction:us-west-2");
         authParamData.put(KinesisReplicatorProvider.ACCESS_KEY_NAME, "ak");
-        authParamData.put(KinesisReplicatorProvider.CREDENTIAL_KEY_NAME, "sk");
+        authParamData.put(KinesisReplicatorProvider.SECRET_KEY_NAME, "sk");
         replicatorPolicies.topicNameMapping = topicMapping;
         replicatorPolicies.replicationProperties = replicationProperties;
         replicatorPolicies.authParamStorePluginName = DefaultAuthParamKeyStore.class.getName();
@@ -285,6 +285,41 @@ public class ReplicatorFunctionTest {
         assertEquals(subscriptionStat.size(), 1);
         replSubscriptionEntry = subscriptionStat.entrySet().iterator().next();
         assertEquals(replSubscriptionEntry.getValue().consumers.size(), 1);
+    }
+    
+    /**
+     * Test add replicator topic without adding replicator-stream-name mapping 
+     */
+    @Test
+    public void testInvalidTopic() throws Exception {
+
+        final String replNamespace = property + "/global/replicator";
+        final String topicName = "pulsarTopic";
+        final String kinesisReplicatorTopic = "persistent://" + replNamespace + "/" + topicName;
+        final ReplicatorType replicatorType = ReplicatorType.Kinesis;
+        admin.namespaces().createNamespace(replNamespace);
+        admin.namespaces().setNamespaceReplicationClusters(replNamespace, Lists.newArrayList("use"));
+        ReplicatorPolicies replicatorPolicies = new ReplicatorPolicies();
+        Map<String, String> topicMapping = Maps.newHashMap();
+        Map<String, String> replicationProperties = Maps.newHashMap();
+        Map<String, String> authParamData = Maps.newHashMap();
+        authParamData.put(KinesisReplicatorProvider.ACCESS_KEY_NAME, "ak");
+        authParamData.put(KinesisReplicatorProvider.SECRET_KEY_NAME, "sk");
+        replicatorPolicies.topicNameMapping = topicMapping;
+        replicatorPolicies.replicationProperties = replicationProperties;
+        replicatorPolicies.authParamStorePluginName = DefaultAuthParamKeyStore.class.getName();
+        ReplicatorPoliciesRequest replicatorPolicieRequest = new ReplicatorPoliciesRequest();
+        replicatorPolicieRequest.replicatorPolicies = replicatorPolicies;
+        replicatorPolicieRequest.authParamData = authParamData;
+
+        // add replicator policies for a namespace
+        admin.namespaces().addExternalReplicator(replNamespace, ReplicatorType.Kinesis, replicatorPolicieRequest);
+
+        try {
+            admin.persistentTopics().registerReplicator(kinesisReplicatorTopic, replicatorType);    
+        }catch(org.apache.pulsar.client.admin.PulsarAdminException.NotFoundException e) {
+            //Ok. Topic mapping not found
+        }
     }
 
 }
