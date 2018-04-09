@@ -435,6 +435,8 @@ public class ServiceConfiguration implements PulsarConfiguration {
 
     /**** --- Functions --- ****/
     private boolean functionsWorkerEnabled = false;
+    // Function worker service url 
+    private String functionWorkerServiceUrl;
 
     public String getZookeeperServers() {
         return zookeeperServers;
@@ -1506,5 +1508,13 @@ public class ServiceConfiguration implements PulsarConfiguration {
 
     public boolean isFunctionsWorkerEnabled() {
         return functionsWorkerEnabled;
+    }
+    
+    public String getFunctionWorkerServiceUrl() {
+        return functionWorkerServiceUrl;
+    }
+
+    public void setFunctionWorkerServiceUrl(String functionWorkerServiceUrl) {
+        this.functionWorkerServiceUrl = functionWorkerServiceUrl;
     }
 }

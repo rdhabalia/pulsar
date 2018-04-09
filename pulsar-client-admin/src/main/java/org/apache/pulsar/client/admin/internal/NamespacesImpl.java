@@ -319,17 +319,20 @@ public class NamespacesImpl extends BaseResource implements Namespaces {
         }
     }
 
-	public void addExternalReplicator(String namespace, ReplicatorType replicatorType,
-			ReplicatorPoliciesRequest replicatorPoliciesRequest) throws PulsarAdminException {
-		try {
-			NamespaceName ns = NamespaceName.get(namespace);
-			WebTarget path = namespacePath(ns, "replicator");
-			request(path.queryParam("replicatorType", replicatorType.toString()))
-					.post(Entity.entity(replicatorPoliciesRequest, MediaType.APPLICATION_JSON), ErrorData.class);
-		} catch (Exception e) {
-			throw getApiException(e);
-		}
-	}
+    public void addExternalReplicator(String namespace, ReplicatorType replicatorType,
+            ReplicatorPoliciesRequest replicatorPoliciesRequest) throws PulsarAdminException {
+        if (replicatorType == null) {
+            throw new PulsarAdminException("Replicator type can't be null");
+        }
+        try {
+            NamespaceName ns = NamespaceName.get(namespace);
+            WebTarget path = namespacePath(ns, "replicator");
+            request(path.queryParam("replicatorType", replicatorType.toString()))
+                    .post(Entity.entity(replicatorPoliciesRequest, MediaType.APPLICATION_JSON), ErrorData.class);
+        } catch (Exception e) {
+            throw getApiException(e);
+        }
+    }
     
     @Override
     public void setPersistence(String namespace, PersistencePolicies persistence) throws PulsarAdminException {

@@ -107,8 +107,8 @@ public final class Utils {
 
     		//For testing
     		if(destPkgPath!=null) {
-    			writeToFile(uploadedInputStream,destPkgPath);
-    			return;
+    			//writeToFile(uploadedInputStream,destPkgPath);
+    			//return;
     		}
     	
         // if the dest directory does not exist, create it.
@@ -173,8 +173,8 @@ public final class Utils {
                                                  String packagePath) throws Exception {
 		
 		if(packagePath!=null) {
-			readFile(outputStream,packagePath);
-			return;
+			//readFile(outputStream,packagePath);
+			//return;
 		}
 		
         DistributedLogManager dlm = namespace.openLog(packagePath);

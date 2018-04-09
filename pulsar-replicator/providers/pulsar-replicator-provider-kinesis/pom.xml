@@ -128,12 +128,6 @@
                   <include>com.amazonaws*:*</include>
                   <include>com.google.protobuf*:*</include>
                   <include>${project.groupId}:pulsar-replicator-provider</include>
-                  <!-- <include>com.fasterxml.jackson.core:*</include>
-                  <include>${project.groupId}:pulsar-*</include>
-                  <include>${project.groupId}:pulsar-broker-common</include>
-                  <include>${project.groupId}:pulsar-client-original</include>
-                  <include>${project.groupId}:pulsar-replicator-provider</include>
-                   -->
                 </includes>
               </artifactSet>
               <relocations>
@@ -141,10 +135,10 @@
                   <pattern>com.google.protobuf</pattern>
                   <shadedPattern>org.apache.pulsar.replicator.com.google.protobuf</shadedPattern>
                 </relocation>
-                <!-- <relocation>
-                  <pattern>com.fasterxml.jackson</pattern>
-                  <shadedPattern>org.apache.pulsar.replicator.com.fasterxml.jackson</shadedPattern>
-                </relocation> -->
+                <relocation>
+                  <pattern>com.amazonaws</pattern>
+                  <shadedPattern>org.apache.pulsar.com.amazonaws</shadedPattern>
+                </relocation>
               </relocations>
             </configuration>
           </execution>

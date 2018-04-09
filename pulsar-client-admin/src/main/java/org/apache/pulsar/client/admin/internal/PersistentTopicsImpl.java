@@ -713,30 +713,50 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
         return future;
     }
 
-	@Override
-	public void registerReplicator(String topic, ReplicatorType replicatorType) throws PulsarAdminException {
-		TopicName tn = validateTopic(topic);
-		WebTarget path = topicPath(tn, "replicator");
-		request(path.queryParam("replicatorType", replicatorType.toString()))
-				.post(Entity.entity("", MediaType.APPLICATION_JSON), ErrorData.class);
-	}
+    @Override
+    public void registerReplicator(String topic, ReplicatorType replicatorType) throws PulsarAdminException {
+        TopicName tn = validateTopic(topic);
+        WebTarget path = topicPath(tn, "replicator");
+        if (replicatorType == null) {
+            throw new PulsarAdminException("Replicator type can't be null");
+        }
+        try {
+            request(path.queryParam("replicatorType", replicatorType.toString()))
+                    .post(Entity.entity("", MediaType.APPLICATION_JSON), ErrorData.class);
+        } catch (Exception e) {
+            throw getApiException(e);
+        }
+    }
 
-	@Override
-	public void updateReplicator(String topic, ReplicatorType replicatorType, Action action)
-			throws PulsarAdminException {
-		TopicName tn = validateTopic(topic);
-		WebTarget path = topicPath(tn, "replicator");
-		request(path.queryParam("replicatorType", replicatorType.toString()).queryParam("action", action.toString()))
-				.put(Entity.entity("", MediaType.APPLICATION_JSON), ErrorData.class);
-	}
+    @Override
+    public void updateReplicator(String topic, ReplicatorType replicatorType, Action action)
+            throws PulsarAdminException {
+        TopicName tn = validateTopic(topic);
+        WebTarget path = topicPath(tn, "replicator");
+        if (replicatorType == null) {
+            throw new PulsarAdminException("Replicator type can't be null");
+        }
+        try {
+            request(path.queryParam("replicatorType", replicatorType.toString()).queryParam("action",
+                    action.toString())).put(Entity.entity("", MediaType.APPLICATION_JSON), ErrorData.class);
+        } catch (Exception e) {
+            throw getApiException(e);
+        }
+    }
 
-	@Override
-	public void deregisterReplicator(String topic, ReplicatorType replicatorType) throws PulsarAdminException {
-		TopicName tn = validateTopic(topic);
-		WebTarget path = topicPath(tn, "replicator");
-		request(path.queryParam("replicatorType", replicatorType.toString())).delete(ErrorData.class);
-
-	}
+    @Override
+    public void deregisterReplicator(String topic, ReplicatorType replicatorType) throws PulsarAdminException {
+        TopicName tn = validateTopic(topic);
+        WebTarget path = topicPath(tn, "replicator");
+        if (replicatorType == null) {
+            throw new PulsarAdminException("Replicator type can't be null");
+        }
+        try {
+            request(path.queryParam("replicatorType", replicatorType.toString())).delete(ErrorData.class);
+        } catch (Exception e) {
+            throw getApiException(e);
+        }
+    }
     
     private WebTarget namespacePath(NamespaceName namespace, String... parts) {
         final WebTarget base = namespace.isV2() ? adminV2PersistentTopics : adminPersistentTopics;
