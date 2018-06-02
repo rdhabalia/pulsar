@@ -20,6 +20,8 @@ package org.apache.pulsar.functions.worker;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
@@ -28,11 +30,7 @@ import java.io.OutputStream;
 import java.net.URI;
 import java.util.UUID;
 
-import lombok.extern.slf4j.Slf4j;
-
-import org.apache.distributedlog.AppendOnlyStreamWriter;
 import org.apache.distributedlog.DistributedLogConfiguration;
-import org.apache.distributedlog.api.DistributedLogManager;
 import org.apache.distributedlog.api.namespace.Namespace;
 import org.apache.distributedlog.exceptions.ZKException;
 import org.apache.distributedlog.impl.metadata.BKDLConfig;
@@ -41,8 +39,9 @@ import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.functions.proto.Function;
 import org.apache.pulsar.functions.worker.dlog.DLInputStream;
-import org.apache.pulsar.functions.worker.dlog.DLOutputStream;
 import org.apache.zookeeper.KeeperException.Code;
+
+import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 public final class Utils {
@@ -98,6 +97,7 @@ public final class Utils {
                                          String destPkgPath)
             throws IOException {
 
+        /*
         // if the dest directory does not exist, create it.
         if (dlogNamespace.logExists(destPkgPath)) {
             // if the destination file exists, write a log message
@@ -121,14 +121,16 @@ public final class Utils {
                     out.flush();
                 }
             }
-        }
+        }*/
     }
 
     public static void downloadFromBookkeeper(Namespace namespace,
                                                  OutputStream outputStream,
                                                  String packagePath) throws IOException {
-        DistributedLogManager dlm = namespace.openLog(packagePath);
-        try (InputStream in = new DLInputStream(dlm)) {
+        
+        File file = new File("/yh/git/jan/pulsar/pulsar-io/kinesis/target/pulsar-io-kinesis.jar");
+        FileInputStream fis = null;
+        try (InputStream in = new FileInputStream(file)) {
             int read = 0;
             byte[] bytes = new byte[1024];
             while ((read = in.read(bytes)) != -1) {
@@ -136,6 +138,16 @@ public final class Utils {
             }
             outputStream.flush();
         }
+        
+        /*DistributedLogManager dlm = namespace.openLog(packagePath);
+        try (InputStream in = new DLInputStream(dlm)) {
+            int read = 0;
+            byte[] bytes = new byte[1024];
+            while ((read = in.read(bytes)) != -1) {
+                outputStream.write(bytes, 0, read);
+            }
+            outputStream.flush();
+        }*/
     }
 
     public static DistributedLogConfiguration getDlogConf(WorkerConfig workerConfig) {

@@ -36,6 +36,7 @@ public class PulsarSourceConfig {
     private FunctionConfig.SubscriptionType subscriptionType;
     private String subscriptionName;
     private Map<String, String> topicSerdeClassNameMap;
+    private String topicsPattern;
     private String typeClassName;
 
     public static PulsarSourceConfig load(Map<String, Object> map) throws IOException {
