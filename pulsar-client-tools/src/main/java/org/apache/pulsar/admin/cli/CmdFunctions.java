@@ -922,7 +922,7 @@ public class CmdFunctions extends CmdBase {
             serviceUrl = DEFAULT_SERVICE_URL;
         }
         try (ProcessRuntimeFactory containerFactory = new ProcessRuntimeFactory(
-                serviceUrl, null, null, null)) {
+                serviceUrl, null, null, null, null, null)) {
             List<RuntimeSpawner> spawners = new LinkedList<>();
             for (int i = 0; i < parallelism; ++i) {
                 InstanceConfig instanceConfig = new InstanceConfig();

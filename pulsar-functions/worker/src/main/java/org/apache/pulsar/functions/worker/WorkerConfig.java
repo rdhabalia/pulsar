@@ -65,6 +65,7 @@ public class WorkerConfig implements Serializable {
     private long instanceLivenessCheckFreqMs;
     private String clientAuthenticationPlugin;
     private String clientAuthenticationParameters;
+    private boolean dLogEnabled;
 
     @Data
     @Setter

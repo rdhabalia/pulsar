@@ -43,7 +43,7 @@ public class ClustersImpl extends BaseResource implements Clusters {
 
     public ClustersImpl(WebTarget web, Authentication auth) {
         super(auth);
-        adminClusters = web.path("/admin/v2/clusters");
+        adminClusters = web.path("/admin/clusters");
     }
 
     @Override

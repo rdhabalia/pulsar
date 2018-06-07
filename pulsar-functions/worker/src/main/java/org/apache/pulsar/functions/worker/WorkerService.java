@@ -66,11 +66,10 @@ public class WorkerService {
         // create the dlog namespace for storing function packages
         DistributedLogConfiguration dlogConf = Utils.getDlogConf(workerConfig);
         try {
-            this.dlogNamespace = NamespaceBuilder.newBuilder()
-                    .conf(dlogConf)
-                    .clientId("function-worker-" + workerConfig.getWorkerId())
-                    .uri(dlogUri)
-                    .build();
+            if (workerConfig.isDLogEnabled()) {
+                this.dlogNamespace = NamespaceBuilder.newBuilder().conf(dlogConf)
+                        .clientId("function-worker-" + workerConfig.getWorkerId()).uri(dlogUri).build();
+            }
         } catch (Exception e) {
             log.error("Failed to initialize dlog namespace {} for storing function packages",
                     dlogUri, e);

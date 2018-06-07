@@ -21,6 +21,8 @@ package org.apache.pulsar.functions.worker;
 import com.google.common.util.concurrent.AbstractService;
 
 import lombok.extern.slf4j.Slf4j;
+
+import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.admin.PulsarAdminException;
 import org.apache.pulsar.common.conf.InternalConfigurationData;
@@ -73,7 +75,7 @@ public class Worker extends AbstractService {
         // initializing pulsar functions namespace
         PulsarAdmin admin = Utils.getPulsarAdminClient(workerConfig.getPulsarWebServiceUrl(),
                 workerConfig.getClientAuthenticationPlugin(), workerConfig.getClientAuthenticationParameters());
-        InternalConfigurationData internalConf;
+        InternalConfigurationData internalConf = null;
         // make sure pulsar broker is up
         log.info("Checking if pulsar service at {} is up...", workerConfig.getPulsarWebServiceUrl());
         int maxRetries = workerConfig.getInitialBrokerReconnectMaxRetries();
@@ -125,7 +127,9 @@ public class Worker extends AbstractService {
                 }
             }
             try {
-                internalConf = admin.brokers().getInternalConfigurationData();
+                if (workerConfig.isDLogEnabled()) {
+                    internalConf = admin.brokers().getInternalConfigurationData();
+                }
             } catch (PulsarAdminException e) {
                 log.error("Failed to retrieve broker internal configuration", e);
                 throw e;
@@ -137,9 +141,9 @@ public class Worker extends AbstractService {
         // initialize the dlog namespace
         // TODO: move this as part of pulsar cluster initialization later
         try {
-            return Utils.initializeDlogNamespace(
+            return workerConfig.isDLogEnabled() ? Utils.initializeDlogNamespace(
                     internalConf.getZookeeperServers(),
-                    internalConf.getLedgersRootPath());
+                    internalConf.getLedgersRootPath()) : null;
         } catch (IOException ioe) {
             log.error("Failed to initialize dlog namespace at zookeeper {} for storing function packages",
                     internalConf.getZookeeperServers(), ioe);
