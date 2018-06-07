@@ -95,14 +95,16 @@ public class FunctionRuntimeManager implements AutoCloseable{
         if (workerConfig.getThreadContainerFactory() != null) {
             this.runtimeFactory = new ThreadRuntimeFactory(
                     workerConfig.getThreadContainerFactory().getThreadGroupName(),
-                    workerConfig.getPulsarServiceUrl(),
+                    pulsarClient,
                     workerConfig.getStateStorageServiceUrl());
         } else if (workerConfig.getProcessContainerFactory() != null) {
             this.runtimeFactory = new ProcessRuntimeFactory(
                     workerConfig.getPulsarServiceUrl(),
                     workerConfig.getProcessContainerFactory().getJavaInstanceJarLocation(),
                     workerConfig.getProcessContainerFactory().getPythonInstanceLocation(),
-                    workerConfig.getProcessContainerFactory().getLogDirectory());
+                    workerConfig.getProcessContainerFactory().getLogDirectory(),
+                    workerConfig.getClientAuthenticationPlugin(),
+                    workerConfig.getClientAuthenticationParameters());
         } else {
             throw new RuntimeException("Either Thread or Process Container Factory need to be set");
         }

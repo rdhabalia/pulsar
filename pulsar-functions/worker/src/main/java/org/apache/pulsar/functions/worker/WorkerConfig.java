@@ -63,6 +63,8 @@ public class WorkerConfig implements Serializable {
     private int initialBrokerReconnectMaxRetries;
     private int assignmentWriteMaxRetries;
     private long instanceLivenessCheckFreqMs;
+    private String clientAuthenticationPlugin;
+    private String clientAuthenticationParameters;
 
     @Data
     @Setter

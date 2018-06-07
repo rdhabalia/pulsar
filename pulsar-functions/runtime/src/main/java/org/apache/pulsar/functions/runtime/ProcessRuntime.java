@@ -30,6 +30,8 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
+
+import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.functions.instance.InstanceConfig;
 import org.apache.pulsar.functions.proto.Function;
 import org.apache.pulsar.functions.proto.InstanceCommunication;
@@ -66,17 +68,21 @@ class ProcessRuntime implements Runtime {
                    String instanceFile,
                    String logDirectory,
                    String codeFile,
-                   String pulsarServiceUrl) {
+                   String pulsarServiceUrl,
+                   String clientAuthenticationPlugin,
+                   String clientAuthenticationParameters) {
         this.instanceConfig = instanceConfig;
         this.instancePort = instanceConfig.getPort();
-        this.processArgs = composeArgs(instanceConfig, instanceFile, logDirectory, codeFile, pulsarServiceUrl);
+        this.processArgs = composeArgs(instanceConfig, instanceFile, logDirectory, codeFile, pulsarServiceUrl, clientAuthenticationPlugin, clientAuthenticationParameters);
     }
 
     private List<String> composeArgs(InstanceConfig instanceConfig,
                                      String instanceFile,
                                      String logDirectory,
                                      String codeFile,
-                                     String pulsarServiceUrl) {
+                                     String pulsarServiceUrl,
+                                     String clientAuthenticationPlugin,
+                                     String clientAuthenticationParameters) {
         List<String> args = new LinkedList<>();
         if (instanceConfig.getFunctionDetails().getRuntime() == Function.FunctionDetails.Runtime.JAVA) {
             args.add("java");
@@ -135,6 +141,12 @@ class ProcessRuntime implements Runtime {
         args.add(String.valueOf(instanceConfig.getFunctionDetails().getProcessingGuarantees()));
         args.add("--pulsar_serviceurl");
         args.add(pulsarServiceUrl);
+        if(isNotBlank(clientAuthenticationPlugin) && isNotBlank(clientAuthenticationParameters)) {
+            args.add("--client_auth_plugin");
+            args.add(clientAuthenticationPlugin);
+            args.add("--client_auth_params");
+            args.add(clientAuthenticationParameters);
+        }
         args.add("--max_buffered_tuples");
         args.add(String.valueOf(instanceConfig.getMaxBufferedTuples()));
         String userConfig = instanceConfig.getFunctionDetails().getUserConfig();

@@ -32,17 +32,23 @@ import java.nio.file.Paths;
 public class ProcessRuntimeFactory implements RuntimeFactory {
 
     private String pulsarServiceUrl;
+    private String clientAuthenticationPlugin;
+    private String clientAuthenticationParameters;
     private String javaInstanceJarFile;
     private String pythonInstanceFile;
     private String logDirectory;
 
     @VisibleForTesting
     public ProcessRuntimeFactory(String pulsarServiceUrl,
+                                 String clientAuthenticationPlugin,
+                                 String clientAuthenticationParameters,
                                  String javaInstanceJarFile,
                                  String pythonInstanceFile,
                                  String logDirectory) {
 
         this.pulsarServiceUrl = pulsarServiceUrl;
+        this.clientAuthenticationPlugin = clientAuthenticationPlugin;
+        this.clientAuthenticationParameters = clientAuthenticationParameters;
         this.javaInstanceJarFile = javaInstanceJarFile;
         this.pythonInstanceFile = pythonInstanceFile;
         this.logDirectory = logDirectory;
@@ -100,7 +106,9 @@ public class ProcessRuntimeFactory implements RuntimeFactory {
             instanceFile,
             logDirectory,
             codeFile,
-            pulsarServiceUrl);
+            pulsarServiceUrl,
+            clientAuthenticationPlugin,
+            clientAuthenticationParameters);
     }
 
     @Override

@@ -35,7 +35,7 @@ import java.nio.channels.ReadableByteChannel;
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 
-import org.apache.commons.lang3.StringUtils;
+import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import org.apache.distributedlog.AppendOnlyStreamWriter;
 import org.apache.distributedlog.DistributedLogConfiguration;
 import org.apache.distributedlog.api.DistributedLogManager;
@@ -44,6 +44,7 @@ import org.apache.distributedlog.exceptions.ZKException;
 import org.apache.distributedlog.impl.metadata.BKDLConfig;
 import org.apache.distributedlog.metadata.DLMetadata;
 import org.apache.pulsar.client.admin.PulsarAdmin;
+import org.apache.pulsar.client.admin.PulsarAdminBuilder;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.functions.worker.dlog.DLInputStream;
 import org.apache.pulsar.functions.worker.dlog.DLOutputStream;
@@ -212,9 +213,13 @@ public final class Utils {
         return dlogUri;
     }
 
-    public static PulsarAdmin getPulsarAdminClient(String pulsarWebServiceUrl) {
+    public static PulsarAdmin getPulsarAdminClient(String pulsarWebServiceUrl, String authPlugin, String authParams) {
         try {
-            return PulsarAdmin.builder().serviceHttpUrl(pulsarWebServiceUrl).build();
+            PulsarAdminBuilder adminBuilder = PulsarAdmin.builder().serviceHttpUrl(pulsarWebServiceUrl);
+            if(isNotBlank(authPlugin) && isNotBlank(authParams)) {
+                adminBuilder.authentication(authPlugin, authParams);
+            }
+            return adminBuilder.build();
         } catch (PulsarClientException e) {
             log.error("Error creating pulsar admin client", e);
             throw new RuntimeException(e);
@@ -235,7 +240,7 @@ public final class Utils {
     }
     
     public static boolean isFunctionPackageUrlSupported(String functionPkgUrl) {
-        return StringUtils.isNotBlank(functionPkgUrl)
+        return isNotBlank(functionPkgUrl)
                 && (functionPkgUrl.startsWith(Utils.HTTP) || functionPkgUrl.startsWith(Utils.FILE));
     }
 }

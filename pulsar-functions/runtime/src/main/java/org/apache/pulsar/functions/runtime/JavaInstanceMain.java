@@ -82,7 +82,13 @@ public class JavaInstanceMain implements AutoCloseable {
 
     @Parameter(names = "--pulsar_serviceurl", description = "Pulsar Service Url\n", required = true)
     protected String pulsarServiceUrl;
-
+    
+    @Parameter(names = "--client_auth_plugin", description = "Client auth plugin name\n")
+    protected String clientAuthenticationPlugin;
+    
+    @Parameter(names = "--client_auth_params", description = "Client auth param\n")
+    protected String clientAuthenticationParameters;
+    
     @Parameter(names = "--state_storage_serviceurl", description = "State Storage Service Url\n", required= false)
     protected String stateStorageServiceUrl;
 
@@ -210,7 +216,9 @@ public class JavaInstanceMain implements AutoCloseable {
         ThreadRuntimeFactory containerFactory = new ThreadRuntimeFactory(
                 "LocalRunnerThreadGroup",
                 pulsarServiceUrl,
-                stateStorageServiceUrl);
+                stateStorageServiceUrl,
+                clientAuthenticationPlugin,
+                clientAuthenticationParameters);
         runtimeSpawner = new RuntimeSpawner(
                 instanceConfig,
                 jarFile,

@@ -23,8 +23,12 @@ import com.google.common.annotations.VisibleForTesting;
 
 import lombok.extern.slf4j.Slf4j;
 
+import static org.apache.commons.lang3.StringUtils.isNotBlank;
+
+import org.apache.pulsar.client.api.ClientBuilder;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
+import org.apache.pulsar.client.api.PulsarClientException.UnsupportedAuthenticationException;
 import org.apache.pulsar.functions.instance.InstanceConfig;
 import org.apache.pulsar.functions.utils.functioncache.FunctionCacheManager;
 import org.apache.pulsar.functions.utils.functioncache.FunctionCacheManagerImpl;
@@ -43,16 +47,17 @@ public class ThreadRuntimeFactory implements RuntimeFactory {
 
     public ThreadRuntimeFactory(String threadGroupName,
                                 String pulsarServiceUrl,
-                                String storageServiceUrl)
+                                String storageServiceUrl,
+                                String clientAuthenticationPlugin,
+                                String clientAuthenticationParameters)
             throws Exception {
         this(
             threadGroupName,
-            pulsarServiceUrl != null ? PulsarClient.builder().serviceUrl(pulsarServiceUrl).build() : null,
+            createPulsarClient(pulsarServiceUrl, clientAuthenticationPlugin, clientAuthenticationParameters),
             storageServiceUrl);
     }
 
-    @VisibleForTesting
-    ThreadRuntimeFactory(String threadGroupName,
+    public ThreadRuntimeFactory(String threadGroupName,
                          PulsarClient pulsarClient,
                          String storageServiceUrl) {
         this.fnCache = new FunctionCacheManagerImpl();
@@ -61,6 +66,19 @@ public class ThreadRuntimeFactory implements RuntimeFactory {
         this.storageServiceUrl = storageServiceUrl;
     }
 
+    private static PulsarClient createPulsarClient(String pulsarServiceUrl, String clientAuthenticationPlugin,
+            String clientAuthenticationParameters) throws PulsarClientException {
+        ClientBuilder clientBuilder = null;
+        if (isNotBlank(pulsarServiceUrl)) {
+            clientBuilder = PulsarClient.builder().serviceUrl(pulsarServiceUrl);
+            if (isNotBlank(clientAuthenticationPlugin) && isNotBlank(clientAuthenticationParameters)) {
+                clientBuilder.authentication(clientAuthenticationPlugin, clientAuthenticationParameters);
+            }
+            return clientBuilder.build();
+        }
+        return null;
+    }
+    
     @Override
     public ThreadRuntime createContainer(InstanceConfig instanceConfig, String jarFile) {
         return new ThreadRuntime(
