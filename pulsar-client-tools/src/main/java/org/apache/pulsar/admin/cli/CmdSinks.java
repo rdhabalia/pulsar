@@ -257,8 +257,6 @@ public class CmdSinks extends CmdBase {
                 sinkConfig.setJar(jarFile);
             }
             
-            sinkConfig.setClassNameArgType(classNameArgType);
-            
             sinkConfig.setResources(new org.apache.pulsar.functions.utils.Resources(cpu, ram, disk));
 
             if (null != sinkConfigString) {
@@ -289,11 +287,6 @@ public class CmdSinks extends CmdBase {
 
             String jarFilePath = null;
             if (isJarPathUrl) {
-                // jar can't be loaded from file-url so, arg class-name must be present
-                if (sinkConfig.getJar().startsWith(Utils.FILE) && isBlank(sinkConfig.getClassNameArgType())) {
-                    throw new ParameterException(
-                            "Sink class arg-type must be present for a package uploaded at : " + sinkConfig.getJar());
-                }
                 // download jar file if url is http
                 if(sinkConfig.getJar().startsWith(Utils.HTTP)) {
                     File tempPkgFile = null;
@@ -355,7 +348,7 @@ public class CmdSinks extends CmdBase {
             // check if configs are valid
             validateSinkConfigs(sinkConfig);
 
-            String typeArg = isNotBlank(sinkConfig.getClassNameArgType()) ? sinkConfig.getClassNameArgType()
+            String typeArg = sinkConfig.getJar().startsWith(Utils.FILE) ? null
                     : getSinkType(sinkConfig.getClassName()).getName();
 
             FunctionDetails.Builder functionDetailsBuilder = FunctionDetails.newBuilder();
@@ -384,7 +377,9 @@ public class CmdSinks extends CmdBase {
             if (sinkConfig.getTopicsPattern() != null) {
                 sourceSpecBuilder.setTopicsPattern(sinkConfig.getTopicsPattern());
             }
-            sourceSpecBuilder.setTypeClassName(typeArg);
+            if (typeArg != null) {
+                sourceSpecBuilder.setTypeClassName(typeArg);
+            }
             functionDetailsBuilder.setAutoAck(true);
             functionDetailsBuilder.setSource(sourceSpecBuilder);
 
@@ -394,7 +389,9 @@ public class CmdSinks extends CmdBase {
             if (sinkConfig.getConfigs() != null) {
                 sinkSpecBuilder.setConfigs(new Gson().toJson(sinkConfig.getConfigs()));
             }
-            sinkSpecBuilder.setTypeClassName(typeArg);
+            if (typeArg != null) {
+                sinkSpecBuilder.setTypeClassName(typeArg);
+            }
             functionDetailsBuilder.setSink(sinkSpecBuilder);
 
             if (sinkConfig.getResources() != null) {
