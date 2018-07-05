@@ -23,23 +23,33 @@ import static org.apache.pulsar.common.api.Commands.hasChecksum;
 import static org.apache.pulsar.common.api.Commands.readChecksum;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 
 import java.io.IOException;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import lombok.experimental.UtilityClass;
 import lombok.extern.slf4j.Slf4j;
 
+import org.apache.pulsar.client.api.CryptoKeyReader;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.common.api.Commands;
+import org.apache.pulsar.common.api.EncryptionContext;
 import org.apache.pulsar.common.api.PulsarDecoder;
+import org.apache.pulsar.common.api.EncryptionContext.EncryptionKey;
 import org.apache.pulsar.common.api.proto.PulsarApi;
+import org.apache.pulsar.common.api.proto.PulsarApi.EncryptionKeys;
 import org.apache.pulsar.common.api.proto.PulsarApi.MessageIdData;
 import org.apache.pulsar.common.api.proto.PulsarApi.MessageMetadata;
+import org.apache.pulsar.common.api.proto.PulsarApi.MessageMetadata.Builder;
 import org.apache.pulsar.common.compression.CompressionCodec;
 import org.apache.pulsar.common.compression.CompressionCodecProvider;
 import org.apache.pulsar.common.naming.TopicName;
+import org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString;
 
 @UtilityClass
 @Slf4j
@@ -100,7 +110,7 @@ public class MessageParser {
 
             } else {
                 // handle batch message enqueuing; uncompressed payload has all messages in batch
-                receiveIndividualMessagesFromBatch(msgMetadata, uncompressedPayload, messageId, null, -1, processor);
+                receiveIndividualMessagesFromBatch(msgMetadata, uncompressedPayload, ledgerId, entryId, null, -1, processor);
                 uncompressedPayload.release();
             }
 
@@ -115,6 +125,95 @@ public class MessageParser {
         }
     }
 
+    /**
+     * Parse message which contains encrypted payload and requires to parse with encryption-context present into 
+     * @param topicName
+     * @param message
+     * @param encryptionKeyName
+     * @param reader
+     * @param crypto
+     * @param processor
+     * @throws IOException
+     */
+    public static void parseMessage(TopicName topicName, Message<?> message,
+            String encryptionKeyName, CryptoKeyReader reader, MessageCrypto crypto, MessageProcessor processor) throws IOException {
+
+        MessageMetadata msgMetadata = null;
+        ByteBuf uncompressedPayload = null;
+        try {
+            Optional<EncryptionContext> ctx = message.getEncryptionCtx();
+            EncryptionContext encryptionCtx = ctx
+                    .orElseThrow(() -> new IllegalStateException("encryption-ctx not present for encrypted message"));
+
+            Map<String, EncryptionKey> keys = encryptionCtx.getKeys();
+            EncryptionKey encryptionKey = keys.get(encryptionKeyName);
+            Map<String, String> keyMetadata = encryptionKey.getMetadata();
+            List<org.apache.pulsar.common.api.proto.PulsarApi.KeyValue> keyMetadataList = keyMetadata != null
+                    ? keyMetadata.entrySet().stream()
+                            .map(e -> org.apache.pulsar.common.api.proto.PulsarApi.KeyValue.newBuilder()
+                                    .setKey(e.getKey()).setValue(e.getValue()).build())
+                            .collect(Collectors.toList())
+                    : null;
+            byte[] dataKey = encryptionKey.getKeyValue();
+
+            org.apache.pulsar.common.api.proto.PulsarApi.CompressionType compressionType = encryptionCtx.getCompressionType();
+            int uncompressedSize = encryptionCtx.getUncompressedMessageSize();
+            byte[] encrParam = encryptionCtx.getParam();
+            String encAlgo = encryptionCtx.getAlgorithm();
+
+            ByteBuf payloadBuf = Unpooled.wrappedBuffer(message.getData());
+            Builder metadataBuilder = MessageMetadata.newBuilder();
+            org.apache.pulsar.common.api.proto.PulsarApi.EncryptionKeys.Builder encKeyBuilder = EncryptionKeys.newBuilder();
+            ByteString keyValue = ByteString.copyFrom(dataKey);
+            encKeyBuilder.setValue(keyValue).setKey(encryptionKeyName);
+            if(keyMetadataList!=null) {
+                encKeyBuilder.addAllMetadata(keyMetadataList);             
+            }
+            EncryptionKeys encKey = encKeyBuilder.build();
+            metadataBuilder.setEncryptionParam(ByteString.copyFrom(encrParam));
+            metadataBuilder.setEncryptionAlgo(encAlgo);
+            metadataBuilder.setProducerName(message.getProducerName());
+            metadataBuilder.setSequenceId(message.getSequenceId());
+            metadataBuilder.setPublishTime(message.getPublishTime());
+            metadataBuilder.addEncryptionKeys(encKey);
+            metadataBuilder.setCompression(compressionType);
+            metadataBuilder.setUncompressedSize(uncompressedSize);
+            if(encryptionCtx.getBatchSize().isPresent()) {
+                metadataBuilder.setNumMessagesInBatch(encryptionCtx.getBatchSize().get());
+            }
+            msgMetadata = metadataBuilder.build();
+            ByteBuf decryptedPayload = crypto.decrypt(msgMetadata, payloadBuf, reader);
+
+            // try to uncompress
+            CompressionCodec codec = CompressionCodecProvider.getCompressionCodec(compressionType);
+            uncompressedPayload = codec.decode(decryptedPayload, uncompressedSize);
+            
+            if (uncompressedPayload == null) {
+                // Message was discarded on decompression error
+                return;
+            }
+            
+            final int numMessages = msgMetadata.getNumMessagesInBatch();
+
+            MessageIdImpl msgId = (MessageIdImpl) message.getMessageId();
+            if (numMessages == 1 && !msgMetadata.hasNumMessagesInBatch()) {
+                processor.process(msgId, message, uncompressedPayload);
+                uncompressedPayload.release();
+            } else {
+                // handle batch message enqueuing; uncompressed payload has all messages in batch
+                receiveIndividualMessagesFromBatch(msgMetadata, uncompressedPayload, msgId.getLedgerId(), msgId.getEntryId(), null, -1, processor);
+                uncompressedPayload.release();
+            }
+        }finally {
+            if (uncompressedPayload != null) {
+                uncompressedPayload.release();
+            }
+            if(msgMetadata!=null) {
+                msgMetadata.recycle();    
+            }
+        }
+    }
+    
     public static boolean verifyChecksum(ByteBuf headersAndPayload, MessageIdData messageId, String topic,
             String subscription) {
         if (hasChecksum(headersAndPayload)) {
@@ -155,7 +254,7 @@ public class MessageParser {
     }
 
     public static void receiveIndividualMessagesFromBatch(MessageMetadata msgMetadata, ByteBuf uncompressedPayload,
-            MessageIdData messageId, ClientCnx cnx, int partitionIndex, MessageProcessor processor) {
+            long ledgerId, long entryId, ClientCnx cnx, int partitionIndex, MessageProcessor processor) {
         int batchSize = msgMetadata.getNumMessagesInBatch();
 
         try {
@@ -173,8 +272,8 @@ public class MessageParser {
                     continue;
                 }
 
-                BatchMessageIdImpl batchMessageIdImpl = new BatchMessageIdImpl(messageId.getLedgerId(),
-                        messageId.getEntryId(), partitionIndex, i, null);
+                BatchMessageIdImpl batchMessageIdImpl = new BatchMessageIdImpl(ledgerId, entryId, partitionIndex, i,
+                        null);
                 final MessageImpl<?> message = new MessageImpl<>(batchMessageIdImpl, msgMetadata,
                         singleMessageMetadataBuilder.build(), singleMessagePayload, Optional.empty(), cnx, null);
 
