@@ -53,6 +53,7 @@ public class WorkerConfig implements Serializable, PulsarConfiguration {
     private String workerId;
     private String workerHostname;
     private int workerPort;
+    private int workerPortTls;
     private String connectorsDirectory = "./connectors";
     private String functionMetadataTopicName;
     private String pulsarServiceUrl;
@@ -73,10 +74,29 @@ public class WorkerConfig implements Serializable, PulsarConfiguration {
     private long instanceLivenessCheckFreqMs;
     private String clientAuthenticationPlugin;
     private String clientAuthenticationParameters;
-    private boolean useTls = false;
+    /***** --- TLS --- ****/
+    // Enable TLS
+    private boolean tlsEnabled = false;
+    // Path for the TLS certificate file
+    private String tlsCertificateFilePath;
+    // Path for the TLS private key file
+    private String tlsKeyFilePath;
+    // Path for the trusted TLS certificate file
     private String tlsTrustCertsFilePath = "";
+    // Accept untrusted TLS certificate from client
     private boolean tlsAllowInsecureConnection = false;
+    // Specify the tls protocols the broker will use to negotiate during TLS Handshake.
+    // Example:- [TLSv1.2, TLSv1.1, TLSv1]
+    private Set<String> tlsProtocols = Sets.newTreeSet();
+    // Specify the tls cipher the broker will use to negotiate during TLS Handshake.
+    // Example:- [TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256]
+    private Set<String> tlsCiphers = Sets.newTreeSet();
+    // Specify whether Client certificates are required for TLS
+    // Reject the Connection if the Client Certificate is not trusted.
+    private boolean tlsRequireTrustedClientCertOnConnect = false;
+    private boolean useTls = false;
     private boolean tlsHostnameVerificationEnable = false;
+    
     private int metricsSamplingPeriodSec = 60;
     // Enforce authentication
     private boolean authenticationEnabled = false;
@@ -86,7 +106,6 @@ public class WorkerConfig implements Serializable, PulsarConfiguration {
     private boolean authorizationEnabled = false;
     // Role names that are treated as "super-user", meaning they will be able to access any admin-api
     private Set<String> superUserRoles = Sets.newTreeSet();
-    
     private Properties properties = new Properties();
 
 
