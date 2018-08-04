@@ -283,22 +283,6 @@ public class FunctionsImpl extends BaseResource implements Functions {
         }
     }
 
-    @Override
-    public Metrics getMetrics() throws PulsarAdminException {
-        try {
-            Response response = request(functions.path("metrics")).get();
-           if (!response.getStatusInfo().equals(Response.Status.OK)) {
-               throw new ClientErrorException(response);
-           }
-           String jsonResponse = response.readEntity(String.class);
-           Metrics.Builder metricsBuilder = Metrics.newBuilder();
-           mergeJson(jsonResponse, metricsBuilder);
-           return metricsBuilder.build();
-       } catch (Exception e) {
-           throw getApiException(e);
-       }
-   }
-
     public static void mergeJson(String json, Builder builder) throws IOException {
         JsonFormat.parser().merge(json, builder);
     }

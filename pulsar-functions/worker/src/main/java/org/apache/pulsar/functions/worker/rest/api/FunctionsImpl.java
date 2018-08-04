@@ -960,7 +960,7 @@ public class FunctionsImpl {
                 Utils.getUniquePackageName(Codec.encode(fileName)));
     }
 
-    private boolean isAuthorizedRole(String tenant, String clientRole) throws PulsarAdminException {
+    public boolean isAuthorizedRole(String tenant, String clientRole) throws PulsarAdminException {
         if (worker().getWorkerConfig().isAuthorizationEnabled()) {
             // skip authorization if client role is super-user
             if (clientRole != null && worker().getWorkerConfig().getSuperUserRoles().contains(clientRole)) {
