@@ -377,6 +377,9 @@ public class ServiceConfiguration implements PulsarConfiguration {
     private boolean autoSkipNonRecoverableData = false;
     // operation timeout while updating managed-ledger metadata.
     private long managedLedgerMetadataOperationsTimeoutSeconds = 60;
+    // Read entries timeout when broker tries to read messages from bookkeeper (disable timeout by setting
+    // readTimeoutSeconds <= 0)
+    private long managedLedgerReadEntryTimeoutSeconds = 120;
 
     /*** --- Load balancer --- ****/
     // Enable load balancer
@@ -1336,6 +1339,14 @@ public class ServiceConfiguration implements PulsarConfiguration {
 
     public void setManagedLedgerMetadataOperationsTimeoutSeconds(long managedLedgerMetadataOperationsTimeoutSeconds) {
         this.managedLedgerMetadataOperationsTimeoutSeconds = managedLedgerMetadataOperationsTimeoutSeconds;
+    }
+
+    public long getManagedLedgerReadEntryTimeoutSeconds() {
+        return managedLedgerReadEntryTimeoutSeconds;
+    }
+
+    public void setManagedLedgerReadEntryTimeoutSeconds(long managedLedgerReadEntryTimeoutSeconds) {
+        this.managedLedgerReadEntryTimeoutSeconds = managedLedgerReadEntryTimeoutSeconds;
     }
 
     public boolean isLoadBalancerEnabled() {
