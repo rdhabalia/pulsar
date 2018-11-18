@@ -24,6 +24,7 @@ import static org.apache.pulsar.broker.web.PulsarWebResource.path;
 
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
+import com.google.common.collect.Sets;
 
 import io.netty.util.concurrent.DefaultThreadFactory;
 
@@ -233,8 +234,11 @@ public class ModularLoadManagerImpl implements ModularLoadManager, ZooKeeperCach
                 if (log.isDebugEnabled()) {
                     log.debug("Update Received for path {}", path);
                 }
+                Set<String> coldBrokers = Sets.newHashSet(data);
+                coldBrokers.removeAll(loadData.getBrokerData().keySet());
                 reapDeadBrokerPreallocations(data);
                 scheduler.submit(ModularLoadManagerImpl.this::updateAll);
+                scheduler.submit(() -> ModularLoadManagerImpl.this.shedLoadToColdBroker(coldBrokers));
             }
         });
 
@@ -447,6 +451,13 @@ public class ModularLoadManagerImpl implements ModularLoadManager, ZooKeeperCach
         updateBundleData();
         // broker has latest load-report: check if any bundle requires split
         checkNamespaceBundleSplit();
+    }
+
+    public void shedLoadToColdBroker(Set<String> coldBrokers) {
+        if (log.isDebugEnabled()) {
+            log.debug("Shedding load to cold brokers {}",coldBrokers);
+        }
+        
     }
 
     // As the leader broker, update the broker data map in loadData by querying ZooKeeper for the broker data put there

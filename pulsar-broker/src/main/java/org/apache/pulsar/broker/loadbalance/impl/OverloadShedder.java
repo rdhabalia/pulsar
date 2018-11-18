@@ -22,10 +22,12 @@ import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.Multimap;
 
 import java.util.Map;
+import java.util.Map.Entry;
 
 import org.apache.commons.lang3.mutable.MutableBoolean;
 import org.apache.commons.lang3.mutable.MutableDouble;
 import org.apache.commons.lang3.tuple.Pair;
+import org.apache.pulsar.broker.BrokerData;
 import org.apache.pulsar.broker.BundleData;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.TimeAverageMessageData;
@@ -128,5 +130,32 @@ public class OverloadShedder implements LoadSheddingStrategy {
         });
 
         return selectedBundlesCache;
+    }
+    
+    public Pair<String,String> findHighestOverloadedBrokerBundle(final LoadData loadData, final ServiceConfiguration conf) {
+        
+        String highestOverloadedBroker = null;
+        double usage = 0;
+        for(Entry<String, BrokerData> brokerData : loadData.getBrokerData().entrySet()) {
+            final LocalBrokerData localData = brokerData.getValue().getLocalData();
+            if(localData.getMaxResourceUsage() > usage && localData.getBundles().size() > 1) {
+                highestOverloadedBroker = brokerData.getKey();
+            }
+        }
+        if(highestOverloadedBroker!=null) {
+            loadData.getBrokerData().get(highestOverloadedBroker).getLocalData().getBundleStats().
+        }
+        /*loadData.getBrokerData().forEach((broker, brokerData) -> {
+
+            final LocalBrokerData localData = brokerData.getLocalData();
+            final double currentUsage = localData.getMaxResourceUsage();
+            if (currentUsage < overloadThreshold) {
+                if (log.isDebugEnabled()) {
+                    log.debug("[{}] Broker is not overloaded, ignoring at this point", broker);
+                }
+                return;
+            }}*/
+        
+        return null;
     }
 }
