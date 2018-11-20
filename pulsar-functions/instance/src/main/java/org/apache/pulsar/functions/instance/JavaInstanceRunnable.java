@@ -24,6 +24,7 @@ import com.google.gson.reflect.TypeToken;
 import io.netty.buffer.ByteBuf;
 import io.prometheus.client.CollectorRegistry;
 import io.prometheus.client.Summary;
+import javax.swing.tree.ExpandVetoException;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -109,7 +110,7 @@ public class JavaInstanceRunnable implements AutoCloseable, Runnable {
     private Throwable deathException;
 
     // function stats
-    private final FunctionStats stats;
+    private final FunctionStatsManager stats;
 
     private Record<?> currentRecord;
 
@@ -133,7 +134,7 @@ public class JavaInstanceRunnable implements AutoCloseable, Runnable {
         this.jarFile = jarFile;
         this.client = (PulsarClientImpl) pulsarClient;
         this.stateStorageServiceUrl = stateStorageServiceUrl;
-        this.stats = new FunctionStats(collectorRegistry);
+        this.stats = new FunctionStatsManager(collectorRegistry);
         this.secretsProvider = secretsProvider;
         this.collectorRegistry = collectorRegistry;
         this.metricsLabels = new String[]{
@@ -290,6 +291,41 @@ public class JavaInstanceRunnable implements AutoCloseable, Runnable {
         Thread.currentThread().setContextClassLoader(fnClassLoader);
     }
 
+    private void createStateTable(String tableNs, String tableName, StorageClientSettings settings) throws Exception {
+        try (StorageAdminClient storageAdminClient = StorageClientBuilder.newBuilder()
+            .withSettings(settings)
+            .buildAdmin()) {
+            StreamConfiguration streamConf = StreamConfiguration.newBuilder(DEFAULT_STREAM_CONF)
+                .setInitialNumRanges(4)
+                .setMinNumRanges(4)
+                .setStorageType(StorageType.TABLE)
+                .build();
+            while (true) {
+                try {
+                    result(storageAdminClient.getStream(tableNs, tableName));
+                    return;
+                } catch (NamespaceNotFoundException nnfe) {
+                    try {
+                        result(storageAdminClient.createNamespace(tableNs, NamespaceConfiguration.newBuilder()
+                            .setDefaultStreamConf(streamConf)
+                            .build()));
+                        result(storageAdminClient.createStream(tableNs, tableName, streamConf));
+                    } catch (Exception e) {
+                        // there might be two clients conflicting at creating table, so let's retrieve the table again
+                        // to make sure the table is created.
+                    }
+                } catch (StreamNotFoundException snfe) {
+                    try {
+                        result(storageAdminClient.createStream(tableNs, tableName, streamConf));
+                    } catch (Exception e) {
+                        // there might be two client conflicting at creating table, so let's retrieve it to make
+                        // sure the table is created.
+                    }
+                }
+            }
+        }
+    }
+
     private void setupStateTable() throws Exception {
         if (null == stateStorageServiceUrl) {
             return;
@@ -307,25 +343,7 @@ public class JavaInstanceRunnable implements AutoCloseable, Runnable {
                 .build();
 
         // we defer creation of the state table until a java instance is running here.
-        try (StorageAdminClient storageAdminClient = StorageClientBuilder.newBuilder()
-                .withSettings(settings)
-                .buildAdmin()) {
-            StreamConfiguration streamConf = StreamConfiguration.newBuilder(DEFAULT_STREAM_CONF)
-                .setInitialNumRanges(4)
-                .setMinNumRanges(4)
-                .setStorageType(StorageType.TABLE)
-                .build();
-            try {
-                result(storageAdminClient.getStream(tableNs, tableName));
-            } catch (NamespaceNotFoundException nnfe) {
-                result(storageAdminClient.createNamespace(tableNs, NamespaceConfiguration.newBuilder()
-                        .setDefaultStreamConf(streamConf)
-                        .build()));
-                result(storageAdminClient.createStream(tableNs, tableName, streamConf));
-            } catch (StreamNotFoundException snfe) {
-                result(storageAdminClient.createStream(tableNs, tableName, streamConf));
-            }
-        }
+        createStateTable(tableNs, tableName, settings);
 
         log.info("Starting state table for function {}", instanceConfig.getFunctionDetails().getName());
         this.storageClient = StorageClientBuilder.newBuilder()
@@ -423,23 +441,17 @@ public class JavaInstanceRunnable implements AutoCloseable, Runnable {
     }
 
     public InstanceCommunication.MetricsData getAndResetMetrics() {
-        InstanceCommunication.MetricsData.Builder bldr = createMetricsDataBuilder();
+        InstanceCommunication.MetricsData metricsData = getMetrics();
         stats.reset();
-        if (javaInstance != null) {
-            InstanceCommunication.MetricsData userMetrics =  javaInstance.getAndResetMetrics();
-            if (userMetrics != null) {
-                bldr.putAllMetrics(userMetrics.getMetricsMap());
-            }
-        }
-        return bldr.build();
+        return metricsData;
     }
 
     public InstanceCommunication.MetricsData getMetrics() {
         InstanceCommunication.MetricsData.Builder bldr = createMetricsDataBuilder();
         if (javaInstance != null) {
-            InstanceCommunication.MetricsData userMetrics =  javaInstance.getMetrics();
+            Map<String, Double> userMetrics =  javaInstance.getMetrics();
             if (userMetrics != null) {
-                bldr.putAllMetrics(userMetrics.getMetricsMap());
+                bldr.putAllUserMetrics(userMetrics);
             }
         }
         return bldr.build();
@@ -452,16 +464,16 @@ public class JavaInstanceRunnable implements AutoCloseable, Runnable {
 
     private Builder createMetricsDataBuilder() {
         InstanceCommunication.MetricsData.Builder bldr = InstanceCommunication.MetricsData.newBuilder();
-        addSystemMetrics(FunctionStats.PULSAR_FUNCTION_PROCESSED_TOTAL, stats.statTotalProcessed.labels(metricsLabels).get(), bldr);
-        addSystemMetrics(FunctionStats.PULSAR_FUNCTION_PROCESSED_SUCCESSFULLY_TOTAL, stats.statTotalProcessedSuccessfully.labels(metricsLabels).get(), bldr);
-        addSystemMetrics(FunctionStats.PULSAR_FUNCTION_SYSTEM_EXCEPTIONS_TOTAL,  stats.statTotalSysExceptions.labels(metricsLabels).get(), bldr);
-        addSystemMetrics(FunctionStats.PULSAR_FUNCTION_USER_EXCEPTIONS_TOTAL, stats.statTotalUserExceptions.labels(metricsLabels).get(), bldr);
-        addSystemMetrics(FunctionStats.PULSAR_FUNCTION_RECEIVED_TOTAL, stats.statTotalRecordsRecieved.labels(metricsLabels).get(), bldr);
-        addSystemMetrics(FunctionStats.PULSAR_FUNCTION_PROCESS_LATENCY_MS,
-                stats.statProcessLatency.labels(metricsLabels).get().count <= 0.0
-                        ? 0 : stats.statProcessLatency.labels(metricsLabels).get().sum / stats.statProcessLatency.labels(metricsLabels).get().count,
-                bldr);
-        addSystemMetrics(FunctionStats.PULSAR_FUNCTION_LAST_INVOCATION, stats.statlastInvocation.labels(metricsLabels).get(), bldr);
+
+        bldr.setProcessedTotal((long) stats.statTotalProcessed.labels(metricsLabels).get());
+        bldr.setProcessedSuccessfullyTotal((long) stats.statTotalProcessedSuccessfully.labels(metricsLabels).get());
+        bldr.setSystemExceptionsTotal((long) stats.statTotalSysExceptions.labels(metricsLabels).get());
+        bldr.setUserExceptionsTotal((long) stats.statTotalUserExceptions.labels(metricsLabels).get());
+        bldr.setReceivedTotal((long) stats.statTotalRecordsRecieved.labels(metricsLabels).get());
+        bldr.setAvgProcessLatency(stats.statProcessLatency.labels(metricsLabels).get().count <= 0.0
+                ? 0 : stats.statProcessLatency.labels(metricsLabels).get().sum / stats.statProcessLatency.labels(metricsLabels).get().count);
+        bldr.setLastInvocation((long) stats.statlastInvocation.labels(metricsLabels).get());
+
         return bldr;
     }
 
@@ -483,13 +495,6 @@ public class JavaInstanceRunnable implements AutoCloseable, Runnable {
                         .labels(metricsLabels).get().count);
         functionStatusBuilder.setLastInvocationTime((long) stats.statlastInvocation.labels(metricsLabels).get());
         return functionStatusBuilder;
-    }
-
-    private static void addSystemMetrics(String metricName, double value, InstanceCommunication.MetricsData.Builder bldr) {
-        InstanceCommunication.MetricsData.DataDigest digest =
-                InstanceCommunication.MetricsData.DataDigest.newBuilder()
-                        .setCount(value).setSum(value).setMax(value).setMin(0).build();
-        bldr.putMetrics(metricName, digest);
     }
 
     private void setupLogHandler() {
