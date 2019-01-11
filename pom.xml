@@ -115,7 +115,7 @@ flexible messaging model and an intuitive client API.</description>
     <module>pulsar-io</module>
 
     <!-- examples -->
-    <module>examples</module>
+    <!-- <module>examples</module> -->
 
     <!-- all these 3 modules should be put at the end in this exact sequence -->
     <module>distribution</module>
