@@ -62,15 +62,15 @@ public class HttpClient implements Closeable {
     protected final ServiceNameResolver serviceNameResolver;
     protected final Authentication authentication;
 
-    protected HttpClient(String serviceUrl, Authentication authentication,
-            EventLoopGroup eventLoopGroup, boolean tlsAllowInsecureConnection, String tlsTrustCertsFilePath)
+    protected HttpClient(String serviceUrl, Authentication authentication, EventLoopGroup eventLoopGroup,
+            boolean tlsAllowInsecureConnection, String tlsTrustCertsFilePath, boolean TlsHostnameVerificationEnable)
             throws PulsarClientException {
-        this(serviceUrl, authentication, eventLoopGroup, tlsAllowInsecureConnection,
-                tlsTrustCertsFilePath, DEFAULT_CONNECT_TIMEOUT_IN_SECONDS, DEFAULT_READ_TIMEOUT_IN_SECONDS);
+        this(serviceUrl, authentication, eventLoopGroup, tlsAllowInsecureConnection, tlsTrustCertsFilePath,
+                TlsHostnameVerificationEnable, DEFAULT_CONNECT_TIMEOUT_IN_SECONDS, DEFAULT_READ_TIMEOUT_IN_SECONDS);
     }
 
-    protected HttpClient(String serviceUrl, Authentication authentication,
-            EventLoopGroup eventLoopGroup, boolean tlsAllowInsecureConnection, String tlsTrustCertsFilePath,
+    protected HttpClient(String serviceUrl, Authentication authentication, EventLoopGroup eventLoopGroup,
+            boolean tlsAllowInsecureConnection, String tlsTrustCertsFilePath, boolean TlsHostnameVerificationEnable,
             int connectTimeoutInSeconds, int readTimeoutInSeconds) throws PulsarClientException {
         this.authentication = authentication;
         this.serviceNameResolver = new PulsarServiceNameResolver();
@@ -103,7 +103,9 @@ public class HttpClient implements Closeable {
                 }
 
                 confBuilder.setSslContext(sslCtx);
-                confBuilder.setUseInsecureTrustManager(tlsAllowInsecureConnection);
+                if (TlsHostnameVerificationEnable) {
+                    confBuilder.setUseInsecureTrustManager(tlsAllowInsecureConnection);
+                }
             } catch (Exception e) {
                 throw new PulsarClientException.InvalidConfigurationException(e);
             }
