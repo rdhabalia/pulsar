@@ -1327,7 +1327,7 @@ public class ManagedCursorImpl implements ManagedCursor {
 
         // markDelete-position and clear out deletedMsgSet
         markDeletePosition = PositionImpl.get(newMarkDeletePosition);
-        individualDeletedMessages.remove(Range.atMost(markDeletePosition));
+        removeIndividualDeletedMessages(markDeletePosition);
 
         if (readPosition.compareTo(newMarkDeletePosition) <= 0) {
             // If the position that is mark-deleted is past the read position, it
@@ -1343,6 +1343,10 @@ public class ManagedCursorImpl implements ManagedCursor {
         }
 
         return newMarkDeletePosition;
+    }
+
+    private void removeIndividualDeletedMessages(PositionImpl markDeletePosition2) {
+        individualDeletedMessages.remove(Range.atMost(markDeletePosition));
     }
 
     @Override
@@ -2482,5 +2486,17 @@ public class ManagedCursorImpl implements ManagedCursor {
         }
     }
 
+    public static void main(String[] args) {
+        long a =123;
+        Long b = a;
+        System.out.println(b);
+        long[] arr;
+        
+    }
+    
+    public static class Range2<T extends Comparable<? super T>>  {
+        
+    }
+    
     private static final Logger log = LoggerFactory.getLogger(ManagedCursorImpl.class);
 }
