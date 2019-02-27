@@ -207,6 +207,7 @@ public final class PulsarApi {
     v11(11, 11),
     v12(12, 12),
     v13(13, 13),
+    v14(14, 14),
     ;
     
     public static final int v0_VALUE = 0;
@@ -223,6 +224,7 @@ public final class PulsarApi {
     public static final int v11_VALUE = 11;
     public static final int v12_VALUE = 12;
     public static final int v13_VALUE = 13;
+    public static final int v14_VALUE = 14;
     
     
     public final int getNumber() { return value; }
@@ -243,6 +245,7 @@ public final class PulsarApi {
         case 11: return v11;
         case 12: return v12;
         case 13: return v13;
+        case 14: return v14;
         default: return null;
       }
     }
@@ -6362,6 +6365,626 @@ public final class PulsarApi {
     }
     
     // @@protoc_insertion_point(class_scope:pulsar.proto.CommandConnect)
+  }
+  
+  public interface CommandRenewConnectOrBuilder
+      extends org.apache.pulsar.shaded.com.google.protobuf.v241.MessageLiteOrBuilder {
+  }
+  public static final class CommandRenewConnect extends
+      org.apache.pulsar.shaded.com.google.protobuf.v241.GeneratedMessageLite
+      implements CommandRenewConnectOrBuilder, org.apache.pulsar.common.util.protobuf.ByteBufCodedOutputStream.ByteBufGeneratedMessage  {
+    // Use CommandRenewConnect.newBuilder() to construct.
+    private io.netty.util.Recycler.Handle handle;
+    private CommandRenewConnect(io.netty.util.Recycler.Handle handle) {
+      this.handle = handle;
+    }
+    
+     private static final io.netty.util.Recycler<CommandRenewConnect> RECYCLER = new io.netty.util.Recycler<CommandRenewConnect>() {
+            protected CommandRenewConnect newObject(Handle handle) {
+              return new CommandRenewConnect(handle);
+            }
+          };
+        
+        public void recycle() {
+            this.initFields();
+            this.memoizedIsInitialized = -1;
+            this.memoizedSerializedSize = -1;
+            if (handle != null) { RECYCLER.recycle(this, handle); }
+        }
+         
+    private CommandRenewConnect(boolean noInit) {}
+    
+    private static final CommandRenewConnect defaultInstance;
+    public static CommandRenewConnect getDefaultInstance() {
+      return defaultInstance;
+    }
+    
+    public CommandRenewConnect getDefaultInstanceForType() {
+      return defaultInstance;
+    }
+    
+    private void initFields() {
+    }
+    private byte memoizedIsInitialized = -1;
+    public final boolean isInitialized() {
+      byte isInitialized = memoizedIsInitialized;
+      if (isInitialized != -1) return isInitialized == 1;
+      
+      memoizedIsInitialized = 1;
+      return true;
+    }
+    
+    public void writeTo(org.apache.pulsar.shaded.com.google.protobuf.v241.CodedOutputStream output)
+                        throws java.io.IOException {
+        throw new RuntimeException("Cannot use CodedOutputStream");
+    }
+    
+    public void writeTo(org.apache.pulsar.common.util.protobuf.ByteBufCodedOutputStream output)
+                        throws java.io.IOException {
+      getSerializedSize();
+    }
+    
+    private int memoizedSerializedSize = -1;
+    public int getSerializedSize() {
+      int size = memoizedSerializedSize;
+      if (size != -1) return size;
+    
+      size = 0;
+      memoizedSerializedSize = size;
+      return size;
+    }
+    
+    private static final long serialVersionUID = 0L;
+    @java.lang.Override
+    protected java.lang.Object writeReplace()
+        throws java.io.ObjectStreamException {
+      return super.writeReplace();
+    }
+    
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect parseFrom(
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString data)
+        throws org.apache.pulsar.shaded.com.google.protobuf.v241.InvalidProtocolBufferException {
+         throw new RuntimeException("Disabled");
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect parseFrom(
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString data,
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ExtensionRegistryLite extensionRegistry)
+        throws org.apache.pulsar.shaded.com.google.protobuf.v241.InvalidProtocolBufferException {
+         throw new RuntimeException("Disabled");
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect parseFrom(byte[] data)
+        throws org.apache.pulsar.shaded.com.google.protobuf.v241.InvalidProtocolBufferException {
+      return newBuilder().mergeFrom(data).buildParsed();
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect parseFrom(
+        byte[] data,
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ExtensionRegistryLite extensionRegistry)
+        throws org.apache.pulsar.shaded.com.google.protobuf.v241.InvalidProtocolBufferException {
+      return newBuilder().mergeFrom(data, extensionRegistry)
+               .buildParsed();
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect parseFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return newBuilder().mergeFrom(input).buildParsed();
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect parseFrom(
+        java.io.InputStream input,
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return newBuilder().mergeFrom(input, extensionRegistry)
+               .buildParsed();
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect parseDelimitedFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      Builder builder = newBuilder();
+      if (builder.mergeDelimitedFrom(input)) {
+        return builder.buildParsed();
+      } else {
+        return null;
+      }
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect parseDelimitedFrom(
+        java.io.InputStream input,
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      Builder builder = newBuilder();
+      if (builder.mergeDelimitedFrom(input, extensionRegistry)) {
+        return builder.buildParsed();
+      } else {
+        return null;
+      }
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect parseFrom(
+        org.apache.pulsar.shaded.com.google.protobuf.v241.CodedInputStream input)
+        throws java.io.IOException {
+      return newBuilder().mergeFrom(input).buildParsed();
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect parseFrom(
+        org.apache.pulsar.shaded.com.google.protobuf.v241.CodedInputStream input,
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return newBuilder().mergeFrom(input, extensionRegistry)
+               .buildParsed();
+    }
+    
+    public static Builder newBuilder() { return Builder.create(); }
+    public Builder newBuilderForType() { return newBuilder(); }
+    public static Builder newBuilder(org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect prototype) {
+      return newBuilder().mergeFrom(prototype);
+    }
+    public Builder toBuilder() { return newBuilder(this); }
+    
+    public static final class Builder extends
+        org.apache.pulsar.shaded.com.google.protobuf.v241.GeneratedMessageLite.Builder<
+          org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect, Builder>
+        implements org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnectOrBuilder, org.apache.pulsar.common.util.protobuf.ByteBufCodedInputStream.ByteBufMessageBuilder  {
+      // Construct using org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect.newBuilder()
+      private final io.netty.util.Recycler.Handle handle;
+      private Builder(io.netty.util.Recycler.Handle handle) {
+        this.handle = handle;
+        maybeForceBuilderInitialization();
+      }
+      private final static io.netty.util.Recycler<Builder> RECYCLER = new io.netty.util.Recycler<Builder>() {
+         protected Builder newObject(io.netty.util.Recycler.Handle handle) {
+               return new Builder(handle);
+             }
+            };
+      
+       public void recycle() {
+                clear();
+                if (handle != null) {RECYCLER.recycle(this, handle);}
+            }
+      
+      private void maybeForceBuilderInitialization() {
+      }
+      private static Builder create() {
+        return RECYCLER.get();
+      }
+      
+      public Builder clear() {
+        super.clear();
+        return this;
+      }
+      
+      public Builder clone() {
+        return create().mergeFrom(buildPartial());
+      }
+      
+      public org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect getDefaultInstanceForType() {
+        return org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect.getDefaultInstance();
+      }
+      
+      public org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect build() {
+        org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(result);
+        }
+        return result;
+      }
+      
+      private org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect buildParsed()
+          throws org.apache.pulsar.shaded.com.google.protobuf.v241.InvalidProtocolBufferException {
+        org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(
+            result).asInvalidProtocolBufferException();
+        }
+        return result;
+      }
+      
+      public org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect buildPartial() {
+        org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect result = org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect.RECYCLER.get();
+        return result;
+      }
+      
+      public Builder mergeFrom(org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect other) {
+        if (other == org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect.getDefaultInstance()) return this;
+        return this;
+      }
+      
+      public final boolean isInitialized() {
+        return true;
+      }
+      
+      public Builder mergeFrom(org.apache.pulsar.shaded.com.google.protobuf.v241.CodedInputStream input,
+                              org.apache.pulsar.shaded.com.google.protobuf.v241.ExtensionRegistryLite extensionRegistry)
+                              throws java.io.IOException {
+         throw new java.io.IOException("Merge from CodedInputStream is disabled");
+                              }
+      public Builder mergeFrom(
+          org.apache.pulsar.common.util.protobuf.ByteBufCodedInputStream input,
+          org.apache.pulsar.shaded.com.google.protobuf.v241.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        while (true) {
+          int tag = input.readTag();
+          switch (tag) {
+            case 0:
+              
+              return this;
+            default: {
+              if (!input.skipField(tag)) {
+                
+                return this;
+              }
+              break;
+            }
+          }
+        }
+      }
+      
+      
+      // @@protoc_insertion_point(builder_scope:pulsar.proto.CommandRenewConnect)
+    }
+    
+    static {
+      defaultInstance = new CommandRenewConnect(true);
+      defaultInstance.initFields();
+    }
+    
+    // @@protoc_insertion_point(class_scope:pulsar.proto.CommandRenewConnect)
+  }
+  
+  public interface CommandRenewedConnectOrBuilder
+      extends org.apache.pulsar.shaded.com.google.protobuf.v241.MessageLiteOrBuilder {
+    
+    // required .pulsar.proto.CommandConnect renewed_connect = 1;
+    boolean hasRenewedConnect();
+    org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect getRenewedConnect();
+  }
+  public static final class CommandRenewedConnect extends
+      org.apache.pulsar.shaded.com.google.protobuf.v241.GeneratedMessageLite
+      implements CommandRenewedConnectOrBuilder, org.apache.pulsar.common.util.protobuf.ByteBufCodedOutputStream.ByteBufGeneratedMessage  {
+    // Use CommandRenewedConnect.newBuilder() to construct.
+    private io.netty.util.Recycler.Handle handle;
+    private CommandRenewedConnect(io.netty.util.Recycler.Handle handle) {
+      this.handle = handle;
+    }
+    
+     private static final io.netty.util.Recycler<CommandRenewedConnect> RECYCLER = new io.netty.util.Recycler<CommandRenewedConnect>() {
+            protected CommandRenewedConnect newObject(Handle handle) {
+              return new CommandRenewedConnect(handle);
+            }
+          };
+        
+        public void recycle() {
+            this.initFields();
+            this.memoizedIsInitialized = -1;
+            this.bitField0_ = 0;
+            this.memoizedSerializedSize = -1;
+            if (handle != null) { RECYCLER.recycle(this, handle); }
+        }
+         
+    private CommandRenewedConnect(boolean noInit) {}
+    
+    private static final CommandRenewedConnect defaultInstance;
+    public static CommandRenewedConnect getDefaultInstance() {
+      return defaultInstance;
+    }
+    
+    public CommandRenewedConnect getDefaultInstanceForType() {
+      return defaultInstance;
+    }
+    
+    private int bitField0_;
+    // required .pulsar.proto.CommandConnect renewed_connect = 1;
+    public static final int RENEWED_CONNECT_FIELD_NUMBER = 1;
+    private org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect renewedConnect_;
+    public boolean hasRenewedConnect() {
+      return ((bitField0_ & 0x00000001) == 0x00000001);
+    }
+    public org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect getRenewedConnect() {
+      return renewedConnect_;
+    }
+    
+    private void initFields() {
+      renewedConnect_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect.getDefaultInstance();
+    }
+    private byte memoizedIsInitialized = -1;
+    public final boolean isInitialized() {
+      byte isInitialized = memoizedIsInitialized;
+      if (isInitialized != -1) return isInitialized == 1;
+      
+      if (!hasRenewedConnect()) {
+        memoizedIsInitialized = 0;
+        return false;
+      }
+      if (!getRenewedConnect().isInitialized()) {
+        memoizedIsInitialized = 0;
+        return false;
+      }
+      memoizedIsInitialized = 1;
+      return true;
+    }
+    
+    public void writeTo(org.apache.pulsar.shaded.com.google.protobuf.v241.CodedOutputStream output)
+                        throws java.io.IOException {
+        throw new RuntimeException("Cannot use CodedOutputStream");
+    }
+    
+    public void writeTo(org.apache.pulsar.common.util.protobuf.ByteBufCodedOutputStream output)
+                        throws java.io.IOException {
+      getSerializedSize();
+      if (((bitField0_ & 0x00000001) == 0x00000001)) {
+        output.writeMessage(1, renewedConnect_);
+      }
+    }
+    
+    private int memoizedSerializedSize = -1;
+    public int getSerializedSize() {
+      int size = memoizedSerializedSize;
+      if (size != -1) return size;
+    
+      size = 0;
+      if (((bitField0_ & 0x00000001) == 0x00000001)) {
+        size += org.apache.pulsar.shaded.com.google.protobuf.v241.CodedOutputStream
+          .computeMessageSize(1, renewedConnect_);
+      }
+      memoizedSerializedSize = size;
+      return size;
+    }
+    
+    private static final long serialVersionUID = 0L;
+    @java.lang.Override
+    protected java.lang.Object writeReplace()
+        throws java.io.ObjectStreamException {
+      return super.writeReplace();
+    }
+    
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect parseFrom(
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString data)
+        throws org.apache.pulsar.shaded.com.google.protobuf.v241.InvalidProtocolBufferException {
+         throw new RuntimeException("Disabled");
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect parseFrom(
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString data,
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ExtensionRegistryLite extensionRegistry)
+        throws org.apache.pulsar.shaded.com.google.protobuf.v241.InvalidProtocolBufferException {
+         throw new RuntimeException("Disabled");
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect parseFrom(byte[] data)
+        throws org.apache.pulsar.shaded.com.google.protobuf.v241.InvalidProtocolBufferException {
+      return newBuilder().mergeFrom(data).buildParsed();
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect parseFrom(
+        byte[] data,
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ExtensionRegistryLite extensionRegistry)
+        throws org.apache.pulsar.shaded.com.google.protobuf.v241.InvalidProtocolBufferException {
+      return newBuilder().mergeFrom(data, extensionRegistry)
+               .buildParsed();
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect parseFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return newBuilder().mergeFrom(input).buildParsed();
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect parseFrom(
+        java.io.InputStream input,
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return newBuilder().mergeFrom(input, extensionRegistry)
+               .buildParsed();
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect parseDelimitedFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      Builder builder = newBuilder();
+      if (builder.mergeDelimitedFrom(input)) {
+        return builder.buildParsed();
+      } else {
+        return null;
+      }
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect parseDelimitedFrom(
+        java.io.InputStream input,
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      Builder builder = newBuilder();
+      if (builder.mergeDelimitedFrom(input, extensionRegistry)) {
+        return builder.buildParsed();
+      } else {
+        return null;
+      }
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect parseFrom(
+        org.apache.pulsar.shaded.com.google.protobuf.v241.CodedInputStream input)
+        throws java.io.IOException {
+      return newBuilder().mergeFrom(input).buildParsed();
+    }
+    public static org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect parseFrom(
+        org.apache.pulsar.shaded.com.google.protobuf.v241.CodedInputStream input,
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return newBuilder().mergeFrom(input, extensionRegistry)
+               .buildParsed();
+    }
+    
+    public static Builder newBuilder() { return Builder.create(); }
+    public Builder newBuilderForType() { return newBuilder(); }
+    public static Builder newBuilder(org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect prototype) {
+      return newBuilder().mergeFrom(prototype);
+    }
+    public Builder toBuilder() { return newBuilder(this); }
+    
+    public static final class Builder extends
+        org.apache.pulsar.shaded.com.google.protobuf.v241.GeneratedMessageLite.Builder<
+          org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect, Builder>
+        implements org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnectOrBuilder, org.apache.pulsar.common.util.protobuf.ByteBufCodedInputStream.ByteBufMessageBuilder  {
+      // Construct using org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect.newBuilder()
+      private final io.netty.util.Recycler.Handle handle;
+      private Builder(io.netty.util.Recycler.Handle handle) {
+        this.handle = handle;
+        maybeForceBuilderInitialization();
+      }
+      private final static io.netty.util.Recycler<Builder> RECYCLER = new io.netty.util.Recycler<Builder>() {
+         protected Builder newObject(io.netty.util.Recycler.Handle handle) {
+               return new Builder(handle);
+             }
+            };
+      
+       public void recycle() {
+                clear();
+                if (handle != null) {RECYCLER.recycle(this, handle);}
+            }
+      
+      private void maybeForceBuilderInitialization() {
+      }
+      private static Builder create() {
+        return RECYCLER.get();
+      }
+      
+      public Builder clear() {
+        super.clear();
+        renewedConnect_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect.getDefaultInstance();
+        bitField0_ = (bitField0_ & ~0x00000001);
+        return this;
+      }
+      
+      public Builder clone() {
+        return create().mergeFrom(buildPartial());
+      }
+      
+      public org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect getDefaultInstanceForType() {
+        return org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect.getDefaultInstance();
+      }
+      
+      public org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect build() {
+        org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(result);
+        }
+        return result;
+      }
+      
+      private org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect buildParsed()
+          throws org.apache.pulsar.shaded.com.google.protobuf.v241.InvalidProtocolBufferException {
+        org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(
+            result).asInvalidProtocolBufferException();
+        }
+        return result;
+      }
+      
+      public org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect buildPartial() {
+        org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect result = org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect.RECYCLER.get();
+        int from_bitField0_ = bitField0_;
+        int to_bitField0_ = 0;
+        if (((from_bitField0_ & 0x00000001) == 0x00000001)) {
+          to_bitField0_ |= 0x00000001;
+        }
+        result.renewedConnect_ = renewedConnect_;
+        result.bitField0_ = to_bitField0_;
+        return result;
+      }
+      
+      public Builder mergeFrom(org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect other) {
+        if (other == org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect.getDefaultInstance()) return this;
+        if (other.hasRenewedConnect()) {
+          mergeRenewedConnect(other.getRenewedConnect());
+        }
+        return this;
+      }
+      
+      public final boolean isInitialized() {
+        if (!hasRenewedConnect()) {
+          
+          return false;
+        }
+        if (!getRenewedConnect().isInitialized()) {
+          
+          return false;
+        }
+        return true;
+      }
+      
+      public Builder mergeFrom(org.apache.pulsar.shaded.com.google.protobuf.v241.CodedInputStream input,
+                              org.apache.pulsar.shaded.com.google.protobuf.v241.ExtensionRegistryLite extensionRegistry)
+                              throws java.io.IOException {
+         throw new java.io.IOException("Merge from CodedInputStream is disabled");
+                              }
+      public Builder mergeFrom(
+          org.apache.pulsar.common.util.protobuf.ByteBufCodedInputStream input,
+          org.apache.pulsar.shaded.com.google.protobuf.v241.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        while (true) {
+          int tag = input.readTag();
+          switch (tag) {
+            case 0:
+              
+              return this;
+            default: {
+              if (!input.skipField(tag)) {
+                
+                return this;
+              }
+              break;
+            }
+            case 10: {
+              org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect.Builder subBuilder = org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect.newBuilder();
+              if (hasRenewedConnect()) {
+                subBuilder.mergeFrom(getRenewedConnect());
+              }
+              input.readMessage(subBuilder, extensionRegistry);
+              setRenewedConnect(subBuilder.buildPartial());
+              subBuilder.recycle();
+              break;
+            }
+          }
+        }
+      }
+      
+      private int bitField0_;
+      
+      // required .pulsar.proto.CommandConnect renewed_connect = 1;
+      private org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect renewedConnect_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect.getDefaultInstance();
+      public boolean hasRenewedConnect() {
+        return ((bitField0_ & 0x00000001) == 0x00000001);
+      }
+      public org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect getRenewedConnect() {
+        return renewedConnect_;
+      }
+      public Builder setRenewedConnect(org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        renewedConnect_ = value;
+        
+        bitField0_ |= 0x00000001;
+        return this;
+      }
+      public Builder setRenewedConnect(
+          org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect.Builder builderForValue) {
+        renewedConnect_ = builderForValue.build();
+        
+        bitField0_ |= 0x00000001;
+        return this;
+      }
+      public Builder mergeRenewedConnect(org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect value) {
+        if (((bitField0_ & 0x00000001) == 0x00000001) &&
+            renewedConnect_ != org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect.getDefaultInstance()) {
+          renewedConnect_ =
+            org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect.newBuilder(renewedConnect_).mergeFrom(value).buildPartial();
+        } else {
+          renewedConnect_ = value;
+        }
+        
+        bitField0_ |= 0x00000001;
+        return this;
+      }
+      public Builder clearRenewedConnect() {
+        renewedConnect_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect.getDefaultInstance();
+        
+        bitField0_ = (bitField0_ & ~0x00000001);
+        return this;
+      }
+      
+      // @@protoc_insertion_point(builder_scope:pulsar.proto.CommandRenewedConnect)
+    }
+    
+    static {
+      defaultInstance = new CommandRenewedConnect(true);
+      defaultInstance.initFields();
+    }
+    
+    // @@protoc_insertion_point(class_scope:pulsar.proto.CommandRenewedConnect)
   }
   
   public interface CommandConnectedOrBuilder
@@ -25041,6 +25664,14 @@ public final class PulsarApi {
     // optional .pulsar.proto.CommandGetSchemaResponse getSchemaResponse = 35;
     boolean hasGetSchemaResponse();
     org.apache.pulsar.common.api.proto.PulsarApi.CommandGetSchemaResponse getGetSchemaResponse();
+    
+    // optional .pulsar.proto.CommandRenewConnect renewConnect = 36;
+    boolean hasRenewConnect();
+    org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect getRenewConnect();
+    
+    // optional .pulsar.proto.CommandRenewedConnect renewedConnect = 37;
+    boolean hasRenewedConnect();
+    org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect getRenewedConnect();
   }
   public static final class BaseCommand extends
       org.apache.pulsar.shaded.com.google.protobuf.v241.GeneratedMessageLite
@@ -25113,6 +25744,8 @@ public final class PulsarApi {
       GET_TOPICS_OF_NAMESPACE_RESPONSE(31, 33),
       GET_SCHEMA(32, 34),
       GET_SCHEMA_RESPONSE(33, 35),
+      RENEW_CONNECT(34, 36),
+      RENEWED_CONNECT(35, 37),
       ;
       
       public static final int CONNECT_VALUE = 2;
@@ -25149,6 +25782,8 @@ public final class PulsarApi {
       public static final int GET_TOPICS_OF_NAMESPACE_RESPONSE_VALUE = 33;
       public static final int GET_SCHEMA_VALUE = 34;
       public static final int GET_SCHEMA_RESPONSE_VALUE = 35;
+      public static final int RENEW_CONNECT_VALUE = 36;
+      public static final int RENEWED_CONNECT_VALUE = 37;
       
       
       public final int getNumber() { return value; }
@@ -25189,6 +25824,8 @@ public final class PulsarApi {
           case 33: return GET_TOPICS_OF_NAMESPACE_RESPONSE;
           case 34: return GET_SCHEMA;
           case 35: return GET_SCHEMA_RESPONSE;
+          case 36: return RENEW_CONNECT;
+          case 37: return RENEWED_CONNECT;
           default: return null;
         }
       }
@@ -25566,6 +26203,26 @@ public final class PulsarApi {
       return getSchemaResponse_;
     }
     
+    // optional .pulsar.proto.CommandRenewConnect renewConnect = 36;
+    public static final int RENEWCONNECT_FIELD_NUMBER = 36;
+    private org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect renewConnect_;
+    public boolean hasRenewConnect() {
+      return ((bitField1_ & 0x00000008) == 0x00000008);
+    }
+    public org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect getRenewConnect() {
+      return renewConnect_;
+    }
+    
+    // optional .pulsar.proto.CommandRenewedConnect renewedConnect = 37;
+    public static final int RENEWEDCONNECT_FIELD_NUMBER = 37;
+    private org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect renewedConnect_;
+    public boolean hasRenewedConnect() {
+      return ((bitField1_ & 0x00000010) == 0x00000010);
+    }
+    public org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect getRenewedConnect() {
+      return renewedConnect_;
+    }
+    
     private void initFields() {
       type_ = org.apache.pulsar.common.api.proto.PulsarApi.BaseCommand.Type.CONNECT;
       connect_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandConnect.getDefaultInstance();
@@ -25602,6 +26259,8 @@ public final class PulsarApi {
       getTopicsOfNamespaceResponse_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandGetTopicsOfNamespaceResponse.getDefaultInstance();
       getSchema_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandGetSchema.getDefaultInstance();
       getSchemaResponse_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandGetSchemaResponse.getDefaultInstance();
+      renewConnect_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect.getDefaultInstance();
+      renewedConnect_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect.getDefaultInstance();
     }
     private byte memoizedIsInitialized = -1;
     public final boolean isInitialized() {
@@ -25804,6 +26463,12 @@ public final class PulsarApi {
           return false;
         }
       }
+      if (hasRenewedConnect()) {
+        if (!getRenewedConnect().isInitialized()) {
+          memoizedIsInitialized = 0;
+          return false;
+        }
+      }
       memoizedIsInitialized = 1;
       return true;
     }
@@ -25920,6 +26585,12 @@ public final class PulsarApi {
       }
       if (((bitField1_ & 0x00000004) == 0x00000004)) {
         output.writeMessage(35, getSchemaResponse_);
+      }
+      if (((bitField1_ & 0x00000008) == 0x00000008)) {
+        output.writeMessage(36, renewConnect_);
+      }
+      if (((bitField1_ & 0x00000010) == 0x00000010)) {
+        output.writeMessage(37, renewedConnect_);
       }
     }
     
@@ -26068,6 +26739,14 @@ public final class PulsarApi {
       if (((bitField1_ & 0x00000004) == 0x00000004)) {
         size += org.apache.pulsar.shaded.com.google.protobuf.v241.CodedOutputStream
           .computeMessageSize(35, getSchemaResponse_);
+      }
+      if (((bitField1_ & 0x00000008) == 0x00000008)) {
+        size += org.apache.pulsar.shaded.com.google.protobuf.v241.CodedOutputStream
+          .computeMessageSize(36, renewConnect_);
+      }
+      if (((bitField1_ & 0x00000010) == 0x00000010)) {
+        size += org.apache.pulsar.shaded.com.google.protobuf.v241.CodedOutputStream
+          .computeMessageSize(37, renewedConnect_);
       }
       memoizedSerializedSize = size;
       return size;
@@ -26252,6 +26931,10 @@ public final class PulsarApi {
         bitField1_ = (bitField1_ & ~0x00000002);
         getSchemaResponse_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandGetSchemaResponse.getDefaultInstance();
         bitField1_ = (bitField1_ & ~0x00000004);
+        renewConnect_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect.getDefaultInstance();
+        bitField1_ = (bitField1_ & ~0x00000008);
+        renewedConnect_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect.getDefaultInstance();
+        bitField1_ = (bitField1_ & ~0x00000010);
         return this;
       }
       
@@ -26427,6 +27110,14 @@ public final class PulsarApi {
           to_bitField1_ |= 0x00000004;
         }
         result.getSchemaResponse_ = getSchemaResponse_;
+        if (((from_bitField1_ & 0x00000008) == 0x00000008)) {
+          to_bitField1_ |= 0x00000008;
+        }
+        result.renewConnect_ = renewConnect_;
+        if (((from_bitField1_ & 0x00000010) == 0x00000010)) {
+          to_bitField1_ |= 0x00000010;
+        }
+        result.renewedConnect_ = renewedConnect_;
         result.bitField0_ = to_bitField0_;
         result.bitField1_ = to_bitField1_;
         return result;
@@ -26538,6 +27229,12 @@ public final class PulsarApi {
         }
         if (other.hasGetSchemaResponse()) {
           mergeGetSchemaResponse(other.getGetSchemaResponse());
+        }
+        if (other.hasRenewConnect()) {
+          mergeRenewConnect(other.getRenewConnect());
+        }
+        if (other.hasRenewedConnect()) {
+          mergeRenewedConnect(other.getRenewedConnect());
         }
         return this;
       }
@@ -26735,6 +27432,12 @@ public final class PulsarApi {
         }
         if (hasGetSchemaResponse()) {
           if (!getGetSchemaResponse().isInitialized()) {
+            
+            return false;
+          }
+        }
+        if (hasRenewedConnect()) {
+          if (!getRenewedConnect().isInitialized()) {
             
             return false;
           }
@@ -27110,6 +27813,26 @@ public final class PulsarApi {
               }
               input.readMessage(subBuilder, extensionRegistry);
               setGetSchemaResponse(subBuilder.buildPartial());
+              subBuilder.recycle();
+              break;
+            }
+            case 290: {
+              org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect.Builder subBuilder = org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect.newBuilder();
+              if (hasRenewConnect()) {
+                subBuilder.mergeFrom(getRenewConnect());
+              }
+              input.readMessage(subBuilder, extensionRegistry);
+              setRenewConnect(subBuilder.buildPartial());
+              subBuilder.recycle();
+              break;
+            }
+            case 298: {
+              org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect.Builder subBuilder = org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect.newBuilder();
+              if (hasRenewedConnect()) {
+                subBuilder.mergeFrom(getRenewedConnect());
+              }
+              input.readMessage(subBuilder, extensionRegistry);
+              setRenewedConnect(subBuilder.buildPartial());
               subBuilder.recycle();
               break;
             }
@@ -28603,6 +29326,92 @@ public final class PulsarApi {
         getSchemaResponse_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandGetSchemaResponse.getDefaultInstance();
         
         bitField1_ = (bitField1_ & ~0x00000004);
+        return this;
+      }
+      
+      // optional .pulsar.proto.CommandRenewConnect renewConnect = 36;
+      private org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect renewConnect_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect.getDefaultInstance();
+      public boolean hasRenewConnect() {
+        return ((bitField1_ & 0x00000008) == 0x00000008);
+      }
+      public org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect getRenewConnect() {
+        return renewConnect_;
+      }
+      public Builder setRenewConnect(org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        renewConnect_ = value;
+        
+        bitField1_ |= 0x00000008;
+        return this;
+      }
+      public Builder setRenewConnect(
+          org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect.Builder builderForValue) {
+        renewConnect_ = builderForValue.build();
+        
+        bitField1_ |= 0x00000008;
+        return this;
+      }
+      public Builder mergeRenewConnect(org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect value) {
+        if (((bitField1_ & 0x00000008) == 0x00000008) &&
+            renewConnect_ != org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect.getDefaultInstance()) {
+          renewConnect_ =
+            org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect.newBuilder(renewConnect_).mergeFrom(value).buildPartial();
+        } else {
+          renewConnect_ = value;
+        }
+        
+        bitField1_ |= 0x00000008;
+        return this;
+      }
+      public Builder clearRenewConnect() {
+        renewConnect_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect.getDefaultInstance();
+        
+        bitField1_ = (bitField1_ & ~0x00000008);
+        return this;
+      }
+      
+      // optional .pulsar.proto.CommandRenewedConnect renewedConnect = 37;
+      private org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect renewedConnect_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect.getDefaultInstance();
+      public boolean hasRenewedConnect() {
+        return ((bitField1_ & 0x00000010) == 0x00000010);
+      }
+      public org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect getRenewedConnect() {
+        return renewedConnect_;
+      }
+      public Builder setRenewedConnect(org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        renewedConnect_ = value;
+        
+        bitField1_ |= 0x00000010;
+        return this;
+      }
+      public Builder setRenewedConnect(
+          org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect.Builder builderForValue) {
+        renewedConnect_ = builderForValue.build();
+        
+        bitField1_ |= 0x00000010;
+        return this;
+      }
+      public Builder mergeRenewedConnect(org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect value) {
+        if (((bitField1_ & 0x00000010) == 0x00000010) &&
+            renewedConnect_ != org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect.getDefaultInstance()) {
+          renewedConnect_ =
+            org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect.newBuilder(renewedConnect_).mergeFrom(value).buildPartial();
+        } else {
+          renewedConnect_ = value;
+        }
+        
+        bitField1_ |= 0x00000010;
+        return this;
+      }
+      public Builder clearRenewedConnect() {
+        renewedConnect_ = org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect.getDefaultInstance();
+        
+        bitField1_ = (bitField1_ & ~0x00000010);
         return this;
       }
       

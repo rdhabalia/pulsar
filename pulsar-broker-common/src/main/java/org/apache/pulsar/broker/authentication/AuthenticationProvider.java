@@ -55,5 +55,14 @@ public interface AuthenticationProvider extends Closeable {
      *             if the credentials are not valid
      */
     String authenticate(AuthenticationDataSource authData) throws AuthenticationException;
+    
+    /**
+     * Returns expiry timestamp of authentication credentials after which client needs to renew the connection lease.
+     * 
+     * @return expiry-timestamp in milliseconds. (-1 returns unlimited expired time)
+     */
+    default long getExpiryTime(AuthenticationDataSource authData) {
+        return -1;
+    }
 
 }

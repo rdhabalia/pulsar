@@ -51,6 +51,7 @@ import org.apache.bookkeeper.mledger.util.SafeRun;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.PulsarService;
+import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.authentication.AuthenticationDataCommand;
 import org.apache.pulsar.broker.authentication.AuthenticationDataSource;
 import org.apache.pulsar.broker.service.BrokerServiceException.ConsumerBusyException;
@@ -81,6 +82,7 @@ import org.apache.pulsar.common.api.proto.PulsarApi.CommandLookupTopic;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandPartitionedTopicMetadata;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandProducer;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandRedeliverUnacknowledgedMessages;
+import org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandSeek;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandSend;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandSubscribe;
@@ -114,6 +116,7 @@ public class ServerCnx extends PulsarHandler {
     private State state;
     private volatile boolean isActive = true;
     String authRole = null;
+    long expiryTimeMs = -1;
     AuthenticationDataSource authenticationData;
 
     // Max number of pending requests per connections. If multiple producers are sharing the same connection the flow
@@ -449,49 +452,97 @@ public class ServerCnx extends PulsarHandler {
     @Override
     protected void handleConnect(CommandConnect connect) {
         checkArgument(state == State.Start);
+        remoteEndpointProtocolVersion = connect.getProtocolVersion();
         if (service.isAuthenticationEnabled()) {
-            try {
-                String authMethod = "none";
-                if (connect.hasAuthMethodName()) {
-                    authMethod = connect.getAuthMethodName();
-                } else if (connect.hasAuthMethod()) {
-                    // Legacy client is passing enum
-                    authMethod = connect.getAuthMethod().name().substring(10).toLowerCase();
-                }
-
-                String authData = connect.getAuthData().toStringUtf8();
-                ChannelHandler sslHandler = ctx.channel().pipeline().get(PulsarChannelInitializer.TLS_HANDLER);
-                SSLSession sslSession = null;
-                if (sslHandler != null) {
-                    sslSession = ((SslHandler) sslHandler).engine().getSession();
-                }
-                originalPrincipal = getOriginalPrincipal(
-                        connect.hasOriginalAuthData() ? connect.getOriginalAuthData() : null,
-                        connect.hasOriginalAuthMethod() ? connect.getOriginalAuthMethod() : null,
-                        connect.hasOriginalPrincipal() ? connect.getOriginalPrincipal() : null,
-                        sslSession);
-                authenticationData = new AuthenticationDataCommand(authData, remoteAddress, sslSession);
-                authRole = getBrokerService().getAuthenticationService()
-                        .authenticate(authenticationData, authMethod);
-
-                log.info("[{}] Client successfully authenticated with {} role {} and originalPrincipal {}", remoteAddress, authMethod, authRole, originalPrincipal);
-            } catch (AuthenticationException e) {
-                String msg = "Unable to authenticate";
-                log.warn("[{}] {}: {}", remoteAddress, msg, e.getMessage());
-                ctx.writeAndFlush(Commands.newError(-1, ServerError.AuthenticationError, msg));
-                close();
-                return;
-            }
+            handleAuthentication(connect);
+            scheduleConnectionExpiryCheck();
         }
         if (log.isDebugEnabled()) {
             log.debug("Received CONNECT from {}", remoteAddress);
         }
         ctx.writeAndFlush(Commands.newConnected(connect.getProtocolVersion()));
         state = State.Connected;
-        remoteEndpointProtocolVersion = connect.getProtocolVersion();
         String version = connect.hasClientVersion() ? connect.getClientVersion() : null;
         if (isNotBlank(version) && !version.contains(" ") /* ignore default version: pulsar client */) {
             this.clientVersion = version.intern();
+        }
+    }
+
+    private void handleAuthentication(CommandConnect connect) {
+        try {
+            String authMethod = "none";
+            if (connect.hasAuthMethodName()) {
+                authMethod = connect.getAuthMethodName();
+            } else if (connect.hasAuthMethod()) {
+                // Legacy client is passing enum
+                authMethod = connect.getAuthMethod().name().substring(10).toLowerCase();
+            }
+
+            String authData = connect.getAuthData().toStringUtf8();
+            ChannelHandler sslHandler = ctx.channel().pipeline().get(PulsarChannelInitializer.TLS_HANDLER);
+            SSLSession sslSession = null;
+            if (sslHandler != null) {
+                sslSession = ((SslHandler) sslHandler).engine().getSession();
+            }
+            originalPrincipal = originalPrincipal != null ? originalPrincipal
+                    : getOriginalPrincipal(connect.hasOriginalAuthData() ? connect.getOriginalAuthData() : null,
+                            connect.hasOriginalAuthMethod() ? connect.getOriginalAuthMethod() : null,
+                            connect.hasOriginalPrincipal() ? connect.getOriginalPrincipal() : null, sslSession);
+            authenticationData = new AuthenticationDataCommand(authData, remoteAddress, sslSession);
+            authRole = getBrokerService().getAuthenticationService().authenticate(authenticationData, authMethod);
+            expiryTimeMs = getBrokerService().getAuthenticationService().getExpiryTime(authenticationData, authMethod);
+
+            log.info("[{}] Client successfully authenticated with {} role {} and originalPrincipal {}", remoteAddress,
+                    authMethod, authRole, originalPrincipal);
+        } catch (AuthenticationException e) {
+            String msg = "Unable to authenticate";
+            log.warn("[{}] {}: {}", remoteAddress, msg, e.getMessage());
+            ctx.writeAndFlush(Commands.newError(-1, ServerError.AuthenticationError, msg));
+            close();
+            return;
+        }
+    }
+
+    private void scheduleConnectionExpiryCheck() {
+        ServiceConfiguration conf = this.getBrokerService().pulsar().getConfiguration();
+        if (conf.isAuthenticationCheckExpiredConnectionEnabled() && this.expiryTimeMs > 0) {
+            long timeLeftInExpiry = expiryTimeMs - System.currentTimeMillis();
+            if (timeLeftInExpiry < 0) {
+                log.info("[{}] is expired {}, closing connection for {}-{}", remoteAddress, expiryTimeMs, authRole,
+                        originalPrincipal);
+                close();
+                return;
+            }
+            if ((expiryTimeMs > (System.currentTimeMillis()
+                    + TimeUnit.SECONDS.toMillis(conf.getDurationSecAfterSkipConnectionExpiryCheck())))) {
+                // ignore to schedule task as auth-expiry has long duration so, we can avoid creating task for this
+                // connection
+                return;
+            }
+            
+            if (this.isRenewConnectionCheckCompatibleVersion()) {
+                service.pulsar().getExecutor().schedule(() -> {
+                    renewConnection();
+                }, timeLeftInExpiry, TimeUnit.MILLISECONDS);
+            } else {
+                log.info("[{}] is expired {}, client doesn't support renew cnx so, closing connection for {}-{}",
+                        remoteAddress, expiryTimeMs, authRole, originalPrincipal);
+                close();
+            }
+        }
+    }
+
+    private void renewConnection() {
+        ctx.writeAndFlush(Commands.newRenewConnect());
+        service.pulsar().getExecutor().schedule(() -> {
+            scheduleConnectionExpiryCheck();
+        }, keepAliveIntervalSeconds * 2, TimeUnit.SECONDS);
+    }
+
+    @Override
+    protected void handleRenewedConnect(CommandRenewedConnect commandRenewedConnect) {
+        if (service.isAuthenticationEnabled()) {
+            handleAuthentication(commandRenewedConnect.getRenewedConnect());
         }
     }
 
@@ -1429,6 +1480,10 @@ public class ServerCnx extends PulsarHandler {
 
     public boolean isBatchMessageCompatibleVersion() {
         return remoteEndpointProtocolVersion >= ProtocolVersion.v4.getNumber();
+    }
+
+    public boolean isRenewConnectionCheckCompatibleVersion() {
+        return remoteEndpointProtocolVersion >= ProtocolVersion.v14.getNumber();
     }
 
     public String getClientVersion() {

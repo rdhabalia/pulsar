@@ -38,6 +38,8 @@ import org.apache.pulsar.common.api.proto.PulsarApi.CommandError;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandFlow;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandGetSchema;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandGetSchemaResponse;
+import org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect;
+import org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandGetTopicsOfNamespace;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandGetTopicsOfNamespaceResponse;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandLookupTopic;
@@ -303,6 +305,17 @@ public abstract class PulsarDecoder extends ChannelInboundHandlerAdapter {
                 handleGetSchemaResponse(cmd.getGetSchemaResponse());
                 cmd.getGetSchemaResponse().recycle();
                 break;
+                
+            case RENEW_CONNECT:
+                handleRenewConnect(cmd.getRenewConnect());
+                cmd.getRenewConnect().recycle();
+                break;
+                
+            case RENEWED_CONNECT:
+                checkArgument(cmd.hasRenewedConnect());
+                handleRenewedConnect(cmd.getRenewedConnect());
+                cmd.getRenewedConnect().recycle();
+                break;
             }
         } finally {
             if (cmdBuilder != null) {
@@ -454,5 +467,12 @@ public abstract class PulsarDecoder extends ChannelInboundHandlerAdapter {
         throw new UnsupportedOperationException();
     }
 
+    protected void handleRenewConnect(CommandRenewConnect commandRenewConnect) {
+        throw new UnsupportedOperationException();
+    }
+
+    protected void handleRenewedConnect(CommandRenewedConnect commandRenewedConnect) {
+        throw new UnsupportedOperationException();
+    }
     private static final Logger log = LoggerFactory.getLogger(PulsarDecoder.class);
 }

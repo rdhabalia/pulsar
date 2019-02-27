@@ -68,6 +68,7 @@ import org.apache.pulsar.common.api.proto.PulsarApi.CommandProducer;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandProducerSuccess;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandReachedEndOfTopic;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandRedeliverUnacknowledgedMessages;
+import org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewedConnect;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandSeek;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandSend;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandSendError;
@@ -98,17 +99,36 @@ public class Commands {
                 null /* originalPrincipal */, null /* Client Auth Data */, null /* Client Auth Method */);
     }
 
-    public static ByteBuf newConnect(String authMethodName, String authData, String libVersion, String targetBroker) {
-        return newConnect(authMethodName, authData, getCurrentProtocolVersion(), libVersion, targetBroker, null, null, null);
-    }
-
-    public static ByteBuf newConnect(String authMethodName, String authData, String libVersion, String targetBroker,
-            String originalPrincipal, String clientAuthData, String clientAuthMethod) {
-        return newConnect(authMethodName, authData, getCurrentProtocolVersion(), libVersion, targetBroker,
-                originalPrincipal, clientAuthData, clientAuthMethod);
-    }
-
     public static ByteBuf newConnect(String authMethodName, String authData, int protocolVersion, String libVersion,
+            String targetBroker, String originalPrincipal, String originalAuthData,
+            String originalAuthMethod) {
+        CommandConnect.Builder connectBuilder = newConnectCommand(authMethodName, authData, protocolVersion, libVersion, targetBroker, originalPrincipal, originalAuthData, originalAuthMethod); 
+        CommandConnect connect = connectBuilder.build();
+        ByteBuf res = serializeWithSize(BaseCommand.newBuilder().setType(Type.CONNECT).setConnect(connect));
+        connect.recycle();
+        connectBuilder.recycle();
+        return res;
+    }
+
+    public static ByteBuf newRenewedConnect(String authMethodName, String authData, int protocolVersion,
+            String libVersion, String targetBroker, String originalPrincipal, String originalAuthData,
+            String originalAuthMethod) {
+        CommandConnect.Builder connectBuilder = newConnectCommand(authMethodName, authData, protocolVersion, libVersion,
+                targetBroker, originalPrincipal, originalAuthData, originalAuthMethod);
+        CommandConnect connect = connectBuilder.build();
+        CommandRenewedConnect.Builder renewdConnectBuilder = CommandRenewedConnect.newBuilder();
+        renewdConnectBuilder.setRenewedConnect(connect);
+        CommandRenewedConnect renewedConnect = renewdConnectBuilder.build();
+        ByteBuf res = serializeWithSize(
+                BaseCommand.newBuilder().setType(Type.RENEWED_CONNECT).setRenewedConnect(renewedConnect));
+        connect.recycle();
+        connectBuilder.recycle();
+        renewedConnect.recycle();
+        renewdConnectBuilder.recycle();
+        return res;
+    }
+
+    public static CommandConnect.Builder newConnectCommand(String authMethodName, String authData, int protocolVersion, String libVersion,
             String targetBroker, String originalPrincipal, String originalAuthData,
             String originalAuthMethod) {
         CommandConnect.Builder connectBuilder = CommandConnect.newBuilder();
@@ -143,13 +163,9 @@ public class Commands {
             connectBuilder.setOriginalAuthMethod(originalAuthMethod);
         }
         connectBuilder.setProtocolVersion(protocolVersion);
-        CommandConnect connect = connectBuilder.build();
-        ByteBuf res = serializeWithSize(BaseCommand.newBuilder().setType(Type.CONNECT).setConnect(connect));
-        connect.recycle();
-        connectBuilder.recycle();
-        return res;
+        return connectBuilder;
     }
-
+    
     public static ByteBuf newConnected(int clientProtocolVersion) {
         CommandConnected.Builder connectedBuilder = CommandConnected.newBuilder();
         connectedBuilder.setServerVersion("Pulsar Server");
@@ -795,6 +811,21 @@ public class Commands {
 
     static ByteBuf newPong() {
         return cmdPong.retainedDuplicate();
+    }
+
+    private final static ByteBuf cmdRenewConnect;
+
+    static {
+        ByteBuf serializedCmdRenewConnect = serializeWithSize(
+                   BaseCommand.newBuilder()
+                       .setType(Type.RENEW_CONNECT)
+                       .setPing(CommandPing.getDefaultInstance()));
+        cmdRenewConnect = Unpooled.copiedBuffer(serializedCmdRenewConnect);
+        serializedCmdRenewConnect.release();
+    }
+
+    public static ByteBuf newRenewConnect() {
+        return cmdRenewConnect.retainedDuplicate();
     }
 
     public static ByteBuf newGetLastMessageId(long consumerId, long requestId) {

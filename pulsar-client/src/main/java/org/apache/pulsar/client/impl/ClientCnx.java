@@ -58,6 +58,7 @@ import org.apache.pulsar.common.api.proto.PulsarApi.CommandMessage;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandPartitionedTopicMetadataResponse;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandProducerSuccess;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandReachedEndOfTopic;
+import org.apache.pulsar.common.api.proto.PulsarApi.CommandRenewConnect;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandSendError;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandSendReceipt;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandSuccess;
@@ -196,6 +197,15 @@ public class ClientCnx extends PulsarHandler {
                 getPulsarClientVersion(), proxyToTargetBrokerAddress, null, null, null);
     }
 
+    protected ByteBuf newRenewedConnectCommand() throws PulsarClientException {
+        String authData = "";
+        if (authentication.getAuthData().hasDataFromCommand()) {
+            authData = authentication.getAuthData().getCommandData();
+        }
+        return Commands.newRenewedConnect(authentication.getAuthMethodName(), authData, this.protocolVersion,
+                getPulsarClientVersion(), proxyToTargetBrokerAddress, null, null, null);
+    }
+
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         super.channelInactive(ctx);
@@ -274,6 +284,16 @@ public class ClientCnx extends PulsarHandler {
         remoteEndpointProtocolVersion = connected.getProtocolVersion();
         connectionFuture.complete(null);
         state = State.Ready;
+    }
+
+    @Override
+    protected void handleRenewConnect(CommandRenewConnect commandRenewConnect) {
+        try {
+            ByteBuf newCmd = newRenewedConnectCommand();
+            ctx.writeAndFlush(newCmd);
+        } catch (PulsarClientException e) {
+            log.warn("[{}] Failed to renewed expired connection {}", ctx.channel(), e.getMessage(), e);
+        }
     }
 
     @Override

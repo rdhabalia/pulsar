@@ -168,6 +168,7 @@ enum ProtocolVersion {
 			 // Added CommandActiveConsumerChange
 			 // Added CommandGetTopicsOfNamespace
 	v13 = 13; // Schema-registry : added avro schema format for json
+	v14 = 14; // Renew connection lease
 }
 
 message CommandConnect {
@@ -192,6 +193,13 @@ message CommandConnect {
 	optional string original_auth_data = 8;
 	optional string original_auth_method = 9;
 
+}
+
+message CommandRenewConnect {
+}
+
+message CommandRenewedConnect {
+	required CommandConnect renewed_connect = 1;
 }
 
 message CommandConnected {
@@ -597,6 +605,9 @@ message BaseCommand {
 
 		GET_SCHEMA = 34;
 		GET_SCHEMA_RESPONSE = 35;
+		
+		RENEW_CONNECT = 36;
+		RENEWED_CONNECT = 37;
 	}
 
 
@@ -649,4 +660,6 @@ message BaseCommand {
 
 	optional CommandGetSchema getSchema = 34;
 	optional CommandGetSchemaResponse getSchemaResponse = 35;
+	optional CommandRenewConnect renewConnect = 36;
+	optional CommandRenewedConnect renewedConnect = 37;
 }
