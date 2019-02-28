@@ -212,6 +212,23 @@ SharedBuffer Commands::newConnect(const AuthenticationPtr& authentication, const
     BaseCommand cmd;
     cmd.set_type(BaseCommand::CONNECT);
     CommandConnect* connect = cmd.mutable_connect();
+    updateConnect(connect, authentication, logicalAddress, connectingThroughProxy);
+    return writeMessageWithSize(cmd);
+}
+
+SharedBuffer Commands::newRenewedConnect(const AuthenticationPtr& authentication,
+                                         const std::string& logicalAddress, bool connectingThroughProxy) {
+    BaseCommand cmd;
+    cmd.set_type(BaseCommand::RENEWED_CONNECT);
+    CommandRenewedConnect* renewConnect = cmd.mutable_renewedconnect();
+    CommandConnect* connect = cmd.mutable_connect();
+    updateConnect(connect, authentication, logicalAddress, connectingThroughProxy);
+    renewConnect->set_allocated_renewed_connect(connect);
+    return writeMessageWithSize(cmd);
+}
+
+void Commands::updateConnect(CommandConnect* connect, const AuthenticationPtr& authentication,
+                             const std::string& logicalAddress, bool connectingThroughProxy) {
     connect->set_client_version(_PULSAR_VERSION_);
     connect->set_auth_method_name(authentication->getAuthMethodName());
     connect->set_protocol_version(ProtocolVersion_MAX);
@@ -225,7 +242,6 @@ SharedBuffer Commands::newConnect(const AuthenticationPtr& authentication, const
     if (authentication->getAuthData(authDataContent) == ResultOk && authDataContent->hasDataFromCommand()) {
         connect->set_auth_data(authDataContent->getCommandData());
     }
-    return writeMessageWithSize(cmd);
 }
 
 SharedBuffer Commands::newSubscribe(const std::string& topic, const std::string& subscription,
@@ -514,6 +530,12 @@ std::string Commands::messageType(BaseCommand_Type type) {
             break;
         case BaseCommand::GET_SCHEMA_RESPONSE:
             return "GET_SCHEMA_RESPONSE";
+            break;
+        case BaseCommand::RENEW_CONNECT:
+            return "RENEW_CONNECT";
+            break;
+        case BaseCommand::RENEWED_CONNECT:
+            return "RENEWED_CONNECT";
             break;
     };
 }
