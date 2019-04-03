@@ -44,6 +44,7 @@ import org.apache.bookkeeper.common.util.OrderedExecutor;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.pulsar.broker.admin.AdminResource;
+import org.apache.pulsar.broker.service.AbstractBaseTopic;
 import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.service.BrokerServiceException;
 import org.apache.pulsar.broker.service.BrokerServiceException.ConsumerBusyException;
@@ -90,7 +91,7 @@ import org.apache.zookeeper.KeeperException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class NonPersistentTopic implements Topic {
+public class NonPersistentTopic extends AbstractBaseTopic {
     private final String topic;
 
     // Producers currently connected to this topic
@@ -144,6 +145,7 @@ public class NonPersistentTopic implements Topic {
         public double averageMsgSize;
         public double aggMsgRateIn;
         public double aggMsgThroughputIn;
+        public double aggMsgThrottlingFailure;
         public double aggMsgRateOut;
         public double aggMsgThroughputOut;
         public final ObjectObjectHashMap<String, PublisherStats> remotePublishersStats;
@@ -164,6 +166,7 @@ public class NonPersistentTopic implements Topic {
     }
 
     public NonPersistentTopic(String topic, BrokerService brokerService) {
+        super(topic, brokerService);
         this.topic = topic;
         this.brokerService = brokerService;
         this.producers = new ConcurrentOpenHashSet<Producer>(16, 1);
@@ -726,6 +729,7 @@ public class NonPersistentTopic implements Topic {
 
             topicStats.aggMsgRateIn += publisherStats.msgRateIn;
             topicStats.aggMsgThroughputIn += publisherStats.msgThroughputIn;
+            topicStats.aggMsgThrottlingFailure += publisherStats.msgThrottlingFailure;
 
             if (producer.isRemote()) {
                 topicStats.remotePublishersStats.put(producer.getRemoteCluster(), publisherStats);
@@ -816,6 +820,7 @@ public class NonPersistentTopic implements Topic {
         topicStatsStream.writePair("msgRateOut", topicStats.aggMsgRateOut);
         topicStatsStream.writePair("msgThroughputIn", topicStats.aggMsgThroughputIn);
         topicStatsStream.writePair("msgThroughputOut", topicStats.aggMsgThroughputOut);
+        topicStatsStream.writePair("aggMsgThrottlingFailure", topicStats.aggMsgThrottlingFailure);
 
         nsStats.msgRateIn += topicStats.aggMsgRateIn;
         nsStats.msgRateOut += topicStats.aggMsgRateOut;
@@ -841,6 +846,7 @@ public class NonPersistentTopic implements Topic {
             NonPersistentPublisherStats publisherStats = (NonPersistentPublisherStats) producer.getStats();
             stats.msgRateIn += publisherStats.msgRateIn;
             stats.msgThroughputIn += publisherStats.msgThroughputIn;
+            stats.msgThrottlingFailure += publisherStats.msgThrottlingFailure;
 
             if (producer.isRemote()) {
                 remotePublishersStats.put(producer.getRemoteCluster(), publisherStats);
@@ -860,21 +866,22 @@ public class NonPersistentTopic implements Topic {
         });
 
         replicators.forEach((cluster, replicator) -> {
-            NonPersistentReplicatorStats ReplicatorStats = replicator.getStats();
+            NonPersistentReplicatorStats replicatorStats = replicator.getStats();
 
             // Add incoming msg rates
             PublisherStats pubStats = remotePublishersStats.get(replicator.getRemoteCluster());
             if (pubStats != null) {
-                ReplicatorStats.msgRateIn = pubStats.msgRateIn;
-                ReplicatorStats.msgThroughputIn = pubStats.msgThroughputIn;
-                ReplicatorStats.inboundConnection = pubStats.getAddress();
-                ReplicatorStats.inboundConnectedSince = pubStats.getConnectedSince();
+                replicatorStats.msgRateIn = pubStats.msgRateIn;
+                replicatorStats.msgThroughputIn = pubStats.msgThroughputIn;
+                replicatorStats.msgThrottlingFailure = pubStats.msgThrottlingFailure;
+                replicatorStats.inboundConnection = pubStats.getAddress();
+                replicatorStats.inboundConnectedSince = pubStats.getConnectedSince();
             }
 
-            stats.msgRateOut += ReplicatorStats.msgRateOut;
-            stats.msgThroughputOut += ReplicatorStats.msgThroughputOut;
+            stats.msgRateOut += replicatorStats.msgRateOut;
+            stats.msgThroughputOut += replicatorStats.msgThroughputOut;
 
-            stats.getReplication().put(replicator.getRemoteCluster(), ReplicatorStats);
+            stats.getReplication().put(replicator.getRemoteCluster(), replicatorStats);
         });
 
         return stats;

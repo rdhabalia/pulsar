@@ -1033,6 +1033,27 @@ public class ServerCnx extends PulsarHandler {
             }
         }
 
+        if (producer.getTopic().isPublishRateExceeded()) {
+            final long producerId = send.getProducerId();
+            final long sequenceId = send.getSequenceId();
+            final String topicName = producer.getTopic().getName();
+            service.getTopicOrderedExecutor().executeOrdered(topicName, SafeRun.safeRun(() -> {
+                if (log.isDebugEnabled()) {
+                    log.debug("[{}] {} Publish failure due to throttling: {}", remoteAddress, topicName, producerId);
+                }
+                System.out.println("*************** Publish failure due to throttling *************");
+                if (producer.isNonPersistentTopic()) {
+                    ctx.writeAndFlush(Commands.newSendReceipt(producerId, sequenceId, -1, -1), ctx.voidPromise());
+                    producer.recordMessageDrop(send.getNumMessages());
+                } else {
+                    ctx.writeAndFlush(Commands.newSendError(producerId, sequenceId, ServerError.TooManyRequests,
+                            "Too many publish requests"));
+                }
+            }));
+            producer.recordMessageThrottling(send.getNumMessages());
+            return;
+        }
+
         startSendOperation();
 
         // Persist the message

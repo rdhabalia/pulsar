@@ -35,6 +35,9 @@ public class PublisherStats {
 
     /** Average message size published by this publisher */
     public double averageMsgSize;
+    
+    /** Total publish failure due to publish-throttling **/
+    public double msgThrottlingFailure;
 
     /** Id of this publisher */
     public long producerId;
@@ -71,6 +74,7 @@ public class PublisherStats {
         this.msgThroughputIn += stats.msgThroughputIn;
         double newAverageMsgSize = (this.averageMsgSize * (this.count - 1) + stats.averageMsgSize) / this.count;
         this.averageMsgSize = newAverageMsgSize;
+        this.msgThrottlingFailure += stats.msgThrottlingFailure;
         return this;
     }
 

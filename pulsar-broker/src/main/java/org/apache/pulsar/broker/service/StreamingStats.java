@@ -32,6 +32,8 @@ public class StreamingStats {
         statsStream.writePair("msgRateIn", stats.msgRateIn);
         statsStream.writePair("msgThroughputIn", stats.msgThroughputIn);
         statsStream.writePair("averageMsgSize", stats.averageMsgSize);
+        statsStream.writePair("msgThrottlingFailure", stats.msgThrottlingFailure);
+        
 
         statsStream.writePair("address", stats.getAddress());
         statsStream.writePair("producerId", stats.producerId);

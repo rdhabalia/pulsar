@@ -64,6 +64,7 @@ public class Producer {
     private Rate msgIn;
     // it records msg-drop rate only for non-persistent topic
     private final Rate msgDrop;
+    private final Rate msgThrottlingFailure;
     private AuthenticationDataSource authenticationData;
 
     private volatile long pendingPublishAcks = 0;
@@ -95,6 +96,7 @@ public class Producer {
         this.msgIn = new Rate();
         this.isNonPersistentTopic = topic instanceof NonPersistentTopic;
         this.msgDrop = this.isNonPersistentTopic ? new Rate() : null;
+        this.msgThrottlingFailure = new Rate();
 
         this.metadata = metadata != null ? metadata : Collections.emptyMap();
 
@@ -167,7 +169,7 @@ public class Producer {
             }
         }
 
-        startPublishOperation();
+        startPublishOperation(headersAndPayload.readableBytes(), (int) batchSize);
         topic.publishMessage(headersAndPayload,
                 MessagePublishContext.get(this, sequenceId, msgIn, headersAndPayload.readableBytes(), batchSize));
     }
@@ -197,10 +199,12 @@ public class Producer {
         }
     }
 
-    private void startPublishOperation() {
+    private void startPublishOperation(long msgSize, int batchSize) {
         // A single thread is incrementing/decrementing this counter, so we can use lazySet which doesn't involve a mem
         // barrier
         pendingPublishAcksUpdater.lazySet(this, pendingPublishAcks + 1);
+        // increment publish-count
+        this.getTopic().incrementPublishCount(msgSize, batchSize);
     }
 
     private void publishOperationCompleted() {
@@ -223,6 +227,10 @@ public class Producer {
         }
     }
 
+    public void recordMessageThrottling(int batchSize) {
+        this.msgThrottlingFailure.recordEvent(batchSize);
+    }
+    
     /**
      * Return the sequence id of
      * @return
@@ -441,11 +449,13 @@ public class Producer {
         msgIn.calculateRate();
         stats.msgRateIn = msgIn.getRate();
         stats.msgThroughputIn = msgIn.getValueRate();
+        stats.msgThrottlingFailure = msgThrottlingFailure.getRate();
         stats.averageMsgSize = msgIn.getAverageValue();
         if (this.isNonPersistentTopic) {
             msgDrop.calculateRate();
             ((NonPersistentPublisherStats) stats).msgDropRate = msgDrop.getRate();
         }
+        
     }
 
     public boolean isRemote() {

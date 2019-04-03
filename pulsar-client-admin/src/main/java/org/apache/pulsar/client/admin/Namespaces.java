@@ -33,6 +33,7 @@ import org.apache.pulsar.common.policies.data.BundlesData;
 import org.apache.pulsar.common.policies.data.DispatchRate;
 import org.apache.pulsar.common.policies.data.PersistencePolicies;
 import org.apache.pulsar.common.policies.data.Policies;
+import org.apache.pulsar.common.policies.data.PublishRate;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.SchemaAutoUpdateCompatibilityStrategy;
 import org.apache.pulsar.common.policies.data.SubscribeRate;
@@ -869,6 +870,27 @@ public interface Namespaces {
      *             Unexpected error
      */
     void splitNamespaceBundle(String namespace, String bundle, boolean unloadSplitBundles) throws PulsarAdminException;
+
+    /**
+     * Set message-publish-rate (topics under this namespace can dispatch this many messages per second)
+     *
+     * @param namespace
+     * @param dispatchRate
+     *            number of messages per second
+     * @throws PulsarAdminException
+     *             Unexpected error
+     */
+    void setPublishMsgRate(String namespace, PublishRate publishMsgRate) throws PulsarAdminException;
+
+    /** Get message-publish-rate (topics under this namespace can dispatch this many messages per second)
+    *
+    * @param namespace
+    * @returns messageRate
+    *            number of messages per second
+    * @throws PulsarAdminException
+    *             Unexpected error
+    */
+    PublishRate getPublishMsgRate(String namespace) throws PulsarAdminException;
 
     /**
      * Set message-dispatch-rate (topics under this namespace can dispatch this many messages per second)

@@ -34,6 +34,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
@@ -57,6 +58,7 @@ import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.bookkeeper.mledger.impl.PositionImpl;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.admin.AdminResource;
+import org.apache.pulsar.broker.service.AbstractBaseTopic;
 import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.service.BrokerServiceException;
 import org.apache.pulsar.broker.service.BrokerServiceException.AlreadyRunningException;
@@ -127,7 +129,7 @@ import com.google.common.collect.Sets;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.concurrent.FastThreadLocal;
 
-public class PersistentTopic implements Topic, AddEntryCallback {
+public class PersistentTopic extends AbstractBaseTopic implements AddEntryCallback {
     private final String topic;
 
     // Managed ledger associated with the topic
@@ -140,8 +142,6 @@ public class PersistentTopic implements Topic, AddEntryCallback {
     private final ConcurrentOpenHashMap<String, PersistentSubscription> subscriptions;
 
     private final ConcurrentOpenHashMap<String, Replicator> replicators;
-
-    private final BrokerService brokerService;
 
     private volatile boolean isFenced;
 
@@ -176,7 +176,7 @@ public class PersistentTopic implements Topic, AddEntryCallback {
     private static final long COMPACTION_NEVER_RUN = -0xfebecffeL;
     CompletableFuture<Long> currentCompaction = CompletableFuture.completedFuture(COMPACTION_NEVER_RUN);
     final CompactedTopic compactedTopic;
-
+    
     CompletableFuture<MessageIdImpl> currentOffload = CompletableFuture.completedFuture(
             (MessageIdImpl)MessageId.earliest);
 
@@ -196,6 +196,7 @@ public class PersistentTopic implements Topic, AddEntryCallback {
         public double averageMsgSize;
         public double aggMsgRateIn;
         public double aggMsgThroughputIn;
+        public double aggMsgThrottlingFailure;
         public double aggMsgRateOut;
         public double aggMsgThroughputOut;
         public final ObjectObjectHashMap<String, PublisherStats> remotePublishersStats;
@@ -210,12 +211,14 @@ public class PersistentTopic implements Topic, AddEntryCallback {
             aggMsgRateIn = 0;
             aggMsgThroughputIn = 0;
             aggMsgRateOut = 0;
+            aggMsgThrottlingFailure = 0;
             aggMsgThroughputOut = 0;
             remotePublishersStats.clear();
         }
     }
 
     public PersistentTopic(String topic, ManagedLedger ledger, BrokerService brokerService) throws NamingException {
+        super(topic, brokerService);
         this.topic = topic;
         this.ledger = ledger;
         this.brokerService = brokerService;
@@ -258,7 +261,7 @@ public class PersistentTopic implements Topic, AddEntryCallback {
             Policies policies = brokerService.pulsar().getConfigurationCache().policiesCache()
                     .get(AdminResource.path(POLICIES, TopicName.get(topic).getNamespace()))
                     .orElseThrow(() -> new KeeperException.NoNodeException());
-            isEncryptionRequired = policies.encryption_required;
+            this.isEncryptionRequired = policies.encryption_required;
 
             schemaCompatibilityStrategy = SchemaCompatibilityStrategy.fromAutoUpdatePolicy(
                     policies.schema_auto_update_compatibility_strategy);
@@ -1213,6 +1216,7 @@ public class PersistentTopic implements Topic, AddEntryCallback {
 
             topicStatsHelper.aggMsgRateIn += publisherStats.msgRateIn;
             topicStatsHelper.aggMsgThroughputIn += publisherStats.msgThroughputIn;
+            topicStatsHelper.aggMsgThrottlingFailure += publisherStats.msgThrottlingFailure;
 
             if (producer.isRemote()) {
                 topicStatsHelper.remotePublishersStats.put(producer.getRemoteCluster(), publisherStats);
@@ -1244,6 +1248,7 @@ public class PersistentTopic implements Topic, AddEntryCallback {
             PublisherStats pubStats = topicStatsHelper.remotePublishersStats.get(replicator.getRemoteCluster());
             rStat.msgRateIn = pubStats != null ? pubStats.msgRateIn : 0;
             rStat.msgThroughputIn = pubStats != null ? pubStats.msgThroughputIn : 0;
+            rStat.msgThrottlingFailure = pubStats != null ? pubStats.msgThrottlingFailure : 0;
             rStat.inboundConnection = pubStats != null ? pubStats.getAddress() : null;
             rStat.inboundConnectedSince = pubStats != null ? pubStats.getConnectedSince() : null;
 
@@ -1395,6 +1400,7 @@ public class PersistentTopic implements Topic, AddEntryCallback {
         producers.forEach(producer -> {
             PublisherStats publisherStats = producer.getStats();
             stats.msgRateIn += publisherStats.msgRateIn;
+            stats.msgThrottlingFailure += publisherStats.msgThrottlingFailure;
             stats.msgThroughputIn += publisherStats.msgThroughputIn;
 
             if (producer.isRemote()) {
@@ -1422,6 +1428,7 @@ public class PersistentTopic implements Topic, AddEntryCallback {
             if (pubStats != null) {
                 replicatorStats.msgRateIn = pubStats.msgRateIn;
                 replicatorStats.msgThroughputIn = pubStats.msgThroughputIn;
+                replicatorStats.msgThrottlingFailure = pubStats.msgThrottlingFailure;
                 replicatorStats.inboundConnection = pubStats.getAddress();
                 replicatorStats.inboundConnectedSince = pubStats.getConnectedSince();
             }
@@ -1614,6 +1621,8 @@ public class PersistentTopic implements Topic, AddEntryCallback {
                 data.schema_auto_update_compatibility_strategy);
 
         initializeDispatchRateLimiterIfNeeded(Optional.ofNullable(data));
+        
+        this.updateMaxPublishRate(data);
 
         producers.forEach(producer -> {
             producer.checkPermissions();
