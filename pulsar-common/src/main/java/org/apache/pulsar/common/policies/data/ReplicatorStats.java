@@ -27,7 +27,7 @@ public class ReplicatorStats {
 
     /** Total throughput received from the remote cluster. bytes/s */
     public double msgThroughputIn;
-
+    
     /** Total rate of messages delivered to the replication-subscriber. msg/s */
     public double msgRateOut;
 

@@ -34,6 +34,8 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
+import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.AddEntryCallback;
@@ -57,6 +59,7 @@ import org.apache.bookkeeper.mledger.impl.PositionImpl;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.admin.AdminResource;
 import org.apache.pulsar.broker.service.AbstractTopic;
+import org.apache.pulsar.broker.service.AbstractBaseTopic;
 import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.service.BrokerServiceException;
 import org.apache.pulsar.broker.service.BrokerServiceException.AlreadyRunningException;
@@ -125,6 +128,7 @@ import com.google.common.collect.Sets;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.concurrent.FastThreadLocal;
 
+
 public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCallback {
 
     // Managed ledger associated with the topic
@@ -134,6 +138,8 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     private final ConcurrentOpenHashMap<String, PersistentSubscription> subscriptions;
 
     private final ConcurrentOpenHashMap<String, Replicator> replicators;
+
+    private volatile boolean isFenced;
 
     protected static final AtomicLongFieldUpdater<PersistentTopic> USAGE_COUNT_UPDATER =
             AtomicLongFieldUpdater.newUpdater(PersistentTopic.class, "usageCount");
@@ -170,6 +176,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         public double averageMsgSize;
         public double aggMsgRateIn;
         public double aggMsgThroughputIn;
+        public double aggMsgThrottlingFailure;
         public double aggMsgRateOut;
         public double aggMsgThroughputOut;
         public final ObjectObjectHashMap<String, PublisherStats> remotePublishersStats;
@@ -184,6 +191,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             aggMsgRateIn = 0;
             aggMsgThroughputIn = 0;
             aggMsgRateOut = 0;
+            aggMsgThrottlingFailure = 0;
             aggMsgThroughputOut = 0;
             remotePublishersStats.clear();
         }
@@ -227,7 +235,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             Policies policies = brokerService.pulsar().getConfigurationCache().policiesCache()
                     .get(AdminResource.path(POLICIES, TopicName.get(topic).getNamespace()))
                     .orElseThrow(() -> new KeeperException.NoNodeException());
-            isEncryptionRequired = policies.encryption_required;
+            this.isEncryptionRequired = policies.encryption_required;
 
             schemaCompatibilityStrategy = SchemaCompatibilityStrategy.fromAutoUpdatePolicy(
                     policies.schema_auto_update_compatibility_strategy);
@@ -1592,6 +1600,8 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
 
 
         initializeDispatchRateLimiterIfNeeded(Optional.ofNullable(data));
+        
+        this.updateMaxPublishRate(data);
 
         producers.forEach(producer -> {
             producer.checkPermissions();

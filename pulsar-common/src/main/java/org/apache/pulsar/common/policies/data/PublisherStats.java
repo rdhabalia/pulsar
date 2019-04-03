@@ -35,7 +35,7 @@ public class PublisherStats {
 
     /** Average message size published by this publisher */
     public double averageMsgSize;
-
+    
     /** Id of this publisher */
     public long producerId;
 
