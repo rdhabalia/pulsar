@@ -18,11 +18,20 @@
  */
 package org.apache.pulsar.client.impl;
 
+import static org.junit.Assert.assertTrue;
+
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+
+import org.apache.pulsar.broker.service.Producer;
 import org.apache.pulsar.broker.service.PublishRateLimiter;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.client.api.Consumer;
+import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.ProducerConsumerBase;
 import org.apache.pulsar.common.policies.data.PublishRate;
+import org.apache.pulsar.common.util.FutureUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testng.Assert;
@@ -30,6 +39,7 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
+import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 
 public class MessagePublishThrottlingTest extends ProducerConsumerBase {
@@ -41,6 +51,8 @@ public class MessagePublishThrottlingTest extends ProducerConsumerBase {
         super.internalSetup();
         super.producerBaseSetup();
         this.conf.setClusterName("test");
+        // TODO: remove
+        this.conf.setPublisherThrottlingTickTimeMillis(1);
     }
 
     @AfterMethod
@@ -50,8 +62,8 @@ public class MessagePublishThrottlingTest extends ProducerConsumerBase {
         super.resetConfig();
     }
 
-    @Test
-    public void testSimplePublishMessageThrottling() throws Exception {
+    @Test(enabled = false)
+    public void tempTest() throws Exception {
 
         log.info("-- Starting {} test --", methodName);
 
@@ -60,60 +72,93 @@ public class MessagePublishThrottlingTest extends ProducerConsumerBase {
 
         admin.namespaces().createNamespace(namespace, Sets.newHashSet("test"));
         PublishRate publishMsgRate = new PublishRate();
-        publishMsgRate.publishThrottlingRateInMsg = 5;
+        publishMsgRate.publishThrottlingRateInMsg = 1000;
 
         Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName("my-subscriber-name")
                 .subscribe();
         // create producer and topic
-        ProducerImpl<byte[]> producer = (ProducerImpl<byte[]>) pulsarClient.newProducer().topic(topicName).create();
+        ProducerImpl<byte[]> producer = (ProducerImpl<byte[]>) pulsarClient.newProducer()
+                .sendTimeout(30, TimeUnit.MINUTES).topic(topicName).maxPendingMessages(30000).create();
         PersistentTopic topic = (PersistentTopic) pulsar.getBrokerService().getOrCreateTopic(topicName).get();
         // (1) verify message-rate is -1 initially
         Assert.assertEquals(topic.getPublishRateLimiter(), PublishRateLimiter.DISABLED_RATE_LIMITER);
 
         // enable throttling
-        admin.namespaces().setPublishMsgRate(namespace, publishMsgRate);
+        admin.namespaces().setPublishRate(namespace, publishMsgRate);
         retryStrategically((test) -> !topic.getPublishRateLimiter().equals(PublishRateLimiter.DISABLED_RATE_LIMITER), 5,
                 200);
         Assert.assertNotEquals(topic.getPublishRateLimiter(), PublishRateLimiter.DISABLED_RATE_LIMITER);
 
-        int numMessages = 20;
-
-        ClientCnx cnx = producer.getCnx();
-        for (int i = 0; i < numMessages; i++) {
-            System.out.println("*************** sending *************     " + i);
-            producer.send(new byte[80]);
-            if (i == publishMsgRate.publishThrottlingRateInMsg) {
-                Thread.sleep(conf.getPublisherThrottlingTickTimeMillis());
-                // now try to publish a message which will be throttled and producer will get throttling error and
-                // it will close the connect and recreate the cnx
-                producer.send(new byte[80]);
-                ClientCnx currentCnx = producer.getCnx();
-                Assert.assertNotEquals(cnx, currentCnx);
-                cnx = currentCnx;
+        // perf ************
+        for (int j = 0; j < 3; j++) {
+            int total = 25000;
+            System.out.println("********* round " + j + " *************");
+            List<CompletableFuture<MessageId>> futures = Lists.newArrayList();
+            for (int i = 0; i < total; i++) {
+                futures.add(producer.sendAsync(new byte[80]));
             }
+            FutureUtil.waitForAll(futures).get();
         }
+        // perf-end ************
+    }
+
+    @Test
+    public void testSimplePublishMessageThrottling() throws Exception {
+
+        log.info("-- Starting {} test --", methodName);
+
+        conf.setPublisherThrottlingTickTimeMillis(1);
+
+        final String namespace = "my-property/throttling_publish";
+        final String topicName = "persistent://" + namespace + "/throttlingBlock";
+
+        admin.namespaces().createNamespace(namespace, Sets.newHashSet("test"));
+        PublishRate publishMsgRate = new PublishRate();
+        publishMsgRate.publishThrottlingRateInMsg = 10;
+
+        Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName("my-subscriber-name")
+                .subscribe();
+        // create producer and topic
+        ProducerImpl<byte[]> producer = (ProducerImpl<byte[]>) pulsarClient.newProducer().topic(topicName)
+                .maxPendingMessages(30000).create();
+        PersistentTopic topic = (PersistentTopic) pulsar.getBrokerService().getTopicIfExists(topicName).get().get();
+        // (1) verify message-rate is -1 initially
+        Assert.assertEquals(topic.getPublishRateLimiter(), PublishRateLimiter.DISABLED_RATE_LIMITER);
+
+        // enable throttling
+        admin.namespaces().setPublishRate(namespace, publishMsgRate);
+        retryStrategically((test) -> !topic.getPublishRateLimiter().equals(PublishRateLimiter.DISABLED_RATE_LIMITER), 5,
+                200);
+        Assert.assertNotEquals(topic.getPublishRateLimiter(), PublishRateLimiter.DISABLED_RATE_LIMITER);
+
+        Producer prod = topic.getProducers().values().get(0);
+        // reset counter
+        prod.updateRates();
+        int total = 200;
+        for (int i = 0; i < total; i++) {
+            producer.send(new byte[80]);
+        }
+        // calculate rates and due to throttling rate should be < total per-second
+        prod.updateRates();
+        double rateIn = prod.getStats().msgRateIn;
+        assertTrue(rateIn < total);
 
         // disable throttling
         publishMsgRate.publishThrottlingRateInMsg = -1;
-        admin.namespaces().setPublishMsgRate(namespace, publishMsgRate);
+        admin.namespaces().setPublishRate(namespace, publishMsgRate);
         retryStrategically((test) -> topic.getPublishRateLimiter().equals(PublishRateLimiter.DISABLED_RATE_LIMITER), 5,
                 200);
         Assert.assertEquals(topic.getPublishRateLimiter(), PublishRateLimiter.DISABLED_RATE_LIMITER);
 
-        cnx = producer.getCnx();
-        for (int i = 0; i < numMessages; i++) {
-            System.out.println("*************** sending *************     " + i);
+        // reset counter
+        prod.updateRates();
+        for (int i = 0; i < total; i++) {
             producer.send(new byte[80]);
-            if (i == publishMsgRate.publishThrottlingRateInMsg) {
-                Thread.sleep(conf.getPublisherThrottlingTickTimeMillis());
-                // now try to publish a message which will be throttled and producer will get throttling error and
-                // it will close the connect and recreate the cnx
-                producer.send(new byte[80]);
-                ClientCnx currentCnx = producer.getCnx();
-                Assert.assertEquals(cnx, currentCnx);
-                cnx = currentCnx;
-            }
         }
+
+        prod.updateRates();
+        rateIn = prod.getStats().msgRateIn;
+        assertTrue(rateIn > total);
 
         consumer.close();
         producer.close();
@@ -124,12 +169,14 @@ public class MessagePublishThrottlingTest extends ProducerConsumerBase {
 
         log.info("-- Starting {} test --", methodName);
 
+        conf.setPublisherThrottlingTickTimeMillis(1);
+        
         final String namespace = "my-property/throttling_publish";
         final String topicName = "persistent://" + namespace + "/throttlingBlock";
 
         admin.namespaces().createNamespace(namespace, Sets.newHashSet("test"));
         PublishRate publishMsgRate = new PublishRate();
-        publishMsgRate.publishThrottlingRateInByte = 10;
+        publishMsgRate.publishThrottlingRateInByte = 400;
 
         Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName("my-subscriber-name")
                 .subscribe();
@@ -140,53 +187,42 @@ public class MessagePublishThrottlingTest extends ProducerConsumerBase {
         Assert.assertEquals(topic.getPublishRateLimiter(), PublishRateLimiter.DISABLED_RATE_LIMITER);
 
         // enable throttling
-        admin.namespaces().setPublishMsgRate(namespace, publishMsgRate);
+        admin.namespaces().setPublishRate(namespace, publishMsgRate);
         retryStrategically((test) -> !topic.getPublishRateLimiter().equals(PublishRateLimiter.DISABLED_RATE_LIMITER), 5,
                 200);
         Assert.assertNotEquals(topic.getPublishRateLimiter(), PublishRateLimiter.DISABLED_RATE_LIMITER);
 
-        int numMessages = 3;
-
-        ClientCnx cnx = producer.getCnx();
-        System.out.println("cnx = "+cnx);
-        for (int i = 0; i < numMessages; i++) {
-            System.out.println("*************** sending *************     " + i);
-            producer.send(new byte[10]);
-            Thread.sleep(conf.getPublisherThrottlingTickTimeMillis());
-            // now try to publish a message which will be throttled and producer will get throttling error and
-            // it will close the connect and recreate the cnx
-            producer.send(new byte[10]);
-            ClientCnx currentCnx = producer.getCnx();
-            System.out.println("currentCnx = "+currentCnx);
-            Assert.assertNotEquals(cnx, currentCnx);
-            cnx = currentCnx;
+        Producer prod = topic.getProducers().values().get(0);
+        // reset counter
+        prod.updateRates();
+        int total = 100;
+        for (int i = 0; i < total; i++) {
+            producer.send(new byte[1]);
         }
+        // calculate rates and due to throttling rate should be < total per-second
+        prod.updateRates();
+        double rateIn = prod.getStats().msgRateIn;
+        assertTrue(rateIn < total);
 
         // disable throttling
-        publishMsgRate.publishThrottlingRateInByte = 0;
-        admin.namespaces().setPublishMsgRate(namespace, publishMsgRate);
+        publishMsgRate.publishThrottlingRateInByte = -1;
+        admin.namespaces().setPublishRate(namespace, publishMsgRate);
         retryStrategically((test) -> topic.getPublishRateLimiter().equals(PublishRateLimiter.DISABLED_RATE_LIMITER), 5,
                 200);
         Assert.assertEquals(topic.getPublishRateLimiter(), PublishRateLimiter.DISABLED_RATE_LIMITER);
 
-        cnx = producer.getCnx();
-        for (int i = 0; i < numMessages; i++) {
-            System.out.println("*************** sending *************     " + i);
-            producer.send(new byte[80]);
-            if (i == publishMsgRate.publishThrottlingRateInMsg) {
-                Thread.sleep(conf.getPublisherThrottlingTickTimeMillis());
-                // now try to publish a message which will be throttled and producer will get throttling error and
-                // it will close the connect and recreate the cnx
-                producer.send(new byte[80]);
-                ClientCnx currentCnx = producer.getCnx();
-                Assert.assertEquals(cnx, currentCnx);
-                cnx = currentCnx;
-            }
+        // reset counter
+        prod.updateRates();
+        for (int i = 0; i < total; i++) {
+            producer.send(new byte[1]);
         }
+
+        prod.updateRates();
+        rateIn = prod.getStats().msgRateIn;
+        assertTrue(rateIn > total);
 
         consumer.close();
         producer.close();
     }
 
-    
 }

@@ -33,7 +33,7 @@ public class PublishRate {
         this.publishThrottlingRateInByte = -1;
     }
 
-    public PublishRate(int dispatchThrottlingRateInMsg, long dispatchThrottlingRateInByte, int ratePeriodInSecond) {
+    public PublishRate(int dispatchThrottlingRateInMsg, long dispatchThrottlingRateInByte) {
         super();
         this.publishThrottlingRateInMsg = dispatchThrottlingRateInMsg;
         this.publishThrottlingRateInByte = dispatchThrottlingRateInByte;

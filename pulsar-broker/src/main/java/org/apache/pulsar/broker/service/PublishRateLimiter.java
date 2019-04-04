@@ -4,6 +4,8 @@ import java.util.concurrent.atomic.LongAdder;
 
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.PublishRate;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public interface PublishRateLimiter {
 
@@ -13,7 +15,7 @@ public interface PublishRateLimiter {
 
     void incrementPublishCount(long msgSizeInBytes, int numOfMessages);
 
-    void resetPublishCount();
+    boolean resetPublishCount();
 
     boolean isPublishRateExceeded();
 
@@ -28,6 +30,7 @@ class PublishRateLimiterImpl implements PublishRateLimiter {
     protected volatile boolean publishRateExceeded = false;
     protected volatile LongAdder currentPublishMsgCount = null;
     protected volatile LongAdder currentPublishByteCount = null;
+    private static final Logger log = LoggerFactory.getLogger(PublishRateLimiterImpl.class);
 
     public PublishRateLimiterImpl(Policies policies, String clusterName) {
         update(policies, clusterName);
@@ -37,16 +40,12 @@ class PublishRateLimiterImpl implements PublishRateLimiter {
 
     @Override
     public void checkPublishRate() {
-        if (this.publishThrottlingEnabled) {
+        if (this.publishThrottlingEnabled && !publishRateExceeded) {
             long currentPublishMsgRate = this.currentPublishMsgCount.sum();
             long currentPublishByteRate = this.currentPublishByteCount.sum();
-            if (currentPublishMsgRate > this.publishMaxMessageRate
-                    || currentPublishByteRate > this.publishMaxByteRate) {
-                System.out.println("*************** rate exceeded *************"+currentPublishMsgRate);
+            if ((this.publishMaxMessageRate > 0 && currentPublishMsgRate > this.publishMaxMessageRate)
+                    || (this.publishMaxByteRate > 0 && currentPublishByteRate > this.publishMaxByteRate)) {
                 publishRateExceeded = true;
-            } else {
-                // it will be anyway updated by reset-rate task but updating in case not done by the task
-                publishRateExceeded = false;
             }
         }
     }
@@ -54,19 +53,21 @@ class PublishRateLimiterImpl implements PublishRateLimiter {
     @Override
     public void incrementPublishCount(long msgSizeInBytes, int numOfMessages) {
         if (this.publishThrottlingEnabled) {
+            System.out.println("incrementing "+msgSizeInBytes);
             this.currentPublishMsgCount.add(numOfMessages);
             this.currentPublishByteCount.add(msgSizeInBytes);
         }
     }
 
     @Override
-    public void resetPublishCount() {
+    public boolean resetPublishCount() {
         if (this.publishThrottlingEnabled || this.publishRateExceeded) {
             this.currentPublishMsgCount.reset();
             this.currentPublishByteCount.reset();
             this.publishRateExceeded = false;
-            System.out.println("*************** Reset publish throttling*************");
+            return true;
         }
+        return false;
     }
 
     @Override
@@ -108,9 +109,9 @@ class PublishRateLimiterDisable implements PublishRateLimiter {
     }
 
     @Override
-    public void resetPublishCount() {
+    public boolean resetPublishCount() {
         // No-op
-
+        return false;
     }
 
     @Override

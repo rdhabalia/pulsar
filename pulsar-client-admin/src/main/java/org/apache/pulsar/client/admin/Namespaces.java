@@ -880,7 +880,7 @@ public interface Namespaces {
      * @throws PulsarAdminException
      *             Unexpected error
      */
-    void setPublishMsgRate(String namespace, PublishRate publishMsgRate) throws PulsarAdminException;
+    void setPublishRate(String namespace, PublishRate publishMsgRate) throws PulsarAdminException;
 
     /** Get message-publish-rate (topics under this namespace can dispatch this many messages per second)
     *
@@ -890,7 +890,7 @@ public interface Namespaces {
     * @throws PulsarAdminException
     *             Unexpected error
     */
-    PublishRate getPublishMsgRate(String namespace) throws PulsarAdminException;
+    PublishRate getPublishRate(String namespace) throws PulsarAdminException;
 
     /**
      * Set message-dispatch-rate (topics under this namespace can dispatch this many messages per second)

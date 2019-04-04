@@ -40,6 +40,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.Collectors;
 
 import javax.naming.AuthenticationException;
@@ -58,6 +59,7 @@ import org.apache.pulsar.broker.authentication.AuthenticationState;
 import org.apache.pulsar.broker.service.BrokerServiceException.ConsumerBusyException;
 import org.apache.pulsar.broker.service.BrokerServiceException.ServerMetadataException;
 import org.apache.pulsar.broker.service.BrokerServiceException.ServiceUnitNotReadyException;
+import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.broker.service.schema.IncompatibleSchemaException;
 import org.apache.pulsar.broker.service.schema.SchemaRegistryService;
 import org.apache.pulsar.broker.web.RestException;
@@ -127,7 +129,7 @@ public class ServerCnx extends PulsarHandler {
     // control done by a single producer might not be enough to prevent write spikes on the broker.
     private static final int MaxPendingSendRequests = 1000;
     private static final int ResumeReadsThreshold = MaxPendingSendRequests / 2;
-    private int pendingSendRequest = 0;
+    private volatile int pendingSendRequest = 0;
     private final String replicatorPrefix;
     private String clientVersion = null;
     private int nonPersistentPendingMessages = 0;
@@ -1033,28 +1035,7 @@ public class ServerCnx extends PulsarHandler {
             }
         }
 
-        if (producer.getTopic().isPublishRateExceeded()) {
-            final long producerId = send.getProducerId();
-            final long sequenceId = send.getSequenceId();
-            final String topicName = producer.getTopic().getName();
-            service.getTopicOrderedExecutor().executeOrdered(topicName, SafeRun.safeRun(() -> {
-                if (log.isDebugEnabled()) {
-                    log.debug("[{}] {} Publish failure due to throttling: {}", remoteAddress, topicName, producerId);
-                }
-                System.out.println("*************** Publish failure due to throttling *************");
-                if (producer.isNonPersistentTopic()) {
-                    ctx.writeAndFlush(Commands.newSendReceipt(producerId, sequenceId, -1, -1), ctx.voidPromise());
-                    producer.recordMessageDrop(send.getNumMessages());
-                } else {
-                    ctx.writeAndFlush(Commands.newSendError(producerId, sequenceId, ServerError.TooManyRequests,
-                            "Too many publish requests"));
-                }
-            }));
-            producer.recordMessageThrottling(send.getNumMessages());
-            return;
-        }
-
-        startSendOperation();
+        startSendOperation(producer);
 
         // Persist the message
         producer.publishMessage(send.getProducerId(), send.getSequenceId(), headersAndPayload, send.getNumMessages());
@@ -1439,11 +1420,23 @@ public class ServerCnx extends PulsarHandler {
         return ctx.channel().isWritable();
     }
 
-    public void startSendOperation() {
-        if (++pendingSendRequest == MaxPendingSendRequests) {
+    public void startSendOperation(Producer producer) {
+        if (++pendingSendRequest == MaxPendingSendRequests || producer.getTopic().isPublishRateExceeded()) {
             // When the quota of pending send requests is reached, stop reading from socket to cause backpressure on
             // client connection, possibly shared between multiple producers
+            PersistentTopic t = (PersistentTopic)producer.getTopic();
+            if(t.getPublishRateLimiter() instanceof PublishRateLimiterImpl) {
+                PublishRateLimiterImpl r = (PublishRateLimiterImpl)(t).getPublishRateLimiter();
+                log.info("disabling auto-read = {}", r.currentPublishMsgCount);
+            }
             ctx.channel().config().setAutoRead(false);
+        }else {
+            PersistentTopic t = (PersistentTopic)producer.getTopic();
+            if(t.getPublishRateLimiter() instanceof PublishRateLimiterImpl) {
+                PublishRateLimiterImpl r = (PublishRateLimiterImpl)(t).getPublishRateLimiter();
+                log.info("currentPublishMsgCount = {} , currentPublishByteCount = {}", r.currentPublishMsgCount,
+                        r.currentPublishByteCount);
+            }
         }
     }
 
@@ -1451,12 +1444,23 @@ public class ServerCnx extends PulsarHandler {
         if (--pendingSendRequest == ResumeReadsThreshold) {
             // Resume reading from socket
             ctx.channel().config().setAutoRead(true);
+            // triggers channel read
+            ctx.read();
         }
         if (isNonPersistentTopic) {
             nonPersistentPendingMessages--;
         }
     }
 
+    public void enableCnxAutoRead() {
+        if (!ctx.channel().config().isAutoRead() && pendingSendRequest < MaxPendingSendRequests) {
+            // Resume reading from socket if pending-request is not reached to threshold
+            ctx.channel().config().setAutoRead(true); 
+            // triggers channel read
+            ctx.read();
+        }
+    }
+    
     private <T> ServerError getErrorCode(CompletableFuture<T> future) {
         ServerError error = ServerError.UnknownError;
         try {

@@ -485,7 +485,7 @@ public class NamespacesImpl extends BaseResource implements Namespaces {
     }
 
     @Override
-    public void setPublishMsgRate(String namespace, PublishRate publishMsgRate) throws PulsarAdminException {
+    public void setPublishRate(String namespace, PublishRate publishMsgRate) throws PulsarAdminException {
 
         try {
             NamespaceName ns = NamespaceName.get(namespace);
@@ -498,7 +498,7 @@ public class NamespacesImpl extends BaseResource implements Namespaces {
     }
 
     @Override
-    public PublishRate getPublishMsgRate(String namespace) throws PulsarAdminException {
+    public PublishRate getPublishRate(String namespace) throws PulsarAdminException {
         try {
             NamespaceName ns = NamespaceName.get(namespace);
             WebTarget path = namespacePath(ns, "publishRate");

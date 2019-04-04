@@ -135,9 +135,6 @@ public class PersistentTopic extends AbstractBaseTopic implements AddEntryCallba
     // Managed ledger associated with the topic
     private final ManagedLedger ledger;
 
-    // Producers currently connected to this topic
-    private final ConcurrentOpenHashSet<Producer> producers;
-
     // Subscriptions to this topic
     private final ConcurrentOpenHashMap<String, PersistentSubscription> subscriptions;
 
@@ -222,7 +219,6 @@ public class PersistentTopic extends AbstractBaseTopic implements AddEntryCallba
         this.topic = topic;
         this.ledger = ledger;
         this.brokerService = brokerService;
-        this.producers = new ConcurrentOpenHashSet<Producer>(16, 1);
         this.subscriptions = new ConcurrentOpenHashMap<>(16, 1);
         this.replicators = new ConcurrentOpenHashMap<>(16, 1);
         this.isFenced = false;
@@ -1921,4 +1917,5 @@ public class PersistentTopic extends AbstractBaseTopic implements AddEntryCallba
                     }
                 });
     }
+
 }

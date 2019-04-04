@@ -6,6 +6,7 @@ import org.apache.pulsar.broker.admin.AdminResource;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.PublishRate;
+import org.apache.pulsar.common.util.collections.ConcurrentOpenHashSet;
 import org.apache.zookeeper.KeeperException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +16,7 @@ public abstract class AbstractBaseTopic implements Topic {
     protected String topic;
     protected BrokerService brokerService;
     protected volatile PublishRateLimiter publishRateLimiter;
+    protected final ConcurrentOpenHashSet<Producer> producers = new ConcurrentOpenHashSet<Producer>(16, 1);
     private static final Logger log = LoggerFactory.getLogger(AbstractBaseTopic.class);
 
     public AbstractBaseTopic(String topic, BrokerService brokerService) {
@@ -43,9 +45,20 @@ public abstract class AbstractBaseTopic implements Topic {
 
     @Override
     public void resetPublishCount() {
-        this.publishRateLimiter.resetPublishCount();
+        if(this.publishRateLimiter.resetPublishCount()) {
+            enableProduerRead();
+        }
     }
 
+    /**
+     * it sets cnx auto-readable if producer's cnx is disabled due to publish-throttling
+     */
+    protected void enableProduerRead() {
+        if (producers != null) {
+            producers.forEach(producer -> producer.getCnx().enableCnxAutoRead());
+        }
+    }
+    
     @Override
     public boolean isPublishRateExceeded() {
         return this.publishRateLimiter.isPublishRateExceeded();
@@ -79,6 +92,7 @@ public abstract class AbstractBaseTopic implements Topic {
         } else {
             log.info("Disabling publish throttling for {}",this.topic);
             this.publishRateLimiter = PublishRateLimiter.DISABLED_RATE_LIMITER;
+            enableProduerRead();
         }
     }
 }

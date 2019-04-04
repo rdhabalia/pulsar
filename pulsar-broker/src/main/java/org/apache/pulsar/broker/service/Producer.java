@@ -243,6 +243,10 @@ public class Producer {
         }
     }
 
+    public ServerCnx getCnx() {
+        return this.cnx;
+    }
+
     private static final class MessagePublishContext implements PublishContext, Runnable {
         private Producer producer;
         private long sequenceId;
@@ -446,6 +450,7 @@ public class Producer {
     }
 
     public void updateRates() {
+        System.out.println("******* update rates **********");
         msgIn.calculateRate();
         stats.msgRateIn = msgIn.getRate();
         stats.msgThroughputIn = msgIn.getValueRate();

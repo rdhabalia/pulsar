@@ -346,9 +346,9 @@ public class ServiceConfiguration implements PulsarConfiguration {
     @FieldContext(
             category = CATEGORY_POLICIES,
             dynamic = true,
-            doc = "Tick time to check publish rate limitting (Disable publish throttling with value 0)"
+            doc = "Tick time to check publish rate limiting (Disable publish throttling with value 0)"
         )
-    private int publisherThrottlingTickTimeMillis = 100;
+    private int publisherThrottlingTickTimeMillis = 10;
     @FieldContext(
         category = CATEGORY_POLICIES,
         dynamic = true,
