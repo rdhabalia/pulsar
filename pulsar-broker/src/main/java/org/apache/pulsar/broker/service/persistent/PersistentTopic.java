@@ -1212,7 +1212,6 @@ public class PersistentTopic extends AbstractBaseTopic implements AddEntryCallba
 
             topicStatsHelper.aggMsgRateIn += publisherStats.msgRateIn;
             topicStatsHelper.aggMsgThroughputIn += publisherStats.msgThroughputIn;
-            topicStatsHelper.aggMsgThrottlingFailure += publisherStats.msgThrottlingFailure;
 
             if (producer.isRemote()) {
                 topicStatsHelper.remotePublishersStats.put(producer.getRemoteCluster(), publisherStats);
@@ -1244,7 +1243,6 @@ public class PersistentTopic extends AbstractBaseTopic implements AddEntryCallba
             PublisherStats pubStats = topicStatsHelper.remotePublishersStats.get(replicator.getRemoteCluster());
             rStat.msgRateIn = pubStats != null ? pubStats.msgRateIn : 0;
             rStat.msgThroughputIn = pubStats != null ? pubStats.msgThroughputIn : 0;
-            rStat.msgThrottlingFailure = pubStats != null ? pubStats.msgThrottlingFailure : 0;
             rStat.inboundConnection = pubStats != null ? pubStats.getAddress() : null;
             rStat.inboundConnectedSince = pubStats != null ? pubStats.getConnectedSince() : null;
 
@@ -1396,7 +1394,6 @@ public class PersistentTopic extends AbstractBaseTopic implements AddEntryCallba
         producers.forEach(producer -> {
             PublisherStats publisherStats = producer.getStats();
             stats.msgRateIn += publisherStats.msgRateIn;
-            stats.msgThrottlingFailure += publisherStats.msgThrottlingFailure;
             stats.msgThroughputIn += publisherStats.msgThroughputIn;
 
             if (producer.isRemote()) {
@@ -1424,7 +1421,6 @@ public class PersistentTopic extends AbstractBaseTopic implements AddEntryCallba
             if (pubStats != null) {
                 replicatorStats.msgRateIn = pubStats.msgRateIn;
                 replicatorStats.msgThroughputIn = pubStats.msgThroughputIn;
-                replicatorStats.msgThrottlingFailure = pubStats.msgThrottlingFailure;
                 replicatorStats.inboundConnection = pubStats.getAddress();
                 replicatorStats.inboundConnectedSince = pubStats.getConnectedSince();
             }

@@ -43,9 +43,6 @@ public class TopicStats {
     /** Total throughput of messages dispatched for the topic. byte/s */
     public double msgThroughputOut;
 
-    /** Publish failure due to publish-throttling */
-    public double msgThrottlingFailure;
-
     /** Average size of published messages. bytes */
     public double averageMsgSize;
 

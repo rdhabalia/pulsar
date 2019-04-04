@@ -113,9 +113,9 @@ public interface Topic {
 
     void checkPublishThrottlingRate();
     
-    void incrementPublishCount(long msgSizeInBytes, int numOfMessages);
+    void incrementPublishCount(int numOfMessages, long msgSizeInBytes);
     
-    void resetPublishCount();
+    void resetPublishCountAndEnableReadIfRequired();
     
     boolean isPublishRateExceeded();
 

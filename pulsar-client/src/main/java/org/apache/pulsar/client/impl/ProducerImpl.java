@@ -25,7 +25,6 @@ import static java.lang.String.format;
 import static org.apache.pulsar.common.api.Commands.hasChecksum;
 import static org.apache.pulsar.common.api.Commands.readChecksum;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Queues;
 
 import io.netty.buffer.ByteBuf;
@@ -193,11 +192,6 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
         return connectionHandler;
     }
 
-    @VisibleForTesting
-    protected ClientCnx getCnx() {
-        return connectionHandler.cnx();
-    }
-    
     private boolean isBatchMessagingEnabled() {
         return conf.isBatchingEnabled();
     }

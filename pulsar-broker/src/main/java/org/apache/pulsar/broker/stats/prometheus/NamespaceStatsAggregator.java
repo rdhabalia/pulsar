@@ -104,7 +104,6 @@ public class NamespaceStatsAggregator {
 
                 replStats.msgRateIn += producer.getStats().msgRateIn;
                 replStats.msgThroughputIn += producer.getStats().msgThroughputIn;
-                replStats.msgThrottlingFailure += producer.getStats().msgThrottlingFailure;
             } else {
                 // Local producer
                 stats.producersCount++;

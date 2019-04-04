@@ -132,8 +132,6 @@ class ConnectionHandler {
     }
 
     protected void setClientCnx(ClientCnx clientCnx) {
-        //TODO: remove here
-        log.info("**************** setting cnx {} ************", clientCnx);
         CLIENT_CNX_UPDATER.set(this, clientCnx);
     }
 

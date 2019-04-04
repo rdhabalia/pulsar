@@ -28,9 +28,6 @@ public class ReplicatorStats {
     /** Total throughput received from the remote cluster. bytes/s */
     public double msgThroughputIn;
     
-    /** Total publish failure due to publish-throttling */
-    public double msgThrottlingFailure;
-
     /** Total rate of messages delivered to the replication-subscriber. msg/s */
     public double msgRateOut;
 
@@ -65,7 +62,6 @@ public class ReplicatorStats {
         checkNotNull(stats);
         this.msgRateIn += stats.msgRateIn;
         this.msgThroughputIn += stats.msgThroughputIn;
-        this.msgThrottlingFailure += stats.msgThrottlingFailure;
         this.msgRateOut += stats.msgRateOut;
         this.msgThroughputOut += stats.msgThroughputOut;
         this.msgRateExpired += stats.msgRateExpired;

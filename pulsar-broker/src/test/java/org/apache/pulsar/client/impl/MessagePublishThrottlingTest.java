@@ -20,18 +20,12 @@ package org.apache.pulsar.client.impl;
 
 import static org.junit.Assert.assertTrue;
 
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-
 import org.apache.pulsar.broker.service.Producer;
 import org.apache.pulsar.broker.service.PublishRateLimiter;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.client.api.Consumer;
-import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.ProducerConsumerBase;
 import org.apache.pulsar.common.policies.data.PublishRate;
-import org.apache.pulsar.common.util.FutureUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testng.Assert;
@@ -39,7 +33,6 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 
 public class MessagePublishThrottlingTest extends ProducerConsumerBase {
@@ -51,7 +44,6 @@ public class MessagePublishThrottlingTest extends ProducerConsumerBase {
         super.internalSetup();
         super.producerBaseSetup();
         this.conf.setClusterName("test");
-        // TODO: remove
         this.conf.setPublisherThrottlingTickTimeMillis(1);
     }
 
@@ -62,52 +54,15 @@ public class MessagePublishThrottlingTest extends ProducerConsumerBase {
         super.resetConfig();
     }
 
-    @Test(enabled = false)
-    public void tempTest() throws Exception {
-
-        log.info("-- Starting {} test --", methodName);
-
-        final String namespace = "my-property/throttling_publish";
-        final String topicName = "persistent://" + namespace + "/throttlingBlock";
-
-        admin.namespaces().createNamespace(namespace, Sets.newHashSet("test"));
-        PublishRate publishMsgRate = new PublishRate();
-        publishMsgRate.publishThrottlingRateInMsg = 1000;
-
-        Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName("my-subscriber-name")
-                .subscribe();
-        // create producer and topic
-        ProducerImpl<byte[]> producer = (ProducerImpl<byte[]>) pulsarClient.newProducer()
-                .sendTimeout(30, TimeUnit.MINUTES).topic(topicName).maxPendingMessages(30000).create();
-        PersistentTopic topic = (PersistentTopic) pulsar.getBrokerService().getOrCreateTopic(topicName).get();
-        // (1) verify message-rate is -1 initially
-        Assert.assertEquals(topic.getPublishRateLimiter(), PublishRateLimiter.DISABLED_RATE_LIMITER);
-
-        // enable throttling
-        admin.namespaces().setPublishRate(namespace, publishMsgRate);
-        retryStrategically((test) -> !topic.getPublishRateLimiter().equals(PublishRateLimiter.DISABLED_RATE_LIMITER), 5,
-                200);
-        Assert.assertNotEquals(topic.getPublishRateLimiter(), PublishRateLimiter.DISABLED_RATE_LIMITER);
-
-        // perf ************
-        for (int j = 0; j < 3; j++) {
-            int total = 25000;
-            System.out.println("********* round " + j + " *************");
-            List<CompletableFuture<MessageId>> futures = Lists.newArrayList();
-            for (int i = 0; i < total; i++) {
-                futures.add(producer.sendAsync(new byte[80]));
-            }
-            FutureUtil.waitForAll(futures).get();
-        }
-        // perf-end ************
-    }
-
+    /**
+     * Verifies publish rate limiting by setting rate-limiting on number of published messages.
+     * 
+     * @throws Exception
+     */
     @Test
     public void testSimplePublishMessageThrottling() throws Exception {
 
         log.info("-- Starting {} test --", methodName);
-
-        conf.setPublisherThrottlingTickTimeMillis(1);
 
         final String namespace = "my-property/throttling_publish";
         final String topicName = "persistent://" + namespace + "/throttlingBlock";
@@ -164,13 +119,16 @@ public class MessagePublishThrottlingTest extends ProducerConsumerBase {
         producer.close();
     }
 
+    /**
+     * Verifies publish rate limiting by setting rate-limiting on number of publish bytes.
+     * 
+     * @throws Exception
+     */
     @Test
     public void testSimplePublishByteThrottling() throws Exception {
 
         log.info("-- Starting {} test --", methodName);
 
-        conf.setPublisherThrottlingTickTimeMillis(1);
-        
         final String namespace = "my-property/throttling_publish";
         final String topicName = "persistent://" + namespace + "/throttlingBlock";
 

@@ -141,7 +141,6 @@ public class NonPersistentTopic extends AbstractBaseTopic {
         public double averageMsgSize;
         public double aggMsgRateIn;
         public double aggMsgThroughputIn;
-        public double aggMsgThrottlingFailure;
         public double aggMsgRateOut;
         public double aggMsgThroughputOut;
         public final ObjectObjectHashMap<String, PublisherStats> remotePublishersStats;
@@ -724,7 +723,6 @@ public class NonPersistentTopic extends AbstractBaseTopic {
 
             topicStats.aggMsgRateIn += publisherStats.msgRateIn;
             topicStats.aggMsgThroughputIn += publisherStats.msgThroughputIn;
-            topicStats.aggMsgThrottlingFailure += publisherStats.msgThrottlingFailure;
 
             if (producer.isRemote()) {
                 topicStats.remotePublishersStats.put(producer.getRemoteCluster(), publisherStats);
@@ -815,7 +813,6 @@ public class NonPersistentTopic extends AbstractBaseTopic {
         topicStatsStream.writePair("msgRateOut", topicStats.aggMsgRateOut);
         topicStatsStream.writePair("msgThroughputIn", topicStats.aggMsgThroughputIn);
         topicStatsStream.writePair("msgThroughputOut", topicStats.aggMsgThroughputOut);
-        topicStatsStream.writePair("aggMsgThrottlingFailure", topicStats.aggMsgThrottlingFailure);
 
         nsStats.msgRateIn += topicStats.aggMsgRateIn;
         nsStats.msgRateOut += topicStats.aggMsgRateOut;
@@ -841,7 +838,6 @@ public class NonPersistentTopic extends AbstractBaseTopic {
             NonPersistentPublisherStats publisherStats = (NonPersistentPublisherStats) producer.getStats();
             stats.msgRateIn += publisherStats.msgRateIn;
             stats.msgThroughputIn += publisherStats.msgThroughputIn;
-            stats.msgThrottlingFailure += publisherStats.msgThrottlingFailure;
 
             if (producer.isRemote()) {
                 remotePublishersStats.put(producer.getRemoteCluster(), publisherStats);
@@ -868,7 +864,6 @@ public class NonPersistentTopic extends AbstractBaseTopic {
             if (pubStats != null) {
                 replicatorStats.msgRateIn = pubStats.msgRateIn;
                 replicatorStats.msgThroughputIn = pubStats.msgThroughputIn;
-                replicatorStats.msgThrottlingFailure = pubStats.msgThrottlingFailure;
                 replicatorStats.inboundConnection = pubStats.getAddress();
                 replicatorStats.inboundConnectedSince = pubStats.getConnectedSince();
             }

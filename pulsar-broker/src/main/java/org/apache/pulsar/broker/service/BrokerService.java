@@ -932,7 +932,7 @@ public class BrokerService implements Closeable, ZooKeeperCacheListener<Policies
     }
 
     private void refreshPublishRate() {
-        forEachTopic(Topic::resetPublishCount);
+        forEachTopic(Topic::resetPublishCountAndEnableReadIfRequired);
     }
 
     /**

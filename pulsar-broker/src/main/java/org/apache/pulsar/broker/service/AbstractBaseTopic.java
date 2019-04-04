@@ -1,3 +1,21 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
 package org.apache.pulsar.broker.service;
 
 import static org.apache.pulsar.broker.cache.ConfigurationCacheService.POLICIES;
@@ -39,13 +57,13 @@ public abstract class AbstractBaseTopic implements Topic {
     }
 
     @Override
-    public void incrementPublishCount(long msgSizeInBytes, int numOfMessages) {
-        this.publishRateLimiter.incrementPublishCount(msgSizeInBytes, numOfMessages);
+    public void incrementPublishCount(int numOfMessages, long msgSizeInBytes) {
+        this.publishRateLimiter.incrementPublishCount(numOfMessages, msgSizeInBytes);
     }
 
     @Override
-    public void resetPublishCount() {
-        if(this.publishRateLimiter.resetPublishCount()) {
+    public void resetPublishCountAndEnableReadIfRequired() {
+        if (this.publishRateLimiter.resetPublishCount()) {
             enableProduerRead();
         }
     }
@@ -58,7 +76,7 @@ public abstract class AbstractBaseTopic implements Topic {
             producers.forEach(producer -> producer.getCnx().enableCnxAutoRead());
         }
     }
-    
+
     @Override
     public boolean isPublishRateExceeded() {
         return this.publishRateLimiter.isPublishRateExceeded();
@@ -67,7 +85,7 @@ public abstract class AbstractBaseTopic implements Topic {
     public PublishRateLimiter getPublishRateLimiter() {
         return publishRateLimiter;
     }
-    
+
     public void updateMaxPublishRate(Policies policies) {
         updatePublishDispatcher(policies);
     }
@@ -90,7 +108,7 @@ public abstract class AbstractBaseTopic implements Topic {
                 this.publishRateLimiter.update(policies, clusterName);
             }
         } else {
-            log.info("Disabling publish throttling for {}",this.topic);
+            log.info("Disabling publish throttling for {}", this.topic);
             this.publishRateLimiter = PublishRateLimiter.DISABLED_RATE_LIMITER;
             enableProduerRead();
         }

@@ -30,9 +30,6 @@ public class AggregatedReplicationStats {
     /** Total throughput delivered to the replication-subscriber. bytes/s */
     public double msgThroughputOut;
 
-    /** Total publish failure due to publish-throttling*/
-    public double msgThrottlingFailure;
-    
     /** Number of messages pending to be replicated to remote cluster */
     public long replicationBacklog;
 

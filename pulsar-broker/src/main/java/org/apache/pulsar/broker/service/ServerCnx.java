@@ -129,7 +129,7 @@ public class ServerCnx extends PulsarHandler {
     // control done by a single producer might not be enough to prevent write spikes on the broker.
     private static final int MaxPendingSendRequests = 1000;
     private static final int ResumeReadsThreshold = MaxPendingSendRequests / 2;
-    private volatile int pendingSendRequest = 0;
+    private int pendingSendRequest = 0;
     private final String replicatorPrefix;
     private String clientVersion = null;
     private int nonPersistentPendingMessages = 0;
@@ -1424,19 +1424,7 @@ public class ServerCnx extends PulsarHandler {
         if (++pendingSendRequest == MaxPendingSendRequests || producer.getTopic().isPublishRateExceeded()) {
             // When the quota of pending send requests is reached, stop reading from socket to cause backpressure on
             // client connection, possibly shared between multiple producers
-            PersistentTopic t = (PersistentTopic)producer.getTopic();
-            if(t.getPublishRateLimiter() instanceof PublishRateLimiterImpl) {
-                PublishRateLimiterImpl r = (PublishRateLimiterImpl)(t).getPublishRateLimiter();
-                log.info("disabling auto-read = {}", r.currentPublishMsgCount);
-            }
             ctx.channel().config().setAutoRead(false);
-        }else {
-            PersistentTopic t = (PersistentTopic)producer.getTopic();
-            if(t.getPublishRateLimiter() instanceof PublishRateLimiterImpl) {
-                PublishRateLimiterImpl r = (PublishRateLimiterImpl)(t).getPublishRateLimiter();
-                log.info("currentPublishMsgCount = {} , currentPublishByteCount = {}", r.currentPublishMsgCount,
-                        r.currentPublishByteCount);
-            }
         }
     }
 
@@ -1444,7 +1432,7 @@ public class ServerCnx extends PulsarHandler {
         if (--pendingSendRequest == ResumeReadsThreshold) {
             // Resume reading from socket
             ctx.channel().config().setAutoRead(true);
-            // triggers channel read
+            // triggers channel read if autoRead couldn't trigger it
             ctx.read();
         }
         if (isNonPersistentTopic) {
@@ -1453,9 +1441,12 @@ public class ServerCnx extends PulsarHandler {
     }
 
     public void enableCnxAutoRead() {
-        if (!ctx.channel().config().isAutoRead() && pendingSendRequest < MaxPendingSendRequests) {
+        // we can add check (&& pendingSendRequest < MaxPendingSendRequests) here but then it requires
+        // pendingSendRequest to be volatile and it can be expensive while writting. also this will be called on if
+        // throttling is enable on the topic. so, avoid pendingSendRequest check will be fine. 
+        if (!ctx.channel().config().isAutoRead()) {
             // Resume reading from socket if pending-request is not reached to threshold
-            ctx.channel().config().setAutoRead(true); 
+            ctx.channel().config().setAutoRead(true);
             // triggers channel read
             ctx.read();
         }
