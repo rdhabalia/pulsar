@@ -293,6 +293,9 @@ public interface ProducerBuilder<T> extends Cloneable {
      * @return the producer builder instance
      */
     ProducerBuilder<T> enableBatching(boolean enableBatching);
+    
+    ProducerBuilder<T> chunkingEnabled(boolean enableChunking);
+    ProducerBuilder<T> chunkMsgMaxBytes(int chunkMsgMaxBytes);
 
     /**
      * Sets a {@link CryptoKeyReader}.

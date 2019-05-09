@@ -193,6 +193,18 @@ public class ProducerBuilderImpl<T> implements ProducerBuilder<T> {
     }
 
     @Override
+    public ProducerBuilder<T> chunkingEnabled(boolean chunkingEnabled) {
+        conf.setChunkingEnabled(chunkingEnabled);
+        return this;
+    }
+
+    @Override
+    public ProducerBuilder<T> chunkMsgMaxBytes(int chunkMsgMaxBytes) {
+        conf.setChunkMsgMaxBytes(chunkMsgMaxBytes);
+        return this;
+    }
+
+    @Override
     public ProducerBuilder<T> cryptoKeyReader(@NonNull CryptoKeyReader cryptoKeyReader) {
         conf.setCryptoKeyReader(cryptoKeyReader);
         return this;
