@@ -58,7 +58,7 @@ public interface Entry {
      * @return entryId of the position
      */
     long getEntryId();
-
+    
     /**
      * Release the resources (data) allocated for this entry and recycle if all the resources are deallocated (ref-count
      * of data reached to 0).

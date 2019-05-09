@@ -114,6 +114,13 @@ public class PerformanceConsumer {
 
         @Parameter(names = { "--auth_plugin" }, description = "Authentication plugin class name")
         public String authPluginClassName;
+        
+        @Parameter(names = { "-mc", "--max_chunked_msg" }, description = "Max pending chunk messages")
+        private int maxPendingChuckedMessage = 0;
+
+        @Parameter(names = { "-ac",
+                "--auto_ack_chunk_q_full" }, description = "Auto ack for oldest message on queue is full")
+        private boolean autoAckOldestChunkedMessageOnQueueFull = false;
 
         @Parameter(
             names = { "--auth-params" },
@@ -257,7 +264,11 @@ public class PerformanceConsumer {
                 .receiverQueueSize(arguments.receiverQueueSize) //
                 .acknowledgmentGroupTime(arguments.acknowledgmentsGroupingDelayMillis, TimeUnit.MILLISECONDS) //
                 .subscriptionType(arguments.subscriptionType)
+                .autoAckOldestChunkedMessageOnQueueFull(arguments.autoAckOldestChunkedMessageOnQueueFull)
                 .replicateSubscriptionState(arguments.replicatedSubscription);
+        if (arguments.maxPendingChuckedMessage > 0) {
+            consumerBuilder.maxPendingChuckedMessage(arguments.maxPendingChuckedMessage);
+        }
 
         if (arguments.encKeyName != null) {
             byte[] pKey = Files.readAllBytes(Paths.get(arguments.encKeyFile));

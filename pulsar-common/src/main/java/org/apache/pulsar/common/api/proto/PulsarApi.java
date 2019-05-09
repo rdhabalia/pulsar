@@ -3099,6 +3099,22 @@ public final class PulsarApi {
     // optional int32 marker_type = 20;
     boolean hasMarkerType();
     int getMarkerType();
+    
+    // optional string uuid = 21;
+    boolean hasUuid();
+    String getUuid();
+    
+    // optional int32 num_chunks_from_msg = 22;
+    boolean hasNumChunksFromMsg();
+    int getNumChunksFromMsg();
+    
+    // optional int32 total_chunk_msg_size = 23;
+    boolean hasTotalChunkMsgSize();
+    int getTotalChunkMsgSize();
+    
+    // optional int32 chunk_id = 24;
+    boolean hasChunkId();
+    int getChunkId();
   }
   public static final class MessageMetadata extends
       org.apache.pulsar.shaded.com.google.protobuf.v241.GeneratedMessageLite
@@ -3429,6 +3445,68 @@ public final class PulsarApi {
       return markerType_;
     }
     
+    // optional string uuid = 21;
+    public static final int UUID_FIELD_NUMBER = 21;
+    private java.lang.Object uuid_;
+    public boolean hasUuid() {
+      return ((bitField0_ & 0x00008000) == 0x00008000);
+    }
+    public String getUuid() {
+      java.lang.Object ref = uuid_;
+      if (ref instanceof String) {
+        return (String) ref;
+      } else {
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString bs = 
+            (org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString) ref;
+        String s = bs.toStringUtf8();
+        if (org.apache.pulsar.shaded.com.google.protobuf.v241.Internal.isValidUtf8(bs)) {
+          uuid_ = s;
+        }
+        return s;
+      }
+    }
+    private org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString getUuidBytes() {
+      java.lang.Object ref = uuid_;
+      if (ref instanceof String) {
+        org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString b = 
+            org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString.copyFromUtf8((String) ref);
+        uuid_ = b;
+        return b;
+      } else {
+        return (org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString) ref;
+      }
+    }
+    
+    // optional int32 num_chunks_from_msg = 22;
+    public static final int NUM_CHUNKS_FROM_MSG_FIELD_NUMBER = 22;
+    private int numChunksFromMsg_;
+    public boolean hasNumChunksFromMsg() {
+      return ((bitField0_ & 0x00010000) == 0x00010000);
+    }
+    public int getNumChunksFromMsg() {
+      return numChunksFromMsg_;
+    }
+    
+    // optional int32 total_chunk_msg_size = 23;
+    public static final int TOTAL_CHUNK_MSG_SIZE_FIELD_NUMBER = 23;
+    private int totalChunkMsgSize_;
+    public boolean hasTotalChunkMsgSize() {
+      return ((bitField0_ & 0x00020000) == 0x00020000);
+    }
+    public int getTotalChunkMsgSize() {
+      return totalChunkMsgSize_;
+    }
+    
+    // optional int32 chunk_id = 24;
+    public static final int CHUNK_ID_FIELD_NUMBER = 24;
+    private int chunkId_;
+    public boolean hasChunkId() {
+      return ((bitField0_ & 0x00040000) == 0x00040000);
+    }
+    public int getChunkId() {
+      return chunkId_;
+    }
+    
     private void initFields() {
       producerName_ = "";
       sequenceId_ = 0L;
@@ -3448,6 +3526,10 @@ public final class PulsarApi {
       partitionKeyB64Encoded_ = false;
       orderingKey_ = org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString.EMPTY;
       markerType_ = 0;
+      uuid_ = "";
+      numChunksFromMsg_ = 0;
+      totalChunkMsgSize_ = 0;
+      chunkId_ = 0;
     }
     private byte memoizedIsInitialized = -1;
     public final boolean isInitialized() {
@@ -3544,6 +3626,18 @@ public final class PulsarApi {
       if (((bitField0_ & 0x00004000) == 0x00004000)) {
         output.writeInt32(20, markerType_);
       }
+      if (((bitField0_ & 0x00008000) == 0x00008000)) {
+        output.writeBytes(21, getUuidBytes());
+      }
+      if (((bitField0_ & 0x00010000) == 0x00010000)) {
+        output.writeInt32(22, numChunksFromMsg_);
+      }
+      if (((bitField0_ & 0x00020000) == 0x00020000)) {
+        output.writeInt32(23, totalChunkMsgSize_);
+      }
+      if (((bitField0_ & 0x00040000) == 0x00040000)) {
+        output.writeInt32(24, chunkId_);
+      }
     }
     
     private int memoizedSerializedSize = -1;
@@ -3628,6 +3722,22 @@ public final class PulsarApi {
       if (((bitField0_ & 0x00004000) == 0x00004000)) {
         size += org.apache.pulsar.shaded.com.google.protobuf.v241.CodedOutputStream
           .computeInt32Size(20, markerType_);
+      }
+      if (((bitField0_ & 0x00008000) == 0x00008000)) {
+        size += org.apache.pulsar.shaded.com.google.protobuf.v241.CodedOutputStream
+          .computeBytesSize(21, getUuidBytes());
+      }
+      if (((bitField0_ & 0x00010000) == 0x00010000)) {
+        size += org.apache.pulsar.shaded.com.google.protobuf.v241.CodedOutputStream
+          .computeInt32Size(22, numChunksFromMsg_);
+      }
+      if (((bitField0_ & 0x00020000) == 0x00020000)) {
+        size += org.apache.pulsar.shaded.com.google.protobuf.v241.CodedOutputStream
+          .computeInt32Size(23, totalChunkMsgSize_);
+      }
+      if (((bitField0_ & 0x00040000) == 0x00040000)) {
+        size += org.apache.pulsar.shaded.com.google.protobuf.v241.CodedOutputStream
+          .computeInt32Size(24, chunkId_);
       }
       memoizedSerializedSize = size;
       return size;
@@ -3778,6 +3888,14 @@ public final class PulsarApi {
         bitField0_ = (bitField0_ & ~0x00010000);
         markerType_ = 0;
         bitField0_ = (bitField0_ & ~0x00020000);
+        uuid_ = "";
+        bitField0_ = (bitField0_ & ~0x00040000);
+        numChunksFromMsg_ = 0;
+        bitField0_ = (bitField0_ & ~0x00080000);
+        totalChunkMsgSize_ = 0;
+        bitField0_ = (bitField0_ & ~0x00100000);
+        chunkId_ = 0;
+        bitField0_ = (bitField0_ & ~0x00200000);
         return this;
       }
       
@@ -3887,6 +4005,22 @@ public final class PulsarApi {
           to_bitField0_ |= 0x00004000;
         }
         result.markerType_ = markerType_;
+        if (((from_bitField0_ & 0x00040000) == 0x00040000)) {
+          to_bitField0_ |= 0x00008000;
+        }
+        result.uuid_ = uuid_;
+        if (((from_bitField0_ & 0x00080000) == 0x00080000)) {
+          to_bitField0_ |= 0x00010000;
+        }
+        result.numChunksFromMsg_ = numChunksFromMsg_;
+        if (((from_bitField0_ & 0x00100000) == 0x00100000)) {
+          to_bitField0_ |= 0x00020000;
+        }
+        result.totalChunkMsgSize_ = totalChunkMsgSize_;
+        if (((from_bitField0_ & 0x00200000) == 0x00200000)) {
+          to_bitField0_ |= 0x00040000;
+        }
+        result.chunkId_ = chunkId_;
         result.bitField0_ = to_bitField0_;
         return result;
       }
@@ -3967,6 +4101,18 @@ public final class PulsarApi {
         }
         if (other.hasMarkerType()) {
           setMarkerType(other.getMarkerType());
+        }
+        if (other.hasUuid()) {
+          setUuid(other.getUuid());
+        }
+        if (other.hasNumChunksFromMsg()) {
+          setNumChunksFromMsg(other.getNumChunksFromMsg());
+        }
+        if (other.hasTotalChunkMsgSize()) {
+          setTotalChunkMsgSize(other.getTotalChunkMsgSize());
+        }
+        if (other.hasChunkId()) {
+          setChunkId(other.getChunkId());
         }
         return this;
       }
@@ -4115,6 +4261,26 @@ public final class PulsarApi {
             case 160: {
               bitField0_ |= 0x00020000;
               markerType_ = input.readInt32();
+              break;
+            }
+            case 170: {
+              bitField0_ |= 0x00040000;
+              uuid_ = input.readBytes();
+              break;
+            }
+            case 176: {
+              bitField0_ |= 0x00080000;
+              numChunksFromMsg_ = input.readInt32();
+              break;
+            }
+            case 184: {
+              bitField0_ |= 0x00100000;
+              totalChunkMsgSize_ = input.readInt32();
+              break;
+            }
+            case 192: {
+              bitField0_ |= 0x00200000;
+              chunkId_ = input.readInt32();
               break;
             }
           }
@@ -4740,6 +4906,105 @@ public final class PulsarApi {
       public Builder clearMarkerType() {
         bitField0_ = (bitField0_ & ~0x00020000);
         markerType_ = 0;
+        
+        return this;
+      }
+      
+      // optional string uuid = 21;
+      private java.lang.Object uuid_ = "";
+      public boolean hasUuid() {
+        return ((bitField0_ & 0x00040000) == 0x00040000);
+      }
+      public String getUuid() {
+        java.lang.Object ref = uuid_;
+        if (!(ref instanceof String)) {
+          String s = ((org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString) ref).toStringUtf8();
+          uuid_ = s;
+          return s;
+        } else {
+          return (String) ref;
+        }
+      }
+      public Builder setUuid(String value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  bitField0_ |= 0x00040000;
+        uuid_ = value;
+        
+        return this;
+      }
+      public Builder clearUuid() {
+        bitField0_ = (bitField0_ & ~0x00040000);
+        uuid_ = getDefaultInstance().getUuid();
+        
+        return this;
+      }
+      void setUuid(org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString value) {
+        bitField0_ |= 0x00040000;
+        uuid_ = value;
+        
+      }
+      
+      // optional int32 num_chunks_from_msg = 22;
+      private int numChunksFromMsg_ ;
+      public boolean hasNumChunksFromMsg() {
+        return ((bitField0_ & 0x00080000) == 0x00080000);
+      }
+      public int getNumChunksFromMsg() {
+        return numChunksFromMsg_;
+      }
+      public Builder setNumChunksFromMsg(int value) {
+        bitField0_ |= 0x00080000;
+        numChunksFromMsg_ = value;
+        
+        return this;
+      }
+      public Builder clearNumChunksFromMsg() {
+        bitField0_ = (bitField0_ & ~0x00080000);
+        numChunksFromMsg_ = 0;
+        
+        return this;
+      }
+      
+      // optional int32 total_chunk_msg_size = 23;
+      private int totalChunkMsgSize_ ;
+      public boolean hasTotalChunkMsgSize() {
+        return ((bitField0_ & 0x00100000) == 0x00100000);
+      }
+      public int getTotalChunkMsgSize() {
+        return totalChunkMsgSize_;
+      }
+      public Builder setTotalChunkMsgSize(int value) {
+        bitField0_ |= 0x00100000;
+        totalChunkMsgSize_ = value;
+        
+        return this;
+      }
+      public Builder clearTotalChunkMsgSize() {
+        bitField0_ = (bitField0_ & ~0x00100000);
+        totalChunkMsgSize_ = 0;
+        
+        return this;
+      }
+      
+      // optional int32 chunk_id = 24;
+      private int chunkId_ ;
+      public boolean hasChunkId() {
+        return ((bitField0_ & 0x00200000) == 0x00200000);
+      }
+      public int getChunkId() {
+        return chunkId_;
+      }
+      public Builder setChunkId(int value) {
+        bitField0_ |= 0x00200000;
+        chunkId_ = value;
+        
+        return this;
+      }
+      public Builder clearChunkId() {
+        bitField0_ = (bitField0_ & ~0x00200000);
+        chunkId_ = 0;
         
         return this;
       }
@@ -13909,6 +14174,10 @@ public final class PulsarApi {
     // optional int32 num_messages = 3 [default = 1];
     boolean hasNumMessages();
     int getNumMessages();
+    
+    // optional bool is_chunk = 4 [default = false];
+    boolean hasIsChunk();
+    boolean getIsChunk();
   }
   public static final class CommandSend extends
       org.apache.pulsar.shaded.com.google.protobuf.v241.GeneratedMessageLite
@@ -13975,10 +14244,21 @@ public final class PulsarApi {
       return numMessages_;
     }
     
+    // optional bool is_chunk = 4 [default = false];
+    public static final int IS_CHUNK_FIELD_NUMBER = 4;
+    private boolean isChunk_;
+    public boolean hasIsChunk() {
+      return ((bitField0_ & 0x00000008) == 0x00000008);
+    }
+    public boolean getIsChunk() {
+      return isChunk_;
+    }
+    
     private void initFields() {
       producerId_ = 0L;
       sequenceId_ = 0L;
       numMessages_ = 1;
+      isChunk_ = false;
     }
     private byte memoizedIsInitialized = -1;
     public final boolean isInitialized() {
@@ -14014,6 +14294,9 @@ public final class PulsarApi {
       if (((bitField0_ & 0x00000004) == 0x00000004)) {
         output.writeInt32(3, numMessages_);
       }
+      if (((bitField0_ & 0x00000008) == 0x00000008)) {
+        output.writeBool(4, isChunk_);
+      }
     }
     
     private int memoizedSerializedSize = -1;
@@ -14033,6 +14316,10 @@ public final class PulsarApi {
       if (((bitField0_ & 0x00000004) == 0x00000004)) {
         size += org.apache.pulsar.shaded.com.google.protobuf.v241.CodedOutputStream
           .computeInt32Size(3, numMessages_);
+      }
+      if (((bitField0_ & 0x00000008) == 0x00000008)) {
+        size += org.apache.pulsar.shaded.com.google.protobuf.v241.CodedOutputStream
+          .computeBoolSize(4, isChunk_);
       }
       memoizedSerializedSize = size;
       return size;
@@ -14153,6 +14440,8 @@ public final class PulsarApi {
         bitField0_ = (bitField0_ & ~0x00000002);
         numMessages_ = 1;
         bitField0_ = (bitField0_ & ~0x00000004);
+        isChunk_ = false;
+        bitField0_ = (bitField0_ & ~0x00000008);
         return this;
       }
       
@@ -14198,6 +14487,10 @@ public final class PulsarApi {
           to_bitField0_ |= 0x00000004;
         }
         result.numMessages_ = numMessages_;
+        if (((from_bitField0_ & 0x00000008) == 0x00000008)) {
+          to_bitField0_ |= 0x00000008;
+        }
+        result.isChunk_ = isChunk_;
         result.bitField0_ = to_bitField0_;
         return result;
       }
@@ -14212,6 +14505,9 @@ public final class PulsarApi {
         }
         if (other.hasNumMessages()) {
           setNumMessages(other.getNumMessages());
+        }
+        if (other.hasIsChunk()) {
+          setIsChunk(other.getIsChunk());
         }
         return this;
       }
@@ -14263,6 +14559,11 @@ public final class PulsarApi {
             case 24: {
               bitField0_ |= 0x00000004;
               numMessages_ = input.readInt32();
+              break;
+            }
+            case 32: {
+              bitField0_ |= 0x00000008;
+              isChunk_ = input.readBool();
               break;
             }
           }
@@ -14330,6 +14631,27 @@ public final class PulsarApi {
       public Builder clearNumMessages() {
         bitField0_ = (bitField0_ & ~0x00000004);
         numMessages_ = 1;
+        
+        return this;
+      }
+      
+      // optional bool is_chunk = 4 [default = false];
+      private boolean isChunk_ ;
+      public boolean hasIsChunk() {
+        return ((bitField0_ & 0x00000008) == 0x00000008);
+      }
+      public boolean getIsChunk() {
+        return isChunk_;
+      }
+      public Builder setIsChunk(boolean value) {
+        bitField0_ |= 0x00000008;
+        isChunk_ = value;
+        
+        return this;
+      }
+      public Builder clearIsChunk() {
+        bitField0_ = (bitField0_ & ~0x00000008);
+        isChunk_ = false;
         
         return this;
       }

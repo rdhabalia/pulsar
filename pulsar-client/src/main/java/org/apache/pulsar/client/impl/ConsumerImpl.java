@@ -25,14 +25,20 @@ import static org.apache.pulsar.common.api.Commands.readChecksum;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Lists;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.util.Recycler;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.Timeout;
+import io.netty.util.Recycler.Handle;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -82,6 +88,7 @@ import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.schema.SchemaInfo;
 import org.apache.pulsar.common.schema.SchemaType;
 import org.apache.pulsar.common.util.FutureUtil;
+import org.apache.pulsar.common.util.collections.ConcurrentOpenHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -108,7 +115,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
-    private final UnAckedMessageTracker unAckedMessageTracker;
+    protected final UnAckedMessageTracker unAckedMessageTracker;
     private final AcknowledgmentsGroupingTracker acknowledgmentsGroupingTracker;
     private final NegativeAcksTracker negativeAcksTracker;
 
@@ -141,7 +148,16 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
     private final long maxBackoffIntervalNanos;
 
     protected volatile boolean paused;
-
+    
+    private ConcurrentOpenHashMap<String, ChunkedMessageCtx> chunkedMessagesMap = new ConcurrentOpenHashMap<>();
+    private int pendingChunckedMessageCount = 0;
+    private int maxPendingChuckedMessage;
+    // if queue size is reasonable (most of the time equal to number of producers try to publish messages concurrently on
+    // the topic) then it guards against broken chuncked message which was not fully published
+    private boolean autoAckOldestChunkedMessageOnQueueFull;
+    // it will be used to manage N outstanding chunked mesage buffers
+    private LinkedList<String> pendingChunckedMessageUuidQueue = Lists.newLinkedList();
+    
     enum SubscriptionMode {
         // Make the subscription to be backed by a durable cursor that will retain messages and persist the current
         // position
@@ -187,6 +203,8 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
         this.readCompacted = conf.isReadCompacted();
         this.subscriptionInitialPosition = conf.getSubscriptionInitialPosition();
         this.negativeAcksTracker = new NegativeAcksTracker(this, conf);
+        this.maxPendingChuckedMessage = conf.getMaxPendingChuckedMessage();
+        this.autoAckOldestChunkedMessageOnQueueFull = conf.isAutoAckOldestChunkedMessageOnQueueFull();
 
         if (client.getConfiguration().getStatsIntervalSeconds() > 0) {
             stats = new ConsumerStatsRecorderImpl(client, conf, this);
@@ -795,6 +813,16 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
         // if message is not decryptable then it can't be parsed as a batch-message. so, add EncyrptionCtx to message
         // and return undecrypted payload
         if (isMessageUndecryptable || (numMessages == 1 && !msgMetadata.hasNumMessagesInBatch())) {
+            
+            // right now, chunked messages are only supported by non-shared subscription
+            if (msgMetadata.getNumChunksFromMsg() > 1 && conf.getSubscriptionType() != SubscriptionType.Shared) {
+                uncompressedPayload = processMessageChunk(uncompressedPayload, msgMetadata, msgId, cnx);
+                if (uncompressedPayload == null) {
+                    msgMetadata.recycle();
+                    return;
+                }
+            }
+            
             final MessageImpl<T> message = new MessageImpl<>(topicName.toString(), msgId,
                                                              msgMetadata, uncompressedPayload,
                                                              createEncryptionContext(msgMetadata), cnx, schema, redeliveryCount);
@@ -829,6 +857,78 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
         if (listener != null) {
             triggerListener(numMessages);
         }
+    }
+
+    private ByteBuf processMessageChunk(ByteBuf uncompressedPayload, MessageMetadata msgMetadata, MessageIdImpl msgId,
+            ClientCnx cnx) {
+
+        if (msgMetadata.getChunkId() == 0) {
+            ByteBuf chunkedMsgBuffer = Unpooled.directBuffer(msgMetadata.getTotalChunkMsgSize(),
+                    msgMetadata.getTotalChunkMsgSize());
+            int totalChunks = msgMetadata.getNumChunksFromMsg();
+            chunkedMessagesMap.computeIfAbsent(msgMetadata.getUuid(),
+                    (key) -> ChunkedMessageCtx.get(totalChunks, chunkedMsgBuffer));
+            pendingChunckedMessageCount++;
+            if (maxPendingChuckedMessage > 0 && pendingChunckedMessageCount > maxPendingChuckedMessage) {
+                removeOldestPendingChunkedMessage();
+            }
+            pendingChunckedMessageUuidQueue.add(msgMetadata.getUuid());
+        }
+
+        ChunkedMessageCtx chunkedMsgCtx = chunkedMessagesMap.get(msgMetadata.getUuid());
+        // discard message if chunk is out-of-order
+        if (chunkedMsgCtx == null || chunkedMsgCtx.chunkedMsgBuffer == null
+                || msgMetadata.getChunkId() != (chunkedMsgCtx.lastChunkedMessageId + 1)
+                || msgMetadata.getChunkId() >= msgMetadata.getTotalChunkMsgSize()) {
+            // means we lost the first chunk: should never happen
+            log.info("Received unexpected chunk messageId {}, last-chunk-id{}, chunkId = {}, total-chunks {}", msgId,
+                    (chunkedMsgCtx != null ? chunkedMsgCtx.lastChunkedMessageId : null), msgMetadata.getChunkId(),
+                    msgMetadata.getTotalChunkMsgSize());
+            if (chunkedMsgCtx != null) {
+                if (chunkedMsgCtx.chunkedMsgBuffer != null) {
+                    ReferenceCountUtil.safeRelease(chunkedMsgCtx.chunkedMsgBuffer);
+                }
+                chunkedMsgCtx.recycle();
+            }
+            chunkedMessagesMap.remove(msgMetadata.getUuid());
+            uncompressedPayload.release();
+            increaseAvailablePermits(cnx);
+            // initial sequence of messages have been removed from cached buffer and tracked for redelivery
+            // so, let this messages to be redelivered or ack if auto-ack config is enabled
+            doAcknowledge(msgId, AckType.Individual, Collections.emptyMap());
+            if (this.autoAckOldestChunkedMessageOnQueueFull) {
+                doAcknowledge(msgId, AckType.Individual, Collections.emptyMap());
+            } else {
+                trackMessage(msgId);
+            }
+            return null;
+        }
+
+        chunkedMsgCtx.chunkedMessageIds[msgMetadata.getChunkId()] = msgId;
+        // append the chunked payload and update lastChunkedMessage-id
+        chunkedMsgCtx.chunkedMsgBuffer.writeBytes(uncompressedPayload);
+        chunkedMsgCtx.lastChunkedMessageId = msgMetadata.getChunkId();
+
+        // if final chunk is not received yet then release payload and return
+        if (msgMetadata.getChunkId() != (msgMetadata.getNumChunksFromMsg() - 1)) {
+            uncompressedPayload.release();
+            increaseAvailablePermits(cnx);
+            return null;
+        }
+
+        // last chunk received: so, stitch chunked-messages and clear up chunkedMsgBuffer
+        if (log.isDebugEnabled()) {
+            log.debug("Chunked message completed chunkId {}, total-chunks {}, msgId {} sequenceId {}",
+                    msgMetadata.getChunkId(), msgMetadata.getNumChunksFromMsg(), msgId, msgMetadata.getSequenceId());
+        }
+        // remove buffer from the map, add chucked messageId to unack-message tracker, and reduce pending-chunked-message count
+        chunkedMessagesMap.remove(msgMetadata.getUuid());
+        unAckedChunckedMessageIdSequenceMap.put(msgId, chunkedMsgCtx.chunkedMessageIds);
+        pendingChunckedMessageCount--;
+        uncompressedPayload.release();
+        uncompressedPayload = chunkedMsgCtx.chunkedMsgBuffer;
+        chunkedMsgCtx.recycle();
+        return uncompressedPayload;
     }
 
     protected void triggerListener(int numMessages) {
@@ -1037,15 +1137,18 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
 
     protected void trackMessage(Message<?> msg) {
         if (msg != null) {
-            MessageId messageId = msg.getMessageId();
-            if (conf.getAckTimeoutMillis() > 0 && messageId instanceof MessageIdImpl) {
-                MessageIdImpl id = (MessageIdImpl)messageId;
-                if (id instanceof BatchMessageIdImpl) {
-                    // do not add each item in batch message into tracker
-                    id = new MessageIdImpl(id.getLedgerId(), id.getEntryId(), getPartitionIndex());
-                }
-                unAckedMessageTracker.add(id);
+            trackMessage(msg.getMessageId());
+        }
+    }
+
+    protected void trackMessage(MessageId messageId) {
+        if (conf.getAckTimeoutMillis() > 0 && messageId instanceof MessageIdImpl) {
+            MessageIdImpl id = (MessageIdImpl) messageId;
+            if (id instanceof BatchMessageIdImpl) {
+                // do not add each item in batch message into tracker
+                id = new MessageIdImpl(id.getLedgerId(), id.getEntryId(), getPartitionIndex());
             }
+            unAckedMessageTracker.add(id);
         }
     }
 
@@ -1661,6 +1764,70 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
         return topicNameWithoutPartition;
     }
 
+    static class ChunkedMessageCtx {
+        
+        protected int totalChunks = -1;
+        protected ByteBuf chunkedMsgBuffer;
+        protected int lastChunkedMessageId = -1;
+        protected MessageIdImpl[] chunkedMessageIds;
+        
+        static ChunkedMessageCtx get(int numChunksFromMsg, ByteBuf chunkedMsgBuffer) {
+            ChunkedMessageCtx ctx = RECYCLER.get();
+            ctx.totalChunks = numChunksFromMsg;
+            ctx.chunkedMsgBuffer = chunkedMsgBuffer;
+            ctx.chunkedMessageIds = new MessageIdImpl[numChunksFromMsg];
+            return ctx;
+        }
+
+        private final Handle<ChunkedMessageCtx> recyclerHandle;
+
+        private ChunkedMessageCtx(Handle<ChunkedMessageCtx> recyclerHandle) {
+            this.recyclerHandle = recyclerHandle;
+        }
+
+        private static final Recycler<ChunkedMessageCtx> RECYCLER = new Recycler<ChunkedMessageCtx>() {
+            protected ChunkedMessageCtx newObject(Recycler.Handle<ChunkedMessageCtx> handle) {
+                return new ChunkedMessageCtx(handle);
+            }
+        };
+
+        public void recycle() {
+            this.totalChunks = -1;
+            this.chunkedMsgBuffer = null;
+            this.lastChunkedMessageId = -1;
+            recyclerHandle.recycle(this);
+        }
+    }
+    
+    private void removeOldestPendingChunkedMessage() {
+        ChunkedMessageCtx chunkedMsgCtx = null;
+        String firstPendingMsgUuid = null;
+        while (chunkedMsgCtx == null && !pendingChunckedMessageUuidQueue.isEmpty()) {
+            // remove oldest pending chunked-message group and free memory
+            firstPendingMsgUuid = pendingChunckedMessageUuidQueue.removeFirst();
+            chunkedMsgCtx = StringUtils.isNotBlank(firstPendingMsgUuid) ? chunkedMessagesMap.get(firstPendingMsgUuid)
+                    : null;
+        }
+        if (chunkedMsgCtx != null) {
+            // clean up pending chuncked-Message
+            chunkedMessagesMap.remove(firstPendingMsgUuid);
+            if (chunkedMsgCtx.chunkedMessageIds != null) {
+                for (MessageIdImpl msgId : chunkedMsgCtx.chunkedMessageIds) {
+                    if (this.autoAckOldestChunkedMessageOnQueueFull) {
+                        doAcknowledge(msgId, AckType.Individual, Collections.emptyMap());
+                    } else {
+                        trackMessage(msgId);
+                    }
+                }
+            }
+            if (chunkedMsgCtx.chunkedMsgBuffer != null) {
+                chunkedMsgCtx.chunkedMsgBuffer.release();
+            }
+            chunkedMsgCtx.recycle();
+            pendingChunckedMessageCount--;
+        }
+    }
+    
     private static final Logger log = LoggerFactory.getLogger(ConsumerImpl.class);
 
 }

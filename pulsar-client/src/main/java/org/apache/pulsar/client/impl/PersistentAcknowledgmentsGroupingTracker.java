@@ -37,6 +37,7 @@ import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.impl.conf.ConsumerConfigurationData;
 import org.apache.pulsar.common.api.Commands;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandAck.AckType;
+import org.apache.pulsar.common.api.proto.PulsarApi.CommandAck.ValidationError;
 
 /**
  * Group the acknowledgements for a certain time and then sends them out in a single protobuf command.
@@ -137,10 +138,8 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
             return false;
         }
 
-        final ByteBuf cmd = Commands.newAck(consumer.consumerId, msgId.getLedgerId(), msgId.getEntryId(), ackType, null,
-                properties);
+        newAckCommand(consumer.consumerId, msgId, ackType, null, properties, cnx, true /* flush */);
 
-        cnx.ctx().writeAndFlush(cmd, cnx.ctx().voidPromise());
         return true;
     }
 
@@ -159,9 +158,7 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
 
         boolean shouldFlush = false;
         if (cumulativeAckFlushRequired) {
-            ByteBuf cmd = Commands.newAck(consumer.consumerId, lastCumulativeAck.ledgerId, lastCumulativeAck.entryId,
-                    AckType.Cumulative, null, Collections.emptyMap());
-            cnx.ctx().write(cmd, cnx.ctx().voidPromise());
+            newAckCommand(consumer.consumerId, lastCumulativeAck, AckType.Cumulative, null, Collections.emptyMap(), cnx, false /* flush */);
             shouldFlush=true;
             cumulativeAckFlushRequired = false;
         }
@@ -177,9 +174,21 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
                         break;
                     }
 
-                    entriesToAck.add(Pair.of(msgId.getLedgerId(), msgId.getEntryId()));
+                    // if messageId is checked then all the chunked related to that msg also processed so, ack all of
+                    // them 
+                    MessageIdImpl[] chunkMsgIds = this.consumer.unAckedChunckedMessageIdSequenceMap.get(msgId);
+                    if (chunkMsgIds != null && chunkMsgIds.length > 1) {
+                        for (MessageIdImpl cMsgId : chunkMsgIds) {
+                            if (cMsgId != null) {
+                                entriesToAck.add(Pair.of(cMsgId.getLedgerId(), cMsgId.getEntryId()));
+                            }
+                        }
+                        // messages will be acked so, remove checked message sequence
+                        this.consumer.unAckedChunckedMessageIdSequenceMap.remove(msgId);
+                    } else {
+                        entriesToAck.add(Pair.of(msgId.getLedgerId(), msgId.getEntryId()));
+                    }
                 }
-
                 cnx.ctx().write(Commands.newMultiMessageAck(consumer.consumerId, entriesToAck),
                         cnx.ctx().voidPromise());
                 shouldFlush = true;
@@ -191,8 +200,8 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
                         break;
                     }
 
-                    cnx.ctx().write(Commands.newAck(consumer.consumerId, msgId.getLedgerId(), msgId.getEntryId(),
-                            AckType.Individual, null, Collections.emptyMap()), cnx.ctx().voidPromise());
+                    newAckCommand(consumer.consumerId, msgId, AckType.Individual, null, Collections.emptyMap(),cnx,  false);
+
                     shouldFlush = true;
                 }
             }
@@ -207,6 +216,47 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
         }
     }
 
+    private void newAckCommand(long consumerId, MessageIdImpl msgId, AckType ackType,
+            ValidationError validationError, Map<String, Long> map, ClientCnx cnx, boolean flush) {
+
+        MessageIdImpl[] chunkMsgIds = this.consumer.unAckedChunckedMessageIdSequenceMap.get(msgId);
+        if (chunkMsgIds != null) {
+            if (Commands.peerSupportsMultiMessageAcknowledgment(cnx.getRemoteEndpointProtocolVersion()) && ackType != AckType.Cumulative) {
+                List<Pair<Long, Long>> entriesToAck = new ArrayList<>(chunkMsgIds.length);
+                for (MessageIdImpl cMsgId : chunkMsgIds) {
+                    if (cMsgId != null && chunkMsgIds.length > 1) {
+                        entriesToAck.add(Pair.of(cMsgId.getLedgerId(), cMsgId.getEntryId()));
+                    }
+                }
+                ByteBuf cmd = Commands.newMultiMessageAck(consumer.consumerId, entriesToAck);
+                if (flush) {
+                    cnx.ctx().writeAndFlush(cmd, cnx.ctx().voidPromise());
+                } else {
+                    cnx.ctx().write(cmd, cnx.ctx().voidPromise());
+                }
+            } else {
+                for (MessageIdImpl cMsgId : chunkMsgIds) {
+                    ByteBuf cmd = Commands.newAck(consumerId, cMsgId.getLedgerId(), cMsgId.getEntryId(), ackType,
+                            validationError, map);
+                    if (flush) {
+                        cnx.ctx().writeAndFlush(cmd, cnx.ctx().voidPromise());
+                    } else {
+                        cnx.ctx().write(cmd, cnx.ctx().voidPromise());
+                    }
+                }
+            }
+            this.consumer.unAckedChunckedMessageIdSequenceMap.remove(msgId);
+        } else {
+            ByteBuf cmd = Commands.newAck(consumerId, msgId.getLedgerId(), msgId.getEntryId(), ackType, validationError,
+                    map);
+            if (flush) {
+                cnx.ctx().writeAndFlush(cmd, cnx.ctx().voidPromise());
+            } else {
+                cnx.ctx().write(cmd, cnx.ctx().voidPromise());
+            }
+        }
+    }
+    
     @Override
     public void flushAndClean() {
         flush();

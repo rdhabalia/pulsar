@@ -42,9 +42,12 @@ public class TopicStats {
 
     /** Total throughput of messages dispatched for the topic. byte/s */
     public double msgThroughputOut;
-
+    
     /** Average size of published messages. bytes */
     public double averageMsgSize;
+    
+    /** Topic has chunked message published on it */
+    public boolean msgChunkPublished;
 
     /** Space used to store the messages for the topic. bytes */
     public long storageSize;

@@ -36,6 +36,7 @@ import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.ClientBuilder;
 import org.apache.pulsar.client.api.Consumer;
+import org.apache.pulsar.client.api.ConsumerBuilder;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
@@ -91,6 +92,16 @@ public class CmdConsume {
     @Parameter(names = { "-r", "--rate" }, description = "Rate (in msg/sec) at which to consume, "
             + "value 0 means to consume messages as fast as possible.")
     private double consumeRate = 0;
+    
+    @Parameter(names = { "-q", "--queue-size" }, description = "Consumer receiver queue size.")
+    private int receiverQueueSize = 0;
+
+    @Parameter(names = { "-mc", "--max_chunked_msg" }, description = "Max pending chunk messages")
+    private int maxPendingChuckedMessage = 0;
+
+    @Parameter(names = { "-ac",
+            "--auto_ack_chunk_q_full" }, description = "Auto ack for oldest message on queue is full")
+    private boolean autoAckOldestChunkedMessageOnQueueFull = false;
     
     private ClientBuilder clientBuilder;
     private Authentication authentication;
@@ -158,7 +169,15 @@ public class CmdConsume {
 
         try {
             PulsarClient client = clientBuilder.build();
+            ConsumerBuilder<byte[]> consumerBuilder = client.newConsumer().topic(topic);
+            if (this.maxPendingChuckedMessage > 0) {
+                consumerBuilder.maxPendingChuckedMessage(this.maxPendingChuckedMessage);
+            }
+            if (this.receiverQueueSize > 0) {
+                consumerBuilder.maxPendingChuckedMessage(this.receiverQueueSize);
+            }
             Consumer<byte[]> consumer = client.newConsumer().topic(topic).subscriptionName(this.subscriptionName)
+                    .autoAckOldestChunkedMessageOnQueueFull(this.autoAckOldestChunkedMessageOnQueueFull)
                     .subscriptionType(subscriptionType).subscribe();
 
             RateLimiter limiter = (this.consumeRate > 0) ? RateLimiter.create(this.consumeRate) : null;

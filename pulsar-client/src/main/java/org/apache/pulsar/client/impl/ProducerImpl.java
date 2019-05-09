@@ -41,6 +41,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
+
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
@@ -62,9 +64,11 @@ import org.apache.pulsar.common.api.ByteBufPair;
 import org.apache.pulsar.common.api.Commands;
 import org.apache.pulsar.common.api.Commands.ChecksumType;
 import org.apache.pulsar.common.api.proto.PulsarApi.MessageMetadata;
+import org.apache.pulsar.common.api.proto.PulsarApi.MessageMetadata.Builder;
 import org.apache.pulsar.common.api.proto.PulsarApi.ProtocolVersion;
 import org.apache.pulsar.common.compression.CompressionCodec;
 import org.apache.pulsar.common.compression.CompressionCodecProvider;
+import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.schema.SchemaInfo;
 import org.apache.pulsar.common.schema.SchemaType;
 import org.apache.pulsar.common.util.DateFormatter;
@@ -311,7 +315,8 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
 
             // validate msg-size (For batching this will be check at the batch completion size)
             int compressedSize = compressedPayload.readableBytes();
-            if (compressedSize > ClientCnx.getMaxMessageSize()) {
+
+            if (compressedSize > ClientCnx.getMaxMessageSize() && !this.conf.isChunkingEnabled()) {
                 compressedPayload.release();
                 String compressedStr = (!isBatchMessagingEnabled() && conf.getCompressionType() != CompressionType.NONE)
                                            ? "Compressed"
@@ -338,77 +343,17 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
 
         try {
             synchronized (this) {
-                long sequenceId;
-                if (!msgMetadataBuilder.hasSequenceId()) {
-                    sequenceId = msgIdGeneratorUpdater.getAndIncrement(this);
-                    msgMetadataBuilder.setSequenceId(sequenceId);
-                } else {
-                    sequenceId = msgMetadataBuilder.getSequenceId();
-                }
-                if (!msgMetadataBuilder.hasPublishTime()) {
-                    msgMetadataBuilder.setPublishTime(System.currentTimeMillis());
-
-                    checkArgument(!msgMetadataBuilder.hasProducerName());
-
-                    msgMetadataBuilder.setProducerName(producerName);
-
-                    if (conf.getCompressionType() != CompressionType.NONE) {
-                        msgMetadataBuilder.setCompression(
-                                CompressionCodecProvider.convertToWireProtocol(conf.getCompressionType()));
-                    }
-                    msgMetadataBuilder.setUncompressedSize(uncompressedSize);
-                }
-
-                if (isBatchMessagingEnabled()) {
-                    // handle boundary cases where message being added would exceed
-                    // batch size and/or max message size
-                    if (batchMessageContainer.hasSpaceInBatch(msg)) {
-                        batchMessageContainer.add(msg, callback);
-                        lastSendFuture = callback.getFuture();
-                        payload.release();
-                        if (batchMessageContainer.numMessagesInBatch == maxNumMessagesInBatch
-                                || batchMessageContainer.currentBatchSizeBytes >= BatchMessageContainer.MAX_MESSAGE_BATCH_SIZE_BYTES) {
-                            batchMessageAndSend();
-                        }
-                    } else {
-                        doBatchSendAndAdd(msg, callback, payload);
-                    }
-                } else {
-                    ByteBuf encryptedPayload = encryptMessage(msgMetadataBuilder, compressedPayload);
-
-                    MessageMetadata msgMetadata = msgMetadataBuilder.build();
-
-                    // When publishing during replication, we need to set the correct number of message in batch
-                    // This is only used in tracking the publish rate stats
-                    int numMessages = msg.getMessageBuilder().hasNumMessagesInBatch()
-                            ? msg.getMessageBuilder().getNumMessagesInBatch()
-                            : 1;
-                    ByteBufPair cmd = sendMessage(producerId, sequenceId, numMessages, msgMetadata, encryptedPayload);
-                    msgMetadataBuilder.recycle();
-                    msgMetadata.recycle();
-
-                    final OpSendMsg op = OpSendMsg.create(msg, cmd, sequenceId, callback);
-                    op.setNumMessagesInBatch(numMessages);
-                    op.setBatchSizeByte(encryptedPayload.readableBytes());
-                    pendingMessages.put(op);
-                    lastSendFuture = callback.getFuture();
-
-                    // Read the connection before validating if it's still connected, so that we avoid reading a null
-                    // value
-                    ClientCnx cnx = cnx();
-                    if (isConnected()) {
-                        // If we do have a connection, the message is sent immediately, otherwise we'll try again once a
-                        // new
-                        // connection is established
-                        cmd.retain();
-                        cnx.ctx().channel().eventLoop().execute(WriteInEventLoopCallback.create(this, cnx, op));
-                        stats.updateNumMsgsSent(op.numMessagesInBatch, op.batchSizeByte);
-                    } else {
-                        if (log.isDebugEnabled()) {
-                            log.debug("[{}] [{}] Connection is not ready -- sequenceId {}", topic, producerName,
-                                    sequenceId);
-                        }
-                    }
+                // send in chunks
+                int totalChunks = isBatchMessagingEnabled() ? 1
+                        : Math.max(1, compressedPayload.readableBytes()) / ClientCnx.getMaxMessageSize()
+                                + (Math.max(1, compressedPayload.readableBytes()) % ClientCnx.getMaxMessageSize() == 0 ? 0 : 1);
+                int readStartIndex = 0;
+                String uuid =  UUID.randomUUID().toString();
+                for (int i = 0; i < totalChunks; i++) {
+                    serializeAndSendMessage(msg, msgMetadataBuilder, payload, uuid, i, totalChunks, readStartIndex,
+                            ClientCnx.getMaxMessageSize(), compressedPayload, compressedPayload.readableBytes(),
+                            uncompressedSize, callback);
+                    readStartIndex = ((i+1) * ClientCnx.getMaxMessageSize());
                 }
             }
         } catch (InterruptedException ie) {
@@ -421,6 +366,103 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
         } catch (Throwable t) {
             semaphore.release();
             callback.sendComplete(new PulsarClientException(t));
+        }
+    }
+
+    private void serializeAndSendMessage(MessageImpl<T> msg, Builder msgMetadataBuilder, ByteBuf payload,
+            String uuid, int chunkId, int totalChunks, int readStartIndex, int chunkMaxSizeInBytes, ByteBuf compressedPayload,
+            int compressedPayloadSize,
+            int uncompressedSize, SendCallback callback) throws IOException, InterruptedException {
+        ByteBuf chunkPayload = compressedPayload;
+        Builder chunkMsgMetadataBuilder = msgMetadataBuilder;
+        if (totalChunks > 1 && TopicName.get(topic).isPersistent()) {
+            chunkPayload = compressedPayload.slice(readStartIndex,
+                    Math.min(chunkMaxSizeInBytes, chunkPayload.readableBytes() - readStartIndex));
+            // don't retain last chunk payload and builder as it will be not needed for next chunk-iteration and it will
+            // be released once this chunk-message is sent
+            if (chunkId != totalChunks - 1) {
+                chunkPayload.retain();
+                chunkMsgMetadataBuilder = msgMetadataBuilder.clone();
+            }
+            chunkMsgMetadataBuilder.setUuid(uuid);
+            chunkMsgMetadataBuilder.setChunkId(chunkId);
+            chunkMsgMetadataBuilder.setNumChunksFromMsg(totalChunks);
+            chunkMsgMetadataBuilder.setTotalChunkMsgSize(compressedPayloadSize);
+        }
+        long sequenceId;
+        if (!chunkMsgMetadataBuilder.hasSequenceId()) {
+            sequenceId = msgIdGeneratorUpdater.getAndIncrement(this);
+            chunkMsgMetadataBuilder.setSequenceId(sequenceId);
+        } else {
+            sequenceId = chunkMsgMetadataBuilder.getSequenceId();
+        }
+        if (!chunkMsgMetadataBuilder.hasPublishTime()) {
+            chunkMsgMetadataBuilder.setPublishTime(System.currentTimeMillis());
+
+            checkArgument(!chunkMsgMetadataBuilder.hasProducerName());
+
+            chunkMsgMetadataBuilder.setProducerName(producerName);
+
+            if (conf.getCompressionType() != CompressionType.NONE) {
+                chunkMsgMetadataBuilder
+                        .setCompression(CompressionCodecProvider.convertToWireProtocol(conf.getCompressionType()));
+            }
+            chunkMsgMetadataBuilder.setUncompressedSize(uncompressedSize);
+        }
+
+        if (isBatchMessagingEnabled() && totalChunks <= 1) {
+            // handle boundary cases where message being added would exceed
+            // batch size and/or max message size
+            if (batchMessageContainer.hasSpaceInBatch(msg)) {
+                batchMessageContainer.add(msg, callback);
+                lastSendFuture = callback.getFuture();
+                payload.release();
+                if (batchMessageContainer.numMessagesInBatch == maxNumMessagesInBatch
+                        || batchMessageContainer.currentBatchSizeBytes >= BatchMessageContainer.MAX_MESSAGE_BATCH_SIZE_BYTES) {
+                    batchMessageAndSend();
+                }
+            } else {
+                doBatchSendAndAdd(msg, callback, payload);
+            }
+        } else {
+            ByteBuf encryptedPayload = encryptMessage(chunkMsgMetadataBuilder, chunkPayload);
+
+            MessageMetadata msgMetadata = chunkMsgMetadataBuilder.build();
+
+            // When publishing during replication, we need to set the correct number of message in batch
+            // This is only used in tracking the publish rate stats
+            int numMessages = msg.getMessageBuilder().hasNumMessagesInBatch()
+                    ? msg.getMessageBuilder().getNumMessagesInBatch()
+                    : 1;
+            ByteBufPair cmd = sendMessage(producerId, sequenceId, numMessages, msgMetadata, encryptedPayload);
+            chunkMsgMetadataBuilder.recycle();
+            msgMetadata.recycle();
+
+            final OpSendMsg op = OpSendMsg.create(msg, cmd, sequenceId, callback);
+            op.setNumMessagesInBatch(numMessages);
+            op.setBatchSizeByte(encryptedPayload.readableBytes());
+            if (totalChunks > 1) {
+                op.totalChunks = totalChunks;
+                op.chunkId = chunkId;
+            }
+            pendingMessages.put(op);
+            lastSendFuture = callback.getFuture();
+
+            // Read the connection before validating if it's still connected, so that we avoid reading a null
+            // value
+            ClientCnx cnx = cnx();
+            if (isConnected()) {
+                // If we do have a connection, the message is sent immediately, otherwise we'll try again once a
+                // new
+                // connection is established
+                cmd.retain();
+                cnx.ctx().channel().eventLoop().execute(WriteInEventLoopCallback.create(this, cnx, op));
+                stats.updateNumMsgsSent(op.numMessagesInBatch, op.batchSizeByte);
+            } else {
+                if (log.isDebugEnabled()) {
+                    log.debug("[{}] [{}] Connection is not ready -- sequenceId {}", topic, producerName, sequenceId);
+                }
+            }
         }
     }
 
@@ -704,13 +746,17 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
             if (op != null) {
                 lastSequenceIdPublished = op.sequenceId + op.numMessagesInBatch - 1;
                 op.setMessageId(ledgerId, entryId, partitionIndex);
-                try {
-                    // Need to protect ourselves from any exception being thrown in the future handler from the
-                    // application
-                    op.callback.sendComplete(null);
-                } catch (Throwable t) {
-                    log.warn("[{}] [{}] Got exception while completing the callback for msg {}:", topic, producerName,
-                            sequenceId, t);
+                
+                // if message is chunked then call callback only on last chunk
+                if (op.totalChunks <= 1 || (op.chunkId == op.totalChunks - 1)) {
+                    try {
+                        // Need to protect ourselves from any exception being thrown in the future handler from the
+                        // application
+                        op.callback.sendComplete(null);
+                    } catch (Throwable t) {
+                        log.warn("[{}] [{}] Got exception while completing the callback for msg {}:", topic,
+                                producerName, sequenceId, t);
+                    }
                 }
                 ReferenceCountUtil.safeRelease(op.cmd);
                 op.recycle();
@@ -821,6 +867,8 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
         long createdAt;
         long batchSizeByte = 0;
         int numMessagesInBatch = 1;
+        int totalChunks = 0;
+        int chunkId = -1;
 
         static OpSendMsg create(MessageImpl<?> msg, ByteBufPair cmd, long sequenceId, SendCallback callback) {
             OpSendMsg op = RECYCLER.get();
@@ -849,6 +897,8 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
             callback = null;
             sequenceId = -1;
             createdAt = -1;
+            totalChunks = 0;
+            chunkId = -1;
             recyclerHandle.recycle(this);
         }
 
@@ -1190,7 +1240,13 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
                 try {
                     // Need to protect ourselves from any exception being thrown in the future handler from the
                     // application
-                    op.callback.sendComplete(ex);
+                    // if message is chunked then call callback only on last chunk
+                    if (op.totalChunks <= 1 || (op.chunkId == op.totalChunks - 1)) {
+                        // Need to protect ourselves from any exception being thrown in the future handler from the
+                        // application
+                        op.callback.sendComplete(ex);
+                    }
+
                 } catch (Throwable t) {
                     log.warn("[{}] [{}] Got exception while completing the callback for msg {}:", topic, producerName,
                             op.sequenceId, t);

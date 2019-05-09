@@ -167,6 +167,9 @@ public class PersistentTopic implements Topic, AddEntryCallback {
 
     // Timestamp of when this topic was last seen active
     private volatile long lastActive;
+    
+    // topic has every published chunked message since topic is loaded
+    public boolean msgChunkPublished;
 
     // Flag to signal that producer of this topic has published batch-message so, broker should not allow consumer which
     // doesn't support batch-message
@@ -1470,6 +1473,7 @@ public class PersistentTopic implements Topic, AddEntryCallback {
         });
 
         stats.averageMsgSize = stats.msgRateIn == 0.0 ? 0.0 : (stats.msgThroughputIn / stats.msgRateIn);
+        stats.msgChunkPublished = this.msgChunkPublished;
 
         subscriptions.forEach((name, subscription) -> {
             SubscriptionStats subStats = subscription.getStats();

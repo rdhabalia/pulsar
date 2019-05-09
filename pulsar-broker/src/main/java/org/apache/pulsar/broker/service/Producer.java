@@ -64,6 +64,7 @@ public class Producer {
     private final long producerId;
     private final String appId;
     private Rate msgIn;
+    private Rate chuckedMessageRate;
     // it records msg-drop rate only for non-persistent topic
     private final Rate msgDrop;
     private AuthenticationDataSource authenticationData;
@@ -95,6 +96,7 @@ public class Producer {
         this.appId = appId;
         this.authenticationData = cnx.authenticationData;
         this.msgIn = new Rate();
+        this.chuckedMessageRate = new Rate();
         this.isNonPersistentTopic = topic instanceof NonPersistentTopic;
         this.msgDrop = this.isNonPersistentTopic ? new Rate() : null;
 
@@ -131,7 +133,7 @@ public class Producer {
         return false;
     }
 
-    public void publishMessage(long producerId, long sequenceId, ByteBuf headersAndPayload, long batchSize) {
+    public void publishMessage(long producerId, long sequenceId, ByteBuf headersAndPayload, long batchSize, boolean isChunked) {
         if (isClosed) {
             cnx.ctx().channel().eventLoop().execute(() -> {
                 cnx.ctx().writeAndFlush(Commands.newSendError(producerId, sequenceId, ServerError.PersistenceError,
@@ -172,7 +174,7 @@ public class Producer {
         startPublishOperation();
         topic.publishMessage(headersAndPayload,
                 MessagePublishContext.get(this, sequenceId, msgIn, headersAndPayload.readableBytes(), batchSize,
-                        System.nanoTime()));
+                        isChunked, System.nanoTime()));
     }
 
     private boolean verifyChecksum(ByteBuf headersAndPayload) {
@@ -246,6 +248,8 @@ public class Producer {
         private Rate rateIn;
         private int msgSize;
         private long batchSize;
+        private boolean chunked;
+
         private long startTimeNs;
 
         private String originalProducerName;
@@ -257,6 +261,10 @@ public class Producer {
 
         public long getSequenceId() {
             return sequenceId;
+        }
+
+        public boolean isChunked() {
+            return chunked;
         }
 
         @Override
@@ -328,18 +336,22 @@ public class Producer {
                     Commands.newSendReceipt(producer.producerId, sequenceId, ledgerId, entryId),
                     producer.cnx.ctx().voidPromise());
             producer.cnx.completedSendOperation(producer.isNonPersistentTopic);
+            if (this.chunked) {
+                producer.chuckedMessageRate.recordEvent();
+            }
             producer.publishOperationCompleted();
             recycle();
         }
 
         static MessagePublishContext get(Producer producer, long sequenceId, Rate rateIn, int msgSize,
-                long batchSize, long startTimeNs) {
+                long batchSize, boolean chunked, long startTimeNs) {
             MessagePublishContext callback = RECYCLER.get();
             callback.producer = producer;
             callback.sequenceId = sequenceId;
             callback.rateIn = rateIn;
             callback.msgSize = msgSize;
             callback.batchSize = batchSize;
+            callback.chunked = chunked;
             callback.originalProducerName = null;
             callback.originalSequenceId = -1;
             callback.startTimeNs = startTimeNs;
@@ -366,6 +378,7 @@ public class Producer {
             ledgerId = -1;
             entryId = -1;
             batchSize = 0;
+            chunked = false;
             startTimeNs = -1;
             recyclerHandle.recycle(this);
         }
@@ -446,9 +459,14 @@ public class Producer {
 
     public void updateRates() {
         msgIn.calculateRate();
+        chuckedMessageRate.calculateRate();
         stats.msgRateIn = msgIn.getRate();
         stats.msgThroughputIn = msgIn.getValueRate();
         stats.averageMsgSize = msgIn.getAverageValue();
+        stats.chunkedMessageRate = chuckedMessageRate.getRate();
+        if (chuckedMessageRate.getCount() > 0 && this.topic instanceof PersistentTopic) {
+            ((PersistentTopic) this.topic).msgChunkPublished = true;
+        }
         if (this.isNonPersistentTopic) {
             msgDrop.calculateRate();
             ((NonPersistentPublisherStats) stats).msgDropRate = msgDrop.getRate();

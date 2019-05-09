@@ -80,6 +80,12 @@ public class ConsumerConfigurationData<T> implements Serializable, Cloneable {
     private long tickDurationMillis = 1000;
 
     private int priorityLevel = 0;
+    
+    // if avg size of big message is 10MB then this default this configuration (value=100) allows client-app to use
+    // 100*10MB = 1GB of heap-memory. 
+    private int maxPendingChuckedMessage = 10;
+    
+    private boolean autoAckOldestChunkedMessageOnQueueFull = false;
 
     @JsonIgnore
     private CryptoKeyReader cryptoKeyReader = null;
