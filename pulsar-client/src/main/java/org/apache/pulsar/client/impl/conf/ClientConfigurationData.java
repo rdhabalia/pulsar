@@ -68,6 +68,7 @@ public class ClientConfigurationData implements Serializable, Cloneable {
     private int concurrentLookupRequest = 5000;
     private int maxLookupRequest = 50000;
     private int maxNumberOfRejectedRequestPerConnection = 50;
+    private int maxChunkedMessagesBuffers = 0;
     private int keepAliveIntervalSeconds = 30;
     private int connectionTimeoutMs = 10000;
     private int requestTimeoutMs = 60000;

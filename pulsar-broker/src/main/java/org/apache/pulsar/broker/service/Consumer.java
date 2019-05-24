@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.Collectors;
 
 import org.apache.bookkeeper.mledger.Entry;
@@ -77,6 +78,7 @@ public class Consumer {
     private final String consumerName;
     private final Rate msgOut;
     private final Rate msgRedeliver;
+    private LongAdder chuckedMessageCount = new LongAdder();
 
     // Represents how many messages we can safely send to the consumer without
     // overflowing its receiving queue. The consumer will use Flow commands to
@@ -182,7 +184,7 @@ public class Consumer {
      * @return a SendMessageInfo object that contains the detail of what was sent to consumer
      */
     public ChannelPromise sendMessages(final List<Entry> entries, EntryBatchSizes batchSizes, int totalMessages,
-            long totalBytes, RedeliveryTracker redeliveryTracker) {
+            long totalBytes, long totalChunkedMessages, RedeliveryTracker redeliveryTracker) {
         final ChannelHandlerContext ctx = cnx.ctx();
         final ChannelPromise writePromise = ctx.newPromise();
 
@@ -200,6 +202,7 @@ public class Consumer {
         MESSAGE_PERMITS_UPDATER.addAndGet(this, -totalMessages);
         incrementUnackedMessages(totalMessages);
         msgOut.recordMultipleEvents(totalMessages, totalBytes);
+        chuckedMessageCount.add(totalChunkedMessages);
 
         ctx.channel().eventLoop().execute(() -> {
             for (int i = 0; i < entries.size(); i++) {
@@ -422,6 +425,7 @@ public class Consumer {
         stats.msgRateOut = msgOut.getRate();
         stats.msgThroughputOut = msgOut.getValueRate();
         stats.msgRateRedeliver = msgRedeliver.getRate();
+        stats.chuckedMessageCount = chuckedMessageCount.sumThenReset();
     }
 
     public ConsumerStats getStats() {

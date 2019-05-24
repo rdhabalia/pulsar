@@ -69,7 +69,6 @@ public class ProducerConfigurationData implements Serializable, Cloneable {
     private boolean batchingEnabled = true; // enabled by default
     
     private boolean chunkingEnabled = false;
-    private int chunkMsgMaxBytes = 10;
 
     @JsonIgnore
     private CryptoKeyReader cryptoKeyReader;

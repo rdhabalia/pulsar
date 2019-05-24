@@ -2988,47 +2988,4 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         log.info("-- Exiting {} test --", methodName);
     }
     
-    @Test
-    public void testLargeMessage() throws Exception{
-
-        log.info("-- Starting {} test --", methodName);
-        final int totalMessages = 5;
-
-        Consumer<byte[]> consumer = pulsarClient.newConsumer().topic("persistent://my-property/my-ns/my-topic1")
-                .subscriptionName("my-subscriber-name").subscribe();
-
-        ProducerBuilder<byte[]> producerBuilder = pulsarClient.newProducer()
-                .topic("persistent://my-property/my-ns/my-topic1");
-
-        Producer<byte[]> producer = producerBuilder.chunkingEnabled(true).chunkMsgMaxBytes(5).enableBatching(false)
-                .sendTimeout(10, TimeUnit.MINUTES) // for debuging TODO: remove
-                .create();
-        for (int i = 0; i < totalMessages; i++) {
-            String message = createMessagePayload(i*10);
-            producer.send(message.getBytes());
-        }
-
-        Message<byte[]> msg = null;
-        Set<String> messageSet = Sets.newHashSet();
-        for (int i = 0; i < totalMessages; i++) {
-            msg = consumer.receive(5, TimeUnit.SECONDS);
-            String receivedMessage = new String(msg.getData());
-            log.info("Received message: [{}]", receivedMessage);
-            String expectedMessage = createMessagePayload(i*10);
-            testMessageOrderAndDuplicates(messageSet, receivedMessage, expectedMessage);
-        }
-        // Acknowledge the consumption of all messages at once
-        consumer.acknowledgeCumulative(msg);
-        consumer.close();
-        log.info("-- Exiting {} test --", methodName);
-    
-    }
-
-    private String createMessagePayload(int size) {
-        StringBuilder str = new StringBuilder();
-        for (int i = 0; i < size; i++) {
-            str.append(i);
-        }
-        return str.toString();
-    }
 }

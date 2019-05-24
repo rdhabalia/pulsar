@@ -90,7 +90,7 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
     private volatile Timeout batchMessageAndSendTimeout = null;
     private long createProducerTimeout;
     private final int maxNumMessagesInBatch;
-    private final int chunkMsgMaxBytes;
+    //private final int chunkMsgMaxBytes;
     private final BatchMessageContainer batchMessageContainer;
     private CompletableFuture<MessageId> lastSendFuture = CompletableFuture.completedFuture(null);
 
@@ -173,9 +173,9 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
             this.maxNumMessagesInBatch = 1;
             this.batchMessageContainer = null;
         }
-        this.chunkMsgMaxBytes = conf.isChunkingEnabled()
+        /*this.chunkMsgMaxBytes = conf.isChunkingEnabled()
                 ? Math.min(conf.getChunkMsgMaxBytes(), ClientCnx.getMaxMessageSize())
-                : 0;
+                : 0;*/
         if (client.getConfiguration().getStatsIntervalSeconds() > 0) {
             stats = new ProducerStatsRecorderImpl(client, conf, this);
         } else {
@@ -319,7 +319,7 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
             // validate msg-size (For batching this will be check at the batch completion size)
             int compressedSize = compressedPayload.readableBytes();
 
-            if (compressedSize > ClientCnx.getMaxMessageSize() && this.chunkMsgMaxBytes <= 0) {
+            if (compressedSize > ClientCnx.getMaxMessageSize() && !this.conf.isChunkingEnabled()) {
                 compressedPayload.release();
                 String compressedStr = (!isBatchMessagingEnabled() && conf.getCompressionType() != CompressionType.NONE)
                                            ? "Compressed"
@@ -348,15 +348,15 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
             synchronized (this) {
                 // send in chunks
                 int totalChunks = isBatchMessagingEnabled() ? 1
-                        : Math.max(1, compressedPayload.readableBytes()) / this.chunkMsgMaxBytes
-                                + (Math.max(1, compressedPayload.readableBytes()) % this.chunkMsgMaxBytes == 0 ? 0 : 1);
+                        : Math.max(1, compressedPayload.readableBytes()) / ClientCnx.getMaxMessageSize()
+                                + (Math.max(1, compressedPayload.readableBytes()) % ClientCnx.getMaxMessageSize() == 0 ? 0 : 1);
                 int readStartIndex = 0;
                 String uuid =  UUID.randomUUID().toString();
                 for (int i = 0; i < totalChunks; i++) {
                     serializeAndSendMessage(msg, msgMetadataBuilder, payload, uuid, i, totalChunks, readStartIndex,
-                            this.chunkMsgMaxBytes, compressedPayload, compressedPayload.readableBytes(),
+                            ClientCnx.getMaxMessageSize(), compressedPayload, compressedPayload.readableBytes(),
                             uncompressedSize, callback);
-                    readStartIndex = ((i+1) * this.chunkMsgMaxBytes);
+                    readStartIndex = ((i+1) * ClientCnx.getMaxMessageSize());
                 }
             }
         } catch (InterruptedException ie) {

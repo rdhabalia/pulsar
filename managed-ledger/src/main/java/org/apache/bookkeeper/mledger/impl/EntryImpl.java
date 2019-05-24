@@ -44,6 +44,10 @@ public final class EntryImpl extends AbstractCASReferenceCounted implements Entr
     private long ledgerId;
     private long entryId;
     ByteBuf data;
+    // chunked entries metadata
+    private String uuid;
+    private boolean isChunked;
+    private boolean isLastChunk;
 
     public static EntryImpl create(LedgerEntry ledgerEntry) {
         EntryImpl entry = RECYCLER.get();
@@ -143,6 +147,16 @@ public final class EntryImpl extends AbstractCASReferenceCounted implements Entr
     }
 
     @Override
+    public void setUuid(String uuid) {
+        this.uuid = uuid;
+    }
+
+    @Override
+    public String getUuid() {
+        return this.uuid;
+    }
+    
+    @Override
     public long getEntryId() {
         return entryId;
     }
@@ -165,6 +179,7 @@ public final class EntryImpl extends AbstractCASReferenceCounted implements Entr
         timestamp = -1;
         ledgerId = -1;
         entryId = -1;
+        uuid = null;
         recyclerHandle.recycle(this);
     }
 

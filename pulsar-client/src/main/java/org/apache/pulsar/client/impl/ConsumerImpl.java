@@ -114,7 +114,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
-    private final UnAckedMessageTracker unAckedMessageTracker;
+    protected final UnAckedMessageTracker unAckedMessageTracker;
     private final AcknowledgmentsGroupingTracker acknowledgmentsGroupingTracker;
     private final NegativeAcksTracker negativeAcksTracker;
 
@@ -148,8 +148,6 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
 
     protected volatile boolean paused;
     
-    private int maxChunkedMessages = 1000;
-    private Semaphore chunkedMessageSemaphore;
     private ConcurrentOpenHashMap<String, ChunkedMessageCtx> chunkedMessagesMap = new ConcurrentOpenHashMap<>();
     
     enum SubscriptionMode {
@@ -197,8 +195,6 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
         this.readCompacted = conf.isReadCompacted();
         this.subscriptionInitialPosition = conf.getSubscriptionInitialPosition();
         this.negativeAcksTracker = new NegativeAcksTracker(this, conf);
-        this.maxChunkedMessages = 1000; //TODO get from constructor
-        this.chunkedMessageSemaphore = new Semaphore(maxChunkedMessages, false);
 
         if (client.getConfiguration().getStatsIntervalSeconds() > 0) {
             stats = new ConsumerStatsRecorderImpl(client, conf, this);
@@ -812,7 +808,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
             
             if (msgMetadata.getNumChunksFromMsg() > 1) {
                 uncompressedPayload = processMessageChunk(uncompressedPayload, msgMetadata, msgId);
-                if(uncompressedPayload == null) {
+                if (uncompressedPayload == null) {
                     msgMetadata.recycle();
                     return;
                 }
@@ -857,12 +853,6 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
     private ByteBuf processMessageChunk(ByteBuf uncompressedPayload, MessageMetadata msgMetadata, MessageIdImpl msgId) {
 
         if (msgMetadata.getChunkId() == 0) {
-            try {
-                this.chunkedMessageSemaphore.acquire();
-            } catch (InterruptedException e) {
-                // TODO Auto-generated catch block
-                e.printStackTrace();
-            }
             ByteBuf chunkedMsgBuffer = PooledByteBufAllocator.DEFAULT.buffer(msgMetadata.getTotalChunkMsgSize(),
                     msgMetadata.getTotalChunkMsgSize());
             int totalChunks = msgMetadata.getNumChunksFromMsg();
@@ -871,6 +861,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
         }
 
         ChunkedMessageCtx chunkedMsgCtx = chunkedMessagesMap.get(msgMetadata.getUuid());
+        chunkedMsgCtx.chunkedMessageIds[msgMetadata.getChunkId()] = msgId;
         // discard message if chunk is out-of-order
         if (chunkedMsgCtx == null || chunkedMsgCtx.chunkedMsgBuffer == null
                 || msgMetadata.getChunkId() != (chunkedMsgCtx.lastChunkedMessageId + 1)
@@ -887,6 +878,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
             }
             chunkedMessagesMap.remove(msgMetadata.getUuid());
             uncompressedPayload.release();
+            // TODO: based on the configuration: acked the message or leave it open
             return null;
         }
 
@@ -905,10 +897,13 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
             log.debug("Chunked message completed chunkId {}, total-chunks {}, msgId {} sequenceId {}",
                     msgMetadata.getChunkId(), msgMetadata.getNumChunksFromMsg(), msgId, msgMetadata.getSequenceId());
         }
+        // remove buffer from the map
+        chunkedMessagesMap.remove(msgMetadata.getUuid());
+        // add chucked messageId to unack-message tracker
+        chunckedMessageIdSequenceMap.put(msgId, chunkedMsgCtx.chunkedMessageIds);
         uncompressedPayload.release();
         uncompressedPayload = chunkedMsgCtx.chunkedMsgBuffer;
         chunkedMsgCtx.recycle();
-        chunkedMessagesMap.remove(msgMetadata.getUuid());
         return uncompressedPayload;
     }
 
@@ -1744,11 +1739,13 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
         protected int totalChunks = -1;
         protected ByteBuf chunkedMsgBuffer;
         protected int lastChunkedMessageId = -1;
+        protected MessageIdImpl[] chunkedMessageIds;
         
         static ChunkedMessageCtx get(int numChunksFromMsg, ByteBuf chunkedMsgBuffer) {
             ChunkedMessageCtx ctx = RECYCLER.get();
             ctx.totalChunks = numChunksFromMsg;
             ctx.chunkedMsgBuffer = chunkedMsgBuffer;
+            ctx.chunkedMessageIds = new MessageIdImpl[numChunksFromMsg];
             return ctx;
         }
 
@@ -1770,6 +1767,31 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
             this.lastChunkedMessageId = -1;
             recyclerHandle.recycle(this);
         }
+    }
+    
+    static class NoOpSemaphore extends Semaphore {
+
+        public static final NoOpSemaphore INSTANCE = new NoOpSemaphore(1000, false);
+
+        public NoOpSemaphore(int permits, boolean fair) {
+            super(permits, fair);
+        }
+
+        @Override
+        public void acquire() throws InterruptedException {
+            // NoOp
+        }
+
+        @Override
+        public void release() {
+            // No-Op
+        }
+
+        @Override
+        public void release(int permits) {
+            // No-Op
+        }
+
     }
     
     private static final Logger log = LoggerFactory.getLogger(ConsumerImpl.class);

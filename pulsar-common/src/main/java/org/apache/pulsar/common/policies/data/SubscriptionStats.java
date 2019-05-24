@@ -37,6 +37,9 @@ public class SubscriptionStats {
 
     /** Total rate of messages redelivered on this subscription. msg/s */
     public double msgRateRedeliver;
+    
+    /** Total number of chunked message dispatched */
+    public int chuckedMessageCount;
 
     /** Number of messages in the subscription backlog */
     public long msgBacklog;
