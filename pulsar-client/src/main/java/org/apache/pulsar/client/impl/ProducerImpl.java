@@ -68,6 +68,7 @@ import org.apache.pulsar.common.api.proto.PulsarApi.MessageMetadata.Builder;
 import org.apache.pulsar.common.api.proto.PulsarApi.ProtocolVersion;
 import org.apache.pulsar.common.compression.CompressionCodec;
 import org.apache.pulsar.common.compression.CompressionCodecProvider;
+import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.schema.SchemaInfo;
 import org.apache.pulsar.common.schema.SchemaType;
 import org.apache.pulsar.common.util.DateFormatter;
@@ -378,7 +379,7 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
             int uncompressedSize, SendCallback callback) throws IOException, InterruptedException {
         ByteBuf chunkPayload = compressedPayload;
         Builder chunkMsgMetadataBuilder = msgMetadataBuilder;
-        if (totalChunks > 1) {
+        if (totalChunks > 1 && TopicName.get(topic).isPersistent()) {
             chunkPayload = compressedPayload.slice(readStartIndex,
                     Math.min(chunkMaxSizeInBytes, chunkPayload.readableBytes() - readStartIndex));
             // don't retain last chunk payload and builder as it will be not needed for next chunk-iteration and it will
@@ -1243,7 +1244,13 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
                 try {
                     // Need to protect ourselves from any exception being thrown in the future handler from the
                     // application
-                    op.callback.sendComplete(ex);
+                    // if message is chunked then call callback only on last chunk
+                    if (op.totalChunks <= 1 || (op.chunkId == op.totalChunks - 1)) {
+                        // Need to protect ourselves from any exception being thrown in the future handler from the
+                        // application
+                        op.callback.sendComplete(ex);
+                    }
+
                 } catch (Throwable t) {
                     log.warn("[{}] [{}] Got exception while completing the callback for msg {}:", topic, producerName,
                             op.sequenceId, t);

@@ -176,7 +176,7 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
 
                     // if messageId is checked then all the chunked related to that msg also processed so, ack all of
                     // them 
-                    MessageIdImpl[] chunkMsgIds = this.consumer.chunckedMessageIdSequenceMap.get(msgId);
+                    MessageIdImpl[] chunkMsgIds = this.consumer.unAckedChunckedMessageIdSequenceMap.get(msgId);
                     if (chunkMsgIds != null && chunkMsgIds.length > 1) {
                         for (MessageIdImpl cMsgId : chunkMsgIds) {
                             if (cMsgId != null) {
@@ -184,7 +184,7 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
                             }
                         }
                         // messages will be acked so, remove checked message sequence
-                        this.consumer.chunckedMessageIdSequenceMap.remove(msgId);
+                        this.consumer.unAckedChunckedMessageIdSequenceMap.remove(msgId);
                     } else {
                         entriesToAck.add(Pair.of(msgId.getLedgerId(), msgId.getEntryId()));
                     }
@@ -219,7 +219,7 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
     private void newAckCommand(long consumerId, MessageIdImpl msgId, AckType ackType,
             ValidationError validationError, Map<String, Long> map, ClientCnx cnx, boolean flush) {
 
-        MessageIdImpl[] chunkMsgIds = this.consumer.chunckedMessageIdSequenceMap.get(msgId);
+        MessageIdImpl[] chunkMsgIds = this.consumer.unAckedChunckedMessageIdSequenceMap.get(msgId);
         if (chunkMsgIds != null) {
             if (Commands.peerSupportsMultiMessageAcknowledgment(cnx.getRemoteEndpointProtocolVersion()) && ackType != AckType.Cumulative) {
                 List<Pair<Long, Long>> entriesToAck = new ArrayList<>(chunkMsgIds.length);
@@ -245,7 +245,7 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
                     }
                 }
             }
-            this.consumer.chunckedMessageIdSequenceMap.remove(msgId);
+            this.consumer.unAckedChunckedMessageIdSequenceMap.remove(msgId);
         } else {
             ByteBuf cmd = Commands.newAck(consumerId, msgId.getLedgerId(), msgId.getEntryId(), ackType, validationError,
                     map);

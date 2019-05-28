@@ -135,13 +135,13 @@ public class UnAckedMessageTracker implements Closeable {
     public static void addChunkedMessageIdsAndRemoveFromSequnceMap(MessageId messageId, Set<MessageId> messageIds,
             ConsumerBase<?> consumerBase) {
         if (messageId instanceof MessageIdImpl) {
-            MessageIdImpl[] chunkedMsgIds = consumerBase.chunckedMessageIdSequenceMap.get((MessageIdImpl) messageId);
+            MessageIdImpl[] chunkedMsgIds = consumerBase.unAckedChunckedMessageIdSequenceMap.get((MessageIdImpl) messageId);
             if (chunkedMsgIds != null && chunkedMsgIds.length > 0) {
                 for (MessageIdImpl msgId : chunkedMsgIds) {
                     messageIds.add(msgId);
                 }
             }
-            consumerBase.chunckedMessageIdSequenceMap.remove((MessageIdImpl) messageId);
+            consumerBase.unAckedChunckedMessageIdSequenceMap.remove((MessageIdImpl) messageId);
         }
     }
 

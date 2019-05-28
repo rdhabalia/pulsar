@@ -1017,6 +1017,7 @@ public class ServerCnx extends PulsarHandler {
 
     @Override
     protected void handleSend(CommandSend send, ByteBuf headersAndPayload) {
+        System.out.println("************  send came "+headersAndPayload.readableBytes());
         checkArgument(state == State.Connected);
 
         CompletableFuture<Producer> producerFuture = producers.get(send.getProducerId());

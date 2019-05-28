@@ -536,7 +536,7 @@ public class MultiTopicsConsumerImpl<T> extends ConsumerBase<T> {
         try {
             consumers.values().stream().forEach(consumer -> {
                 consumer.redeliverUnacknowledgedMessages();
-                consumer.chunckedMessageIdSequenceMap.clear();
+                consumer.unAckedChunckedMessageIdSequenceMap.clear();
             });
             incomingMessages.clear();
             unAckedMessageTracker.clear();
