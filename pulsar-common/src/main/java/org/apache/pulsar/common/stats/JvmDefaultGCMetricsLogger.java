@@ -65,7 +65,13 @@ public class JvmDefaultGCMetricsLogger implements JvmGCMetricsLogger {
         gcMetricsMap.forEach((name, metric) -> {
             metrics.put("jvm_" + name + "_gc_pause", metric.currentGcTime);
             metrics.put("jvm_" + name + "_gc_count", metric.currentGcCount);
+            metrics.put("jvm_gc_young_pause", metric.currentGcTime);
+            metrics.put("jvm_gc_young_count", metric.currentGcCount);
         });
+        
+        metrics.put("jvm_gc_old_pause", currentFullGcTime);
+        metrics.put("jvm_gc_old_count", currentFullGcCount);
+        
     }
 
     @SuppressWarnings("restriction")

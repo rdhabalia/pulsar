@@ -61,7 +61,7 @@ public class JvmMetrics {
             log.warn("Failed to access netty DIRECT_MEMORY_COUNTER field {}", e.getMessage());
         }
         // GC type and implementation mapping
-        gcLoggerMap.put("-XX:+UseG1GC", JvmG1GCMetricsLogger.class);
+        //gcLoggerMap.put("-XX:+UseG1GC", JvmG1GCMetricsLogger.class);
     }
 
     public static JvmMetrics create(ScheduledExecutorService executor, String componentName,
