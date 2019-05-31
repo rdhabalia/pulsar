@@ -1253,12 +1253,6 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
 
         checkArgument(messageIds.stream().findFirst().get() instanceof MessageIdImpl);
 
-        if (conf.getSubscriptionType() != SubscriptionType.Shared
-                && conf.getSubscriptionType() != SubscriptionType.Key_Shared) {
-            // We cannot redeliver single messages if subscription type is not Shared
-            redeliverUnacknowledgedMessages();
-            return;
-        }
         ClientCnx cnx = cnx();
         if (isConnected() && cnx.getRemoteEndpointProtocolVersion() >= ProtocolVersion.v2.getNumber()) {
             int messagesFromQueue = removeExpiredMessagesFromQueue(messageIds);
@@ -1297,6 +1291,12 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
             log.warn("[{}] Reconnecting the client to redeliver the messages.", this);
             cnx.ctx().close();
         }
+        // #unAckedMessageTracker already removed un-acked messages from the cache so, try to retry redelivery of the
+        // messages
+        this.listenerExecutor.schedule(() -> {
+            System.out.println("Redelivery = "+messageIds);
+            redeliverUnacknowledgedMessages(messageIds);
+        }, this.conf.getAckTimeoutMillis(), TimeUnit.MILLISECONDS);
     }
 
     private void processPossibleToDLQ(MessageIdImpl messageId) {

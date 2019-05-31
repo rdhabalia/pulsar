@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.client.impl;
 
+import static org.junit.Assert.assertNotNull;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
@@ -25,7 +26,10 @@ import static org.testng.Assert.assertTrue;
 import java.util.HashSet;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.bookkeeper.mledger.Position;
+import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl;
 import org.apache.pulsar.broker.service.BrokerTestBase;
+import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageId;
@@ -419,5 +423,54 @@ public class UnAcknowledgedMessagesTimeoutTest extends BrokerTestBase {
         consumer.acknowledge(message);
 
         assertTrue(((ConsumerImpl<?>) consumer).getUnAckedMessageTracker().isEmpty());
+    }
+    
+    @Test
+    public void testRedeliveryWhenCnxClosed() throws Exception{
+
+        String key = "testRedeliveryWhenCnxClosed";
+        final String topicName = "persistent://prop/ns-abc/topic-" + key;
+        final String subscriptionName = "my-ex-subscription-" + key;
+        final int ackTimeOutMs = 2000;
+        
+
+        // 1. producer connect
+        Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName)
+            .enableBatching(false)
+            .messageRoutingMode(MessageRoutingMode.SinglePartition)
+            .create();
+
+        // 2. Create consumer
+        ConsumerImpl<byte[]> consumer = (ConsumerImpl<byte[]>) pulsarClient.newConsumer().topic(topicName).subscriptionName(subscriptionName)
+                .ackTimeout(ackTimeOutMs, TimeUnit.MILLISECONDS).subscribe();
+
+        
+        // 3. producer publish messages
+        producer.send("message".getBytes());
+        
+        // 4. Receiver receives the message
+        Message<byte[]> message = consumer.receive(ackTimeOutMs/2, TimeUnit.MILLISECONDS);
+        assertNotNull(message);
+        
+        stopBroker();
+        
+        Thread.sleep(ackTimeOutMillis);
+        
+        retryStrategically((test) -> consumer.getUnAckedMessageTracker().messageIdPartitionMap.isEmpty(), 3, ackTimeOutMillis);
+        
+        assertTrue(consumer.getUnAckedMessageTracker().messageIdPartitionMap.isEmpty());
+        
+        startBroker();
+        
+        retryStrategically((test) -> consumer.isConnected(), 5, ackTimeOutMillis);
+        
+        PersistentTopic topic = (PersistentTopic) pulsar.getBrokerService().getTopicIfExists(topicName).get().get();
+        ManagedCursorImpl mc= (ManagedCursorImpl) topic.getManagedLedger().getCursors().iterator().next();
+        
+        Position rd = mc.getReadPosition();
+        Position md = mc.getMarkDeletedPosition();
+        
+        System.out.println(rd);
+    
     }
 }
