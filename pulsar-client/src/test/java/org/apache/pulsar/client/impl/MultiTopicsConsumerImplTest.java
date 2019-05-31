@@ -26,8 +26,8 @@ import org.apache.pulsar.client.impl.conf.ConsumerConfigurationData;
 import org.apache.pulsar.common.util.netty.EventLoopUtil;
 import org.testng.annotations.Test;
 
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 
 import static org.testng.Assert.assertEquals;
@@ -46,7 +46,7 @@ public class MultiTopicsConsumerImplTest {
 
         ThreadFactory threadFactory = new DefaultThreadFactory("client-test-stats", Thread.currentThread().isDaemon());
         EventLoopGroup eventLoopGroup = EventLoopUtil.newEventLoopGroup(conf.getNumIoThreads(), threadFactory);
-        ExecutorService listenerExecutor = Executors.newSingleThreadScheduledExecutor(threadFactory);
+        ScheduledExecutorService listenerExecutor = Executors.newSingleThreadScheduledExecutor(threadFactory);
 
         PulsarClientImpl clientImpl = new PulsarClientImpl(conf, eventLoopGroup);
 

@@ -22,8 +22,8 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import java.util.List;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -31,7 +31,7 @@ import com.google.common.collect.Lists;
 
 public class ExecutorProvider {
     private final int numThreads;
-    private final List<ExecutorService> executors;
+    private final List<ScheduledExecutorService> executors;
     private final AtomicInteger currentThread = new AtomicInteger(0);
 
     public ExecutorProvider(int numThreads, ThreadFactory threadFactory) {
@@ -44,7 +44,7 @@ public class ExecutorProvider {
         }
     }
 
-    public ExecutorService getExecutor() {
+    public ScheduledExecutorService getExecutor() {
         return executors.get((currentThread.getAndIncrement() & Integer.MAX_VALUE) % numThreads);
     }
 

@@ -37,6 +37,7 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -326,7 +327,7 @@ public class PulsarClientImpl implements PulsarClient {
 
             ConsumerBase<T> consumer;
             // gets the next single threaded executor from the list of executors
-            ExecutorService listenerThread = externalExecutorProvider.getExecutor();
+            ScheduledExecutorService listenerThread = externalExecutorProvider.getExecutor();
             if (metadata.partitions > 1) {
                 consumer = MultiTopicsConsumerImpl.createPartitionedConsumer(PulsarClientImpl.this, conf,
                     listenerThread, consumerSubscribedFuture, metadata.partitions, schema, interceptors);
@@ -464,7 +465,7 @@ public class PulsarClientImpl implements PulsarClient {
 
             CompletableFuture<Consumer<T>> consumerSubscribedFuture = new CompletableFuture<>();
             // gets the next single threaded executor from the list of executors
-            ExecutorService listenerThread = externalExecutorProvider.getExecutor();
+            ScheduledExecutorService listenerThread = externalExecutorProvider.getExecutor();
             ReaderImpl<T> reader = new ReaderImpl<>(PulsarClientImpl.this, conf, listenerThread, consumerSubscribedFuture, schema);
 
             synchronized (consumers) {
