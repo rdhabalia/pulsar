@@ -25,9 +25,11 @@ import static java.lang.String.format;
 import static org.apache.pulsar.common.api.Commands.hasChecksum;
 import static org.apache.pulsar.common.api.Commands.readChecksum;
 
+import com.google.common.collect.Lists;
 import com.google.common.collect.Queues;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.util.Recycler;
 import io.netty.util.Recycler.Handle;
 import io.netty.util.ReferenceCountUtil;
@@ -58,11 +60,14 @@ import org.apache.pulsar.client.api.ProducerCryptoFailureAction;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.PulsarClientException.CryptoException;
 import org.apache.pulsar.client.api.Schema;
+import org.apache.pulsar.client.api.TypedMessageBuilder;
 import org.apache.pulsar.client.impl.conf.ProducerConfigurationData;
 import org.apache.pulsar.client.impl.schema.JSONSchema;
 import org.apache.pulsar.common.api.ByteBufPair;
 import org.apache.pulsar.common.api.Commands;
 import org.apache.pulsar.common.api.Commands.ChecksumType;
+import org.apache.pulsar.common.api.proto.PulsarApi.MessageIdData;
+import org.apache.pulsar.common.api.proto.PulsarApi.MarkerMessage;
 import org.apache.pulsar.common.api.proto.PulsarApi.MessageMetadata;
 import org.apache.pulsar.common.api.proto.PulsarApi.MessageMetadata.Builder;
 import org.apache.pulsar.common.api.proto.PulsarApi.ProtocolVersion;
@@ -72,6 +77,7 @@ import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.schema.SchemaInfo;
 import org.apache.pulsar.common.schema.SchemaType;
 import org.apache.pulsar.common.util.DateFormatter;
+import org.apache.pulsar.common.util.protobuf.ByteBufCodedOutputStream;
 import org.apache.pulsar.shaded.com.google.protobuf.v241.ByteString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -116,6 +122,10 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
     private Optional<byte[]> schemaVersion = Optional.empty();
 
     private final ConnectionHandler connectionHandler;
+    
+    // metadata to manage chunked-message marker
+    private String currentMsgUuid = null;
+    private List<MessageIdImpl> currentChunkedMessageIds; //TODO: avoid object allocation
 
     @SuppressWarnings("rawtypes")
     private static final AtomicLongFieldUpdater<ProducerImpl> msgIdGeneratorUpdater = AtomicLongFieldUpdater
@@ -448,6 +458,7 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
             if (totalChunks > 1) {
                 op.totalChunks = totalChunks;
                 op.chunkId = chunkId;
+                op.msgUuid = uuid;
             }
             pendingMessages.put(op);
             lastSendFuture = callback.getFuture();
@@ -743,6 +754,56 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
                 semaphore.release(op.numMessagesInBatch);
                 callback = true;
                 pendingCallbacks.add(op);
+                if (op.chunkId >= 0 && op.msgUuid != null) {
+                    if (op.chunkId == 0) {
+                        this.currentMsgUuid = op.msgUuid;
+                        this.currentChunkedMessageIds = Lists.newArrayList();
+                    }
+                    if (op.msgUuid.equals(this.currentMsgUuid)) {
+                        this.currentChunkedMessageIds.add(new MessageIdImpl(ledgerId, entryId, partitionIndex));
+                    }
+                    if(op.chunkId == op.totalChunks-1 && this.currentChunkedMessageIds!=null) {
+                        //last chunk ack has been received..so, time to publish marker message
+                        MarkerMessage.Builder markerMsgBuilder = MarkerMessage.newBuilder();
+                        for(MessageIdImpl msgId : this.currentChunkedMessageIds) {
+                            MessageIdData.Builder messageIdDataBuilder = MessageIdData.newBuilder();
+                            messageIdDataBuilder.setLedgerId(ledgerId);
+                            messageIdDataBuilder.setEntryId(entryId);
+                            MessageIdData messageIdData = messageIdDataBuilder.build();
+                            markerMsgBuilder.addMessageId(messageIdData);
+                            messageIdDataBuilder.recycle();
+                        }
+                        MarkerMessage markerMsg = markerMsgBuilder.build();
+                        
+                        int msgSize = markerMsg.getSerializedSize();
+                        ByteBuf buf = PooledByteBufAllocator.DEFAULT.buffer(markerMsg.getSerializedSize(), markerMsg.getSerializedSize());
+                        ByteBufCodedOutputStream outStream = ByteBufCodedOutputStream.get(buf);
+                        
+                        try {
+                            markerMsg.writeTo(outStream);
+                        } catch (IOException e) {
+                            // This is in-memory serialization, should not fail
+                            throw new RuntimeException(e);
+                        } finally {
+                            markerMsg.recycle();
+                            markerMsgBuilder.recycle();
+                            outStream.recycle();
+                        }
+                        
+                        // TODO: check producer can't have schema and has to be T=byte[]
+                        try {
+                            byte[] content = new byte[msgSize];
+                            buf.getBytes(0, content, 0, msgSize);
+                            TypedMessageBuilderImpl<T> msgBuilder = (TypedMessageBuilderImpl<T>) newMessage()
+                                    .value((T) content);
+                            msgBuilder.getMetadataBuilder().setMarkerMsg(true);
+                            msgBuilder.sendAsync();    
+                        }finally {
+                            buf.release();
+                        }
+                        
+                    }
+                }
             }
         }
         if (callback) {
@@ -872,7 +933,8 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
         long batchSizeByte = 0;
         int numMessagesInBatch = 1;
         int totalChunks = 0;
-        int chunkId = 0;
+        int chunkId = -1;
+        String msgUuid;
 
         static OpSendMsg create(MessageImpl<?> msg, ByteBufPair cmd, long sequenceId, SendCallback callback) {
             OpSendMsg op = RECYCLER.get();
@@ -902,7 +964,8 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
             sequenceId = -1;
             createdAt = -1;
             totalChunks = 0;
-            chunkId = 0;
+            chunkId = -1;
+            msgUuid = null;
             recyclerHandle.recycle(this);
         }
 
@@ -912,6 +975,10 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
 
         void setBatchSizeByte(long batchSizeByte) {
             this.batchSizeByte = batchSizeByte;
+        }
+
+        public void setMsgUuid(String msgUuid) {
+            this.msgUuid = msgUuid;
         }
 
         void setMessageId(long ledgerId, long entryId, int partitionIndex) {

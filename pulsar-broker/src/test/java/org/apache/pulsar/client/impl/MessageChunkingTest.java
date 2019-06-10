@@ -298,6 +298,36 @@ public class MessageChunkingTest extends ProducerConsumerBase {
     //TODO: add non-persistent and shared subscription non-valid usecase
     //TODO: add test to validate only max pending chunks stays into memory
     
+
+    @Test
+    public void testMarkerMsg() throws Exception{
+
+        log.info("-- Starting {} test --", methodName);
+        this.conf.setMaxMessageSize(1000);
+        final String topicName = "persistent://my-property/my-ns/my-topic1";
+        
+        Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName("my-subscriber-name")
+                .acknowledgmentGroupTime(0, TimeUnit.SECONDS).subscribe();
+
+        ProducerBuilder<byte[]> producerBuilder = pulsarClient.newProducer().topic(topicName);
+
+        Producer<byte[]> producer = producerBuilder.chunkingEnabled(true).enableBatching(false)
+                .sendTimeout(5, TimeUnit.SECONDS) // for debuging TODO: remove
+                .create();
+
+        try {
+            producer.send(createMessagePayload(1000).getBytes());
+        } catch (PulsarClientException.TimeoutException e) {
+            // Ok
+        }
+        
+        Message<byte[]> msg = consumer.receive(5, TimeUnit.SECONDS);
+        String receivedMessage = new String(msg.getData());
+        System.out.println("published");
+        producer.close();
+    
+    }
+    
     
     private String createMessagePayload(int size) {
         StringBuilder str = new StringBuilder();

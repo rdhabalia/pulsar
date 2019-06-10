@@ -47,7 +47,7 @@ public class TypedMessageBuilderImpl<T> implements TypedMessageBuilder<T> {
     private final ProducerBase<T> producer;
     private final MessageMetadata.Builder msgMetadataBuilder = MessageMetadata.newBuilder();
     private final Schema<T> schema;
-    private ByteBuffer content;
+    protected ByteBuffer content;
 
     public TypedMessageBuilderImpl(ProducerBase<T> producer, Schema<T> schema) {
         this.producer = producer;

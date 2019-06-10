@@ -82,6 +82,9 @@ public abstract class AbstractBaseDispatcher {
                     continue;
                 }
 
+                if (msgMetadata.getMarkerMsg()) {
+                    System.out.println("received marker-msg");
+                }
                 entry.setUuid(msgMetadata.hasUuid() ? msgMetadata.getUuid() : null);
                 int batchSize = msgMetadata.getNumMessagesInBatch();
                 totalMessages += batchSize;

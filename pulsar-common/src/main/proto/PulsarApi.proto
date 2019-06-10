@@ -118,8 +118,12 @@ message MessageMetadata {
 	optional int32 num_chunks_from_msg = 20;
 	optional int32 total_chunk_msg_size = 21;
 	optional int32 chunk_id = 22;
+	optional bool marker_msg = 23 [default = false];
 }
 
+message MarkerMessage {
+	repeated MessageIdData message_id = 1;
+}
 
 message SingleMessageMetadata {
 	repeated KeyValue properties    = 1;
