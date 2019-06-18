@@ -30,9 +30,13 @@
     <version>2.4.0-SNAPSHOT</version>
     <relativePath>..</relativePath>
   </parent>
+  
+  <properties>
+     <kafka_0_8.version>0.8.1.1</kafka_0_8.version>
+  </properties>
 
-  <artifactId>pulsar-client-kafka-original</artifactId>
-  <name>Pulsar Kafka compatibility :: API (original)</name>
+  <artifactId>pulsar-client-kafka_0_8-original</artifactId>
+  <name>Pulsar Kafka compatibility 0.8 :: API (original)</name>
 
   <description>Kafka client library that publishes and consumes messages on Pulsar topics</description>
 
@@ -47,11 +51,16 @@
         <groupId>org.apache.commons</groupId>
         <artifactId>commons-lang3</artifactId>
     </dependency>
+    
+    <dependency>
+        <groupId>com.google.guava</groupId>
+        <artifactId>guava</artifactId>
+    </dependency>
 
     <dependency>
       <groupId>org.apache.kafka</groupId>
-      <artifactId>kafka-clients</artifactId>
-      <version>${kafka-client.version}</version>
+      <artifactId>kafka_2.9.2</artifactId>
+      <version>${kafka_0_8.version}</version>
       <exclusions>
         <exclusion>
           <groupId>net.jpountz.lz4</groupId>
