@@ -18,16 +18,11 @@
  */
 package org.apache.kafka.clients.consumer;
 
-import lombok.extern.slf4j.Slf4j;
-
 /**
  * This class will replace "kafka.consumer.Consumer"
  *
  */
-@Slf4j
 public class PulsarKafkaConsumer {
-
-    private static final long serialVersionUID = 1L;
 
     public static ConsumerConnector createJavaConsumerConnector(PulsarConsumerConfig config) {
         return new ConsumerConnector(config);

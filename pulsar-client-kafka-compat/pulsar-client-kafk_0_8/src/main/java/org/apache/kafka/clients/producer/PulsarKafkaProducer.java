@@ -19,6 +19,7 @@
 package org.apache.kafka.clients.producer;
 
 import java.io.Serializable;
+import java.lang.reflect.Constructor;
 import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
@@ -37,9 +38,7 @@ import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.TopicMetadata;
 import org.apache.pulsar.client.api.TypedMessageBuilder;
-import org.apache.pulsar.client.kafka.compat.PulsarClientKafkaConfig;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import kafka.utils.VerifiableProperties;
 
 //Questions
 /**
@@ -54,7 +53,9 @@ import kafka.producer.Partitioner;
 import kafka.producer.ProducerConfig;
 import kafka.serializer.Encoder;
 import kafka.serializer.StringEncoder;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 public class PulsarKafkaProducer<K, V> extends Producer<K, V> {
 
     private final PulsarClient client;
@@ -74,10 +75,11 @@ public class PulsarKafkaProducer<K, V> extends Producer<K, V> {
     @SuppressWarnings({ "unchecked", "rawtypes" })
     public PulsarKafkaProducer(ProducerConfig config) {
         super((kafka.producer.Producer) null);
-        partitioner = config.partitionerClass() != null ? newInstance(config.partitionerClass(), Partitioner.class)
-                : new DefaultPartitioner(null);
-        keySerializer = Optional.ofNullable(newInstance(config.keySerializerClass(), Encoder.class));
-        valueSerializer = Optional.ofNullable(newInstance(config.serializerClass(), Encoder.class));
+        partitioner = config.partitionerClass() != null
+                        ? newInstance(config.partitionerClass(), Partitioner.class, config.props())
+                        : new DefaultPartitioner(config.props());
+        keySerializer = Optional.ofNullable(newInstance(config.keySerializerClass(), Encoder.class, config.props()));
+        valueSerializer = Optional.ofNullable(newInstance(config.serializerClass(), Encoder.class, config.props()));
 
         Properties properties = config.props() != null && config.props().props() != null ? config.props().props()
                 : new Properties();
@@ -152,11 +154,17 @@ public class PulsarKafkaProducer<K, V> extends Producer<K, V> {
             // what if message publish fails:
             // according to : https://kafka.apache.org/08/documentation.html#producerapi
             // async: opens the possibility of a failure of the client machine dropping unsent data
-            messageBuilder.sendAsync();
+            messageBuilder.sendAsync().handle((res, ex) -> {
+                if (ex != null) {
+                    log.warn("publish failed for {}", producer.getTopic(), ex);
+                }
+                return null;
+            });
         } else {
             try {
                 messageBuilder.send();
             } catch (PulsarClientException e) {
+                log.warn("publish failed for {}", producer.getTopic(), e);
                 throw new IllegalStateException("Failed to publish message " + message.topic(), e);
             }
         }
@@ -205,15 +213,14 @@ public class PulsarKafkaProducer<K, V> extends Producer<K, V> {
                     return partitioner.partition(msg.getKey(), metadata.numPartitions());
                 }
             });
-            logger.info("Creating producer for topic {} with config {}",topic, pulsarProducerBuilder.toString());
+            log.info("Creating producer for topic {} with config {}", topic, pulsarProducerBuilder.toString());
             return pulsarProducerBuilder.clone().topic(topic).create();
         } catch (PulsarClientException e) {
             throw new RuntimeException(e);
         }
     }
 
-    // TODO: Move to Utils
-    public <T> T newInstance(String key, Class<T> t) {
+    public <T> T newInstance(String key, Class<T> t, VerifiableProperties properties) {
         Class<?> c = null;
         try {
             c = Class.forName(key);
@@ -222,15 +229,22 @@ public class PulsarKafkaProducer<K, V> extends Producer<K, V> {
         }
         if (c == null)
             return null;
-        Object o = newInstance(c);
+        Object o = newInstance(c, properties);
         if (!t.isInstance(o)) {
             throw new IllegalArgumentException(c.getName() + " is not an instance of " + t.getName());
         }
         return t.cast(o);
     }
 
-    public static <T> T newInstance(Class<T> c) {
+    public static <T> T newInstance(Class<T> c, VerifiableProperties properties) {
         try {
+            try {
+                Constructor<T> constructor = c.getConstructor(VerifiableProperties.class);
+                constructor.setAccessible(true);
+                return constructor.newInstance(properties);
+            } catch (Exception e) {
+                // Ok.. not a default implementation class
+            }
             return c.newInstance();
         } catch (IllegalAccessException e) {
             throw new IllegalArgumentException("Could not instantiate class " + c.getName(), e);
@@ -243,5 +257,4 @@ public class PulsarKafkaProducer<K, V> extends Producer<K, V> {
         }
     }
 
-    private static final Logger logger = LoggerFactory.getLogger(PulsarKafkaProducer.class);
 }

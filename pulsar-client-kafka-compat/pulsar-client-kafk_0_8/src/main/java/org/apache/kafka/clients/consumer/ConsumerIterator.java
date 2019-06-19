@@ -18,7 +18,6 @@
  */
 package org.apache.kafka.clients.consumer;
 
-import java.util.Base64;
 import java.util.Iterator;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -31,34 +30,29 @@ import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.SubscriptionInitialPosition;
-import org.apache.pulsar.shade.org.apache.commons.lang3.StringUtils;
+import org.apache.pulsar.client.util.MessageIdUtils;
+import org.apache.pulsar.common.naming.TopicName;
 
 import kafka.serializer.Decoder;
-import kafka.serializer.StringDecoder;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
-public class ConsumerIterator<K, V> implements Iterator<PulsarMessageAndMetadata<K, V>> {
+public class ConsumerIterator<K, V> implements Iterator<PulsarMessageAndMetadata<K, V>>, AutoCloseable {
 
     private final Consumer<byte[]> consumer;
     private final ConcurrentLinkedQueue<Message<byte[]>> receivedMessages;
     private final Optional<Decoder<K>> keyDeSerializer;
     private final Optional<Decoder<V>> valueDeSerializer;
     private final boolean isAutoCommit;
-    private final SubscriptionInitialPosition strategy;
     private volatile MessageId lastConsumedMessageId;
 
     public ConsumerIterator(Consumer<byte[]> consumer, ConcurrentLinkedQueue<Message<byte[]>> receivedMessages,
-            Optional<Decoder<K>> keyDeSerializer, Optional<Decoder<V>> valueDeSerializer, boolean isAutoCommit,
-            SubscriptionInitialPosition strategy) {
+            Optional<Decoder<K>> keyDeSerializer, Optional<Decoder<V>> valueDeSerializer, boolean isAutoCommit) {
         this.consumer = consumer;
         this.receivedMessages = receivedMessages;
         this.keyDeSerializer = keyDeSerializer;
         this.valueDeSerializer = valueDeSerializer;
         this.isAutoCommit = isAutoCommit;
-        this.strategy = strategy;
-        resetOffsets(consumer, strategy);
-        // TODO: all configuration strategy
     }
 
     @Override
@@ -69,7 +63,10 @@ public class ConsumerIterator<K, V> implements Iterator<PulsarMessageAndMetadata
                 receivedMessages.offer(msg);
             }
         } catch (PulsarClientException e) {
-            // TODO: log and return false
+            if (log.isDebugEnabled()) {
+                log.debug("Failed to receive message for {}-{}, {}", consumer.getTopic(), consumer.getSubscription(),
+                        e.getMessage());
+            }
         }
         return false;
     }
@@ -82,26 +79,16 @@ public class ConsumerIterator<K, V> implements Iterator<PulsarMessageAndMetadata
             try {
                 msg = consumer.receive();
             } catch (PulsarClientException e) {
-                // TODO: log and throw runtimeException
+                log.warn("Failed to receive message for {}-{}, {}", consumer.getTopic(), consumer.getSubscription(),
+                        e.getMessage(), e);
+                throw new RuntimeException(
+                        "failed to receive message from " + consumer.getTopic() + "-" + consumer.getSubscription());
             }
         }
 
-        int partition = 0; // TODO : get partition from the topic name
+        int partition = TopicName.getPartitionIndex(consumer.getTopic());
         long offset = MessageIdUtils.getOffset(msg.getMessageId());
-        String key = msg.getKey();
         byte[] value = msg.getValue();
-
-        // TODO: remove key if not needed
-        if (StringUtils.isNotBlank(key)) {
-            K desKey = null;
-            if (keyDeSerializer.isPresent() && keyDeSerializer.get() instanceof StringDecoder) {
-                desKey = (K) key;
-            } else {
-                byte[] decodedBytes = Base64.getDecoder().decode(key);
-                desKey = keyDeSerializer.isPresent() ? keyDeSerializer.get().fromBytes(decodedBytes)
-                        : SerializationUtils.deserialize(decodedBytes);
-            }
-        }
 
         V desValue = null;
         if (value != null) {
@@ -129,20 +116,10 @@ public class ConsumerIterator<K, V> implements Iterator<PulsarMessageAndMetadata
         return CompletableFuture.completedFuture(null);
     }
 
-    private void resetOffsets(Consumer<byte[]> consumer, SubscriptionInitialPosition strategy) {
-        if (strategy == null) {
-            return;
-        }
-        log.info("Resetting partition {} for group-id {} and seeking to {} position", consumer.getTopic(),
-                consumer.getSubscription(), strategy);
-        try {
-            if (strategy == SubscriptionInitialPosition.Earliest) {
-                consumer.seek(MessageId.earliest);
-            } else {
-                consumer.seek(MessageId.latest);
-            }
-        } catch (PulsarClientException e) {
-            // TODO: log and throw runtimeException
+    @Override
+    public void close() throws Exception {
+        if (consumer != null) {
+            consumer.close();
         }
     }
 }

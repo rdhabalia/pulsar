@@ -25,6 +25,7 @@ import java.util.concurrent.TimeUnit;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.ClientBuilder;
 import org.apache.pulsar.client.api.PulsarClient;
+import static com.google.common.base.Preconditions.checkNotNull;
 
 public class PulsarClientKafkaConfig {
 
@@ -49,7 +50,7 @@ public class PulsarClientKafkaConfig {
     public static final String MAX_NUMBER_OF_REJECTED_REQUESTS_PER_CONNECTION = "pulsar.max.number.rejected.request.per.connection";
 
     public static ClientBuilder getClientBuilder(Properties properties) {
-        //TODO: do properties NPE check
+        checkNotNull(properties, "properties can't be null");
         ClientBuilder clientBuilder = PulsarClient.builder();
 
         if (properties.containsKey(AUTHENTICATION_CLASS)) {
