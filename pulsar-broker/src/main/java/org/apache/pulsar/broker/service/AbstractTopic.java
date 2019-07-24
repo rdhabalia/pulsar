@@ -261,12 +261,12 @@ public abstract class AbstractTopic implements Topic {
         if (publishRate != null
                 && (publishRate.publishThrottlingRateInByte > 0 || publishRate.publishThrottlingRateInMsg > 0)) {
             log.info("Enabling publish rate limiting {} on topic {}", publishRate, this.topic);
+            // lazy init Publish-rateLimiting monitoring if not initialized yet
+            this.brokerService.setupPublishRateLimiterMonitor();
             if (this.publishRateLimiter == null
                     || this.publishRateLimiter == PublishRateLimiter.DISABLED_RATE_LIMITER) {
                 // create new rateLimiter if rate-limiter is disabled
                 this.publishRateLimiter = new PublishRateLimiterImpl(policies, clusterName);
-                // lazy init Publish-rateLimiting monitoring if not initialized yet
-                this.brokerService.setupPublishRateLimiterMonitor();
             } else {
                 this.publishRateLimiter.update(policies, clusterName);
             }

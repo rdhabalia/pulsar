@@ -67,13 +67,11 @@ class PublishRateLimiterImpl implements PublishRateLimiter {
     protected volatile long publishMaxByteRate = 0;
     protected volatile boolean publishThrottlingEnabled = false;
     protected volatile boolean publishRateExceeded = false;
-    protected volatile LongAdder currentPublishMsgCount = null;
-    protected volatile LongAdder currentPublishByteCount = null;
+    protected volatile LongAdder currentPublishMsgCount = new LongAdder();
+    protected volatile LongAdder currentPublishByteCount = new LongAdder();
 
     public PublishRateLimiterImpl(Policies policies, String clusterName) {
         update(policies, clusterName);
-        currentPublishMsgCount = new LongAdder();
-        currentPublishByteCount = new LongAdder();
     }
 
     @Override
@@ -98,7 +96,7 @@ class PublishRateLimiterImpl implements PublishRateLimiter {
 
     @Override
     public boolean resetPublishCount() {
-        if (this.publishThrottlingEnabled || this.publishRateExceeded) {
+        if (this.publishThrottlingEnabled) {
             this.currentPublishMsgCount.reset();
             this.currentPublishByteCount.reset();
             this.publishRateExceeded = false;
@@ -122,11 +120,12 @@ class PublishRateLimiterImpl implements PublishRateLimiter {
             this.publishThrottlingEnabled = true;
             this.publishMaxMessageRate = Math.max(maxPublishRate.publishThrottlingRateInMsg, 0);
             this.publishMaxByteRate = Math.max(maxPublishRate.publishThrottlingRateInByte, 0);
-        } else {
             resetPublishCount();
+        } else {
             this.publishMaxMessageRate = 0;
             this.publishMaxByteRate = 0;
             this.publishThrottlingEnabled = false;
+            resetPublishCount();
         }
     }
 }
