@@ -1101,6 +1101,7 @@ public class ServiceConfiguration implements PulsarConfiguration {
     private boolean replicationTlsEnabled = false;
     @FieldContext(
         category = CATEGORY_REPLICATION,
+        dynamic = true,
         doc = "Enable TLS when talking with other brokers in the same cluster (admin operation)"
             + " or different clusters (replication)"
     )
