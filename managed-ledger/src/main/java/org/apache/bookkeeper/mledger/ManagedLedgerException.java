@@ -133,6 +133,12 @@ public class ManagedLedgerException extends Exception {
         }
     }
 
+    public static class CursorInitInProgressException extends ManagedLedgerException {
+        public CursorInitInProgressException(String msg) {
+            super(msg);
+        }
+    }
+
     @Override
     public synchronized Throwable fillInStackTrace() {
         // Disable stack traces to be filled in

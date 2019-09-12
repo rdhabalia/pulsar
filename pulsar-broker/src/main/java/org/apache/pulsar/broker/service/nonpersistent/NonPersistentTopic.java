@@ -190,7 +190,7 @@ public class NonPersistentTopic extends AbstractTopic implements Topic {
 
         lock.readLock().lock();
         try {
-            brokerService.checkTopicNsOwnership(getName());
+            brokerService.checkTopicNsOwnership(getName(), false);
 
             if (isFenced) {
                 log.warn("[{}] Attempting to add producer to a fenced topic", topic);
@@ -250,7 +250,7 @@ public class NonPersistentTopic extends AbstractTopic implements Topic {
         final CompletableFuture<Consumer> future = new CompletableFuture<>();
 
         try {
-            brokerService.checkTopicNsOwnership(getName());
+            brokerService.checkTopicNsOwnership(getName(), true);
         } catch (Exception e) {
             future.completeExceptionally(e);
             return future;

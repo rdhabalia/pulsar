@@ -66,12 +66,22 @@ public final class ServiceUnitZkUtils {
      */
     public static final String OWNER_INFO_ROOT = LocalZooKeeperCacheService.OWNER_INFO_ROOT;
 
+    public static final String OWNER_READ_PATH_POSTFIX = "read";
+
     public static final String path(NamespaceBundle suname) {
         // The ephemeral node path for new namespaces should always have bundle name appended
         return OWNER_INFO_ROOT + "/" + suname.toString();
     }
 
-    public static final NamespaceBundle suBundleFromPath(String path, NamespaceBundleFactory factory) {
+    public static final String readPath(NamespaceBundle suname) {
+        // The ephemeral node path for new namespaces-read should always have bundle name and "read" postfix appended
+        return OWNER_INFO_ROOT + "/" + OWNER_READ_PATH_POSTFIX + "/" + suname.toString();
+    }
+
+    public static final NamespaceBundle suBundleFromPath(String bundlePath, NamespaceBundleFactory factory) {
+        final String path = bundlePath.startsWith(OWNER_INFO_ROOT + "/" + OWNER_READ_PATH_POSTFIX)
+                ? (OWNER_INFO_ROOT+"/") + bundlePath.substring((OWNER_INFO_ROOT + "/" + OWNER_READ_PATH_POSTFIX).length()+1)
+                : bundlePath;
         String[] parts = path.split("/");
         checkArgument(parts.length > 2);
         checkArgument(parts[1].equals("namespace"));

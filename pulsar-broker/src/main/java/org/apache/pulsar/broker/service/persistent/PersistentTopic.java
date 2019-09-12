@@ -326,7 +326,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
 
         lock.readLock().lock();
         try {
-            brokerService.checkTopicNsOwnership(getName());
+            brokerService.checkTopicNsOwnership(getName(), false);
 
             if (isFenced) {
                 log.warn("[{}] Attempting to add producer to a fenced topic", topic);
@@ -432,16 +432,47 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             SubType subType, int priorityLevel, String consumerName, boolean isDurable, MessageId startMessageId,
             Map<String, String> metadata, boolean readCompacted, InitialPosition initialPosition,
             boolean replicatedSubscriptionState) {
-
         final CompletableFuture<Consumer> future = new CompletableFuture<>();
+        final CompletableFuture<Void> ownershipCheck = new CompletableFuture<>();
 
         try {
-            brokerService.checkTopicNsOwnership(getName());
+            brokerService.checkTopicNsOwnership(getName(), true);
+            ownershipCheck.complete(null);
         } catch (Exception e) {
-            future.completeExceptionally(e);
-            return future;
+            // read-ownership might be previously acquired by a different broker and no-one is owning right now. so, try
+            // to acquire ownership if needed
+            if (!brokerService.pulsar().getConfig().isSplitReadWriteBundleOwnership()) {
+                future.completeExceptionally(e);
+                return future;
+            }
+            try {
+                brokerService.pulsar().getNamespaceService().tryOwningReadOwnership(TopicName.get(getName()))
+                        .thenAccept(isOwner -> {
+                            if (isOwner) {
+                                ownershipCheck.complete(null);
+                            } else {
+                                log.warn("Topic is not by the broker {}", getName());
+                                future.completeExceptionally(e);
+                            }
+                        });
+            } catch (Exception ow) {
+                log.warn("Failed to check read ownership of {}", getName(), ow);
+                future.completeExceptionally(e);
+                return future;
+            }
         }
 
+        ownershipCheck.thenAccept(res -> subscribe(cnx, subscriptionName, consumerId,
+                subType, priorityLevel, consumerName, isDurable, startMessageId, metadata, readCompacted,
+                initialPosition, replicatedSubscriptionState, future));
+        return future;
+    }
+
+    private CompletableFuture<Consumer> subscribe(final ServerCnx cnx, String subscriptionName, long consumerId,
+            SubType subType, int priorityLevel, String consumerName, boolean isDurable, MessageId startMessageId,
+            Map<String, String> metadata, boolean readCompacted, InitialPosition initialPosition,
+            boolean replicatedSubscriptionState, CompletableFuture<Consumer> future) {
+        
         if (readCompacted && !(subType == SubType.Failover || subType == SubType.Exclusive)) {
             future.completeExceptionally(
                     new NotAllowedException("readCompacted only allowed on failover or exclusive subscriptions"));

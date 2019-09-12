@@ -599,7 +599,7 @@ public class BrokerService implements Closeable, ZooKeeperCacheListener<Policies
      */
     protected CompletableFuture<Optional<Topic>> loadOrCreatePersistentTopic(final String topic,
             boolean createIfMissing) throws RuntimeException {
-        checkTopicNsOwnership(topic);
+        checkTopicNsOwnership(topic, false);
 
         final CompletableFuture<Optional<Topic>> topicFuture = new CompletableFuture<>();
         if (!pulsar.getConfiguration().isEnablePersistentTopics()) {
@@ -745,6 +745,7 @@ public class BrokerService implements Closeable, ZooKeeperCacheListener<Policies
             managedLedgerConfig.setEnsembleSize(persistencePolicies.getBookkeeperEnsemble());
             managedLedgerConfig.setWriteQuorumSize(persistencePolicies.getBookkeeperWriteQuorum());
             managedLedgerConfig.setAckQuorumSize(persistencePolicies.getBookkeeperAckQuorum());
+            managedLedgerConfig.setDelayedCursorInitialization(serviceConfig.isSplitReadWriteBundleOwnership());
             if (localPolicies.isPresent() && localPolicies.get().bookieAffinityGroup != null) {
                 managedLedgerConfig
                         .setBookKeeperEnsemblePlacementPolicyClassName(ZkIsolatedBookieEnsemblePlacementPolicy.class);
@@ -971,11 +972,11 @@ public class BrokerService implements Closeable, ZooKeeperCacheListener<Policies
         });
     }
 
-    public void checkTopicNsOwnership(final String topic) throws RuntimeException {
+    public void checkTopicNsOwnership(final String topic, boolean readOwnership) throws RuntimeException {
         TopicName topicName = TopicName.get(topic);
         boolean ownedByThisInstance;
         try {
-            ownedByThisInstance = pulsar.getNamespaceService().isServiceUnitOwned(topicName);
+            ownedByThisInstance = pulsar.getNamespaceService().isServiceUnitOwned(topicName, readOwnership);
         } catch (Exception e) {
             log.debug(String.format("Failed to check the ownership of the topic: %s", topicName), e);
             throw new RuntimeException(new ServerMetadataException(e));
@@ -1496,7 +1497,7 @@ public class BrokerService implements Closeable, ZooKeeperCacheListener<Policies
 
         final String topic = pendingTopic.getLeft();
         try {
-            checkTopicNsOwnership(topic);
+            checkTopicNsOwnership(topic, false);
             CompletableFuture<Optional<Topic>> pendingFuture = pendingTopic.getRight();
             final Semaphore topicLoadSemaphore = topicLoadRequestSemaphore.get();
             final boolean acquiredPermit = topicLoadSemaphore.tryAcquire();

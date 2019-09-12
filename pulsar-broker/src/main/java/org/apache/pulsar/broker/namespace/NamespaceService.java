@@ -410,6 +410,7 @@ public class NamespaceService {
         try {
             checkNotNull(candidateBroker);
 
+            LOG.info("TODO REMOVE: PULSAR_OBJECT {}", pulsar);
             if (pulsar.getSafeWebServiceAddress().equals(candidateBroker)) {
                 // invalidate namespace policies and try to load latest policies to avoid data-discrepancy if broker
                 // doesn't receive watch on policies changes
@@ -530,11 +531,11 @@ public class NamespaceService {
 
     public void unloadNamespaceBundle(NamespaceBundle bundle) throws Exception {
         // unload namespace bundle
-        unloadNamespaceBundle(bundle, 5, TimeUnit.MINUTES);
+        unloadNamespaceBundle(bundle, pulsar.getConfiguration().getUnloadBundleTimeOutSec(), TimeUnit.SECONDS);
     }
 
     public void unloadNamespaceBundle(NamespaceBundle bundle, long timeout, TimeUnit timeoutUnit) throws Exception {
-        checkNotNull(ownershipCache.getOwnedBundle(bundle)).handleUnloadRequest(pulsar, timeout, timeoutUnit);
+        checkNotNull(ownershipCache.getOwnedBundle(bundle, false)).handleUnloadRequest(pulsar, timeout, timeoutUnit);
     }
 
     public CompletableFuture<Boolean> isNamespaceBundleOwned(NamespaceBundle bundle) {
@@ -796,16 +797,20 @@ public class NamespaceService {
     }
 
     public boolean isServiceUnitOwned(ServiceUnitId suName) throws Exception {
+        return isServiceUnitOwned(suName, false);
+    }
+
+    public boolean isServiceUnitOwned(ServiceUnitId suName, boolean readOwnership) throws Exception {
         if (suName instanceof TopicName) {
-            return isTopicOwned((TopicName) suName);
+            return isTopicOwned((TopicName) suName, readOwnership);
         }
 
         if (suName instanceof NamespaceName) {
-            return isNamespaceOwned((NamespaceName) suName);
+            return isNamespaceOwned((NamespaceName) suName, readOwnership);
         }
 
         if (suName instanceof NamespaceBundle) {
-            return ownershipCache.isNamespaceBundleOwned((NamespaceBundle) suName);
+            return ownershipCache.isNamespaceBundleOwned((NamespaceBundle) suName, readOwnership);
         }
 
         throw new IllegalArgumentException("Invalid class of NamespaceBundle: " + suName.getClass().getName());
@@ -813,34 +818,24 @@ public class NamespaceService {
 
     public boolean isServiceUnitActive(TopicName topicName) {
         try {
-            return ownershipCache.getOwnedBundle(getBundle(topicName)).isActive();
+            return ownershipCache.getOwnedBundle(getBundle(topicName), false).isActive();
         } catch (Exception e) {
             LOG.warn("Unable to find OwnedBundle for topic - [{}]", topicName);
             return false;
         }
     }
 
-    private boolean isNamespaceOwned(NamespaceName fqnn) throws Exception {
-        return ownershipCache.getOwnedBundle(getFullBundle(fqnn)) != null;
+    private boolean isNamespaceOwned(NamespaceName fqnn, boolean readOwnership) throws Exception {
+        return ownershipCache.getOwnedBundle(getFullBundle(fqnn), readOwnership) != null;
     }
 
-    private CompletableFuture<Boolean> isTopicOwnedAsync(TopicName topic) {
-        return getBundleAsync(topic).thenApply(bundle -> ownershipCache.isNamespaceBundleOwned(bundle));
-    }
-
-    private boolean isTopicOwned(TopicName topicName) throws Exception {
+    private boolean isTopicOwned(TopicName topicName, boolean readOwnership) throws Exception {
         Optional<NamespaceBundle> bundle = getBundleIfPresent(topicName);
         if (!bundle.isPresent()) {
             return false;
         } else {
-            return ownershipCache.getOwnedBundle(bundle.get()) != null;
+            return ownershipCache.getOwnedBundle(bundle.get(), readOwnership) != null;
         }
-    }
-
-    public void removeOwnedServiceUnit(NamespaceName nsName) throws Exception {
-        ownershipCache.removeOwnership(getFullBundle(nsName))
-                .get(pulsar.getConfiguration().getZooKeeperOperationTimeoutSeconds(), SECONDS);
-        bundleFactory.invalidateBundleCache(nsName);
     }
 
     public void removeOwnedServiceUnit(NamespaceBundle nsBundle) throws Exception {
@@ -849,12 +844,17 @@ public class NamespaceService {
         bundleFactory.invalidateBundleCache(nsBundle.getNamespaceObject());
     }
 
-    public void removeOwnedServiceUnits(NamespaceName nsName, BundlesData bundleData) throws Exception {
-        ownershipCache.removeOwnership(bundleFactory.getBundles(nsName, bundleData))
-                .get(pulsar.getConfiguration().getZooKeeperOperationTimeoutSeconds(), SECONDS);
-        bundleFactory.invalidateBundleCache(nsName);
+    public CompletableFuture<Boolean> tryOwningReadOwnership(TopicName topicName) throws Exception {
+        CompletableFuture<Boolean> selfReadOwner = new CompletableFuture<>();
+        NamespaceBundle bundle = getBundle(topicName);
+        ownershipCache.tryAcquiringReadOwnership(bundle).handle((data, ex) -> {
+            boolean isAcquired = ex == null && ownershipCache.getSelfOwnerInfo().equals(data);
+            selfReadOwner.complete(isAcquired);
+            return null;
+        });
+        return selfReadOwner;
     }
-
+    
     public NamespaceBundleFactory getNamespaceBundleFactory() {
         return bundleFactory;
     }

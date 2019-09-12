@@ -68,6 +68,7 @@ public class ModularLoadManagerWrapper implements LoadManager {
     @Override
     public Optional<ResourceUnit> getLeastLoaded(final ServiceUnitId serviceUnit) {
         Optional<String> leastLoadedBroker = loadManager.selectBrokerForAssignment(serviceUnit);
+        log.info("Least loaded broker {}, available broker {}",leastLoadedBroker, loadManager.getAvailableBrokers());
         if (leastLoadedBroker.isPresent()) {
             return Optional.of(new SimpleResourceUnit(getBrokerWebServiceUrl(leastLoadedBroker.get()),
                     new PulsarResourceDescription()));

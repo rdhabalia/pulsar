@@ -138,7 +138,7 @@ public class OwnershipCacheTest {
         assertEquals(data1.getNativeUrl(), selfBrokerUrl);
         assertFalse(data1.isDisabled());
         // case 2: the local broker owned the namespace and disabled, getOrSetOwner() should not change it
-        OwnedBundle nsObj = cache.getOwnedBundle(testFullBundle);
+        OwnedBundle nsObj = cache.getOwnedBundle(testFullBundle, false);
         // this would disable the ownership
         doReturn(cache).when(nsService).getOwnershipCache();
         nsObj.handleUnloadRequest(pulsar, 5, TimeUnit.SECONDS);
@@ -195,7 +195,7 @@ public class OwnershipCacheTest {
         assertFalse(cache.getOwnerAsync(testBundle).get().isPresent());
 
         try {
-            checkNotNull(cache.getOwnedBundle(testBundle));
+            checkNotNull(cache.getOwnedBundle(testBundle, false));
             fail("Should have failed");
         } catch (NullPointerException npe) {
             // OK for not owned namespace
@@ -205,7 +205,7 @@ public class OwnershipCacheTest {
                 new NamespaceEphemeralData("pulsar://otherhost:8881", "pulsar://otherhost:8884",
                         "http://otherhost:8080", "https://otherhost:4443", false));
         try {
-            checkNotNull(cache.getOwnedBundle(testBundle));
+            checkNotNull(cache.getOwnedBundle(testBundle, false));
             fail("Should have failed");
         } catch (NullPointerException npe) {
             // OK for not owned namespace
@@ -219,7 +219,7 @@ public class OwnershipCacheTest {
         assertEquals(data1.getNativeUrlTls(), "pulsar://otherhost:8884");
         assertFalse(data1.isDisabled());
         try {
-            checkNotNull(cache.getOwnedBundle(testBundle));
+            checkNotNull(cache.getOwnedBundle(testBundle, false));
             fail("Should have failed");
         } catch (NullPointerException npe) {
             // OK for not owned namespace
@@ -232,7 +232,7 @@ public class OwnershipCacheTest {
         data1 = cache.tryAcquiringOwnership(testBundle).get();
         assertEquals(data1.getNativeUrl(), selfBrokerUrl);
         assertFalse(data1.isDisabled());
-        assertNotNull(cache.getOwnedBundle(testBundle));
+        assertNotNull(cache.getOwnedBundle(testBundle, false));
     }
 
     @Test

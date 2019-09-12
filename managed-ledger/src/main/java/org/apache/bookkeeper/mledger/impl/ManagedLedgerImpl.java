@@ -211,6 +211,11 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                     // are allowed to be added. Reads are allowed
     }
 
+    enum CursorState {
+        None,
+        Initializing,
+        Initialized
+    }
     // define boundaries for position based seeks and searches
     enum PositionBound {
         startIncluded, startExcluded
@@ -219,6 +224,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     private static final AtomicReferenceFieldUpdater<ManagedLedgerImpl, State> STATE_UPDATER = AtomicReferenceFieldUpdater
             .newUpdater(ManagedLedgerImpl.class, State.class, "state");
     protected volatile State state = null;
+    private static final AtomicReferenceFieldUpdater<ManagedLedgerImpl, CursorState> CURSOR_INIT_STATE_UPDATER = AtomicReferenceFieldUpdater
+            .newUpdater(ManagedLedgerImpl.class, CursorState.class, "cursorInitializeState");
+    protected volatile CursorState cursorInitializeState = null;
 
     private final OrderedScheduler scheduledExecutor;
     private final OrderedExecutor executor;
@@ -264,6 +272,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         NUMBER_OF_ENTRIES_UPDATER.set(this, 0);
         ENTRIES_ADDED_COUNTER_UPDATER.set(this, 0);
         STATE_UPDATER.set(this, State.None);
+        CURSOR_INIT_STATE_UPDATER.set(this, CursorState.None);
         this.ledgersStat = null;
         this.mbean = new ManagedLedgerMBeanImpl(this);
         this.entryCache = factory.getEntryCacheManager().getEntryCache(this);
@@ -370,7 +379,12 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             // When recovering a terminated managed ledger, we don't need to create
             // a new ledger for writing, since no more writes are allowed.
             // We just move on to the next stage
-            initializeCursors(callback);
+            if (this.config.isDelayedCursorInitialization()) {
+                callback.initializeComplete();
+            } else {
+                initializeCursors(callback);
+            }
+            
             return;
         }
 
@@ -378,7 +392,11 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             @Override
             public void operationComplete(Void v, Stat stat) {
                 ledgersStat = stat;
-                initializeCursors(callback);
+                if (ManagedLedgerImpl.this.config.isDelayedCursorInitialization()) {
+                    callback.initializeComplete();
+                } else {
+                    initializeCursors(callback);
+                }
             }
 
             @Override
@@ -431,6 +449,17 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     }
 
     private void initializeCursors(final ManagedLedgerInitializeLedgerCallback callback) {
+        if (!CURSOR_INIT_STATE_UPDATER.compareAndSet(this, CursorState.None, CursorState.Initializing)) {
+            log.info("Cursor initialization is in progress {}", this.name);
+            // we can't fail if it's already initialized
+            if (cursorInitializeState == CursorState.Initialized) {
+                callback.initializeComplete();
+            } else {
+                callback.initializeFailed(new ManagedLedgerException.CursorInitInProgressException(
+                        "cursor init in progress for " + name));
+            }
+            return;
+        }
         if (log.isDebugEnabled()) {
             log.debug("[{}] initializing cursors", name);
         }
@@ -444,6 +473,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 }
 
                 if (consumers.isEmpty()) {
+                    cursorInitializeState = CursorState.Initialized;
                     callback.initializeComplete();
                     return;
                 }
@@ -465,6 +495,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
                             if (cursorCount.decrementAndGet() == 0) {
                                 // The initialization is now completed, register the jmx mbean
+                                cursorInitializeState = CursorState.Initialized;
                                 callback.initializeComplete();
                             }
                         }
@@ -473,6 +504,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                         public void operationFailed(ManagedLedgerException exception) {
                             log.warn("[{}] Recovery for cursor {} failed", name, cursorName, exception);
                             cursorCount.set(-1);
+                            cursorInitializeState = CursorState.None;
                             callback.initializeFailed(exception);
                         }
                     });
@@ -482,6 +514,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             @Override
             public void operationFailed(MetaStoreException e) {
                 log.warn("[{}] Failed to get the cursors list", name, e);
+                cursorInitializeState = CursorState.None;
                 callback.initializeFailed(new ManagedLedgerException(e));
             }
         });
@@ -695,57 +728,74 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             return;
         }
 
-        if (uninitializedCursors.containsKey(cursorName)) {
-            uninitializedCursors.get(cursorName).thenAccept(cursor -> {
-                callback.openCursorComplete(cursor, ctx);
-            }).exceptionally(ex -> {
-                callback.openCursorFailed((ManagedLedgerException) ex, ctx);
-                return null;
-            });
-            return;
-        }
-        ManagedCursor cachedCursor = cursors.get(cursorName);
-        if (cachedCursor != null) {
-            if (log.isDebugEnabled()) {
-                log.debug("[{}] Cursor was already created {}", name, cachedCursor);
-            }
-            callback.openCursorComplete(cachedCursor, ctx);
-            return;
-        }
-
-        // Create a new one and persist it
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Creating new cursor: {}", name, cursorName);
-        }
-        final ManagedCursorImpl cursor = new ManagedCursorImpl(bookKeeper, config, this, cursorName);
-        CompletableFuture<ManagedCursor> cursorFuture = new CompletableFuture<>();
-        uninitializedCursors.put(cursorName, cursorFuture);
-        cursor.initialize(getLastPosition(), properties, new VoidCallback() {
-            @Override
-            public void operationComplete() {
-                log.info("[{}] Opened new cursor: {}", name, cursor);
-                cursor.setActive();
-                // Update the ack position (ignoring entries that were written while the cursor was being created)
-                cursor.initializeCursorPosition(initialPosition == InitialPosition.Latest ? getLastPositionAndCounter()
-                        : getFirstPositionAndCounter());
-
-                synchronized (ManagedLedgerImpl.this) {
-                    cursors.add(cursor);
-                    uninitializedCursors.remove(cursorName).complete(cursor);
-                }
-                callback.openCursorComplete(cursor, ctx);
-            }
+        ManagedLedgerInitializeLedgerCallback mlCursorallback = new ManagedLedgerInitializeLedgerCallback() {
 
             @Override
-            public void operationFailed(ManagedLedgerException exception) {
-                log.warn("[{}] Failed to open cursor: {}", name, cursor);
-
-                synchronized (ManagedLedgerImpl.this) {
-                    uninitializedCursors.remove(cursorName).completeExceptionally(exception);
+            public void initializeComplete() {
+                if (uninitializedCursors.containsKey(cursorName)) {
+                    uninitializedCursors.get(cursorName).thenAccept(cursor -> {
+                        callback.openCursorComplete(cursor, ctx);
+                    }).exceptionally(ex -> {
+                        callback.openCursorFailed((ManagedLedgerException) ex, ctx);
+                        return null;
+                    });
+                    return;
                 }
-                callback.openCursorFailed(exception, ctx);
+                ManagedCursor cachedCursor = cursors.get(cursorName);
+                if (cachedCursor != null) {
+                    if (log.isDebugEnabled()) {
+                        log.debug("[{}] Cursor was already created {}", name, cachedCursor);
+                    }
+                    callback.openCursorComplete(cachedCursor, ctx);
+                    return;
+                }
+
+                // Create a new one and persist it
+                if (log.isDebugEnabled()) {
+                    log.debug("[{}] Creating new cursor: {}", name, cursorName);
+                }
+                final ManagedCursorImpl cursor = new ManagedCursorImpl(bookKeeper, config, ManagedLedgerImpl.this, cursorName);
+                CompletableFuture<ManagedCursor> cursorFuture = new CompletableFuture<>();
+                uninitializedCursors.put(cursorName, cursorFuture);
+                cursor.initialize(getLastPosition(), properties, new VoidCallback() {
+                    @Override
+                    public void operationComplete() {
+                        log.info("[{}] Opened new cursor: {}", name, cursor);
+                        cursor.setActive();
+                        // Update the ack position (ignoring entries that were written while the cursor was being created)
+                        cursor.initializeCursorPosition(initialPosition == InitialPosition.Latest ? getLastPositionAndCounter()
+                                : getFirstPositionAndCounter());
+
+                        synchronized (ManagedLedgerImpl.this) {
+                            cursors.add(cursor);
+                            uninitializedCursors.remove(cursorName).complete(cursor);
+                        }
+                        callback.openCursorComplete(cursor, ctx);
+                    }
+
+                    @Override
+                    public void operationFailed(ManagedLedgerException exception) {
+                        log.warn("[{}] Failed to open cursor: {}", name, cursor);
+
+                        synchronized (ManagedLedgerImpl.this) {
+                            uninitializedCursors.remove(cursorName).completeExceptionally(exception);
+                        }
+                        callback.openCursorFailed(exception, ctx);
+                    }
+                });
             }
-        });
+
+            @Override
+            public void initializeFailed(ManagedLedgerException e) {
+                callback.openCursorFailed(e, ctx);
+            }
+        };
+        
+        if(config.isDelayedCursorInitialization() && cursorInitializeState == CursorState.None) {
+            initializeCursors(mlCursorallback);
+        } else {
+            mlCursorallback.initializeComplete();
+        }
     }
 
     @Override

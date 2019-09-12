@@ -119,6 +119,18 @@ public class OwnedBundle {
         try {
             LOG.info("Disabling ownership: {}", this.bundle);
             pulsar.getNamespaceService().getOwnershipCache().updateBundleState(this.bundle, false);
+            
+            // remove write ownership so, new broker can acquire write-ownership of this bundle and can start serving
+            // without disruption
+            try {
+                pulsar.getNamespaceService().getOwnershipCache().removeWriteOwnership(this.bundle, false).get(timeout,
+                        timeoutUnit);
+            } catch (Exception e) {
+                // Failed to remove ownership node: enable namespace-bundle again so, it can serve new topics
+                pulsar.getNamespaceService().getOwnershipCache().updateBundleState(this.bundle, true);
+                throw new RuntimeException(String.format("Failed to delete ownership node %s", bundle.toString()),
+                        e.getCause());
+            }
 
             // close topics forcefully
             try {
@@ -132,14 +144,7 @@ public class OwnedBundle {
                 LOG.error("Failed to close topics under namespace {}", bundle.toString(), e);
             }
             // delete ownership node on zk
-            try {
-                pulsar.getNamespaceService().getOwnershipCache().removeOwnership(bundle).get(timeout, timeoutUnit);
-            } catch (Exception e) {
-                // Failed to remove ownership node: enable namespace-bundle again so, it can serve new topics
-                pulsar.getNamespaceService().getOwnershipCache().updateBundleState(this.bundle, true);
-                throw new RuntimeException(String.format("Failed to delete ownership node %s", bundle.toString()),
-                        e.getCause());
-            }
+            deleteReadOwnershipWithRetry(bundle, pulsar, timeout, timeoutUnit);
         } catch (Exception e) {
             LOG.error("Failed to unload a namespace {}", bundle.toString(), e);
             throw new RuntimeException(e);
@@ -147,6 +152,19 @@ public class OwnedBundle {
 
         double unloadBundleTime = TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - unloadBundleStartTime));
         LOG.info("Unloading {} namespace-bundle with {} topics completed in {} ms", this.bundle, unloadedTopics, unloadBundleTime);
+    }
+
+    private void deleteReadOwnershipWithRetry(NamespaceBundle bundle, PulsarService pulsar, long timeout,
+            TimeUnit timeoutUnit) {
+        try {
+            pulsar.getNamespaceService().getOwnershipCache().removeReadOwnership(bundle).get(timeout, timeoutUnit);
+            LOG.info("Successfully removed read ownership of {}", bundle);
+            pulsar.getNamespaceService().getOwnershipCache().invalidateCache(bundle);
+        } catch (Exception e) {
+            LOG.info("Failed to remove read ownership for {}, {}", bundle, e.getMessage());
+            pulsar.getExecutor().schedule(() -> deleteReadOwnershipWithRetry(bundle, pulsar, timeout, timeoutUnit),
+                    timeout, timeoutUnit);
+        }
     }
 
     /**

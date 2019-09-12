@@ -19,6 +19,7 @@
 package org.apache.pulsar.broker.namespace;
 
 import com.google.common.base.MoreObjects;
+import java.util.Objects;
 
 public class NamespaceEphemeralData {
     private String nativeUrl;
@@ -67,5 +68,15 @@ public class NamespaceEphemeralData {
     public String toString() {
         return MoreObjects.toStringHelper(this).add("nativeUrl", nativeUrl).add("httpUrl", httpUrl)
                 .add("disabled", disabled).toString();
+    }
+    
+    @Override
+    public boolean equals(Object obj) {
+        if (obj instanceof NamespaceEphemeralData) {
+            NamespaceEphemeralData other = (NamespaceEphemeralData) obj;
+            return Objects.equals(nativeUrl, other.nativeUrl) && Objects.equals(nativeUrlTls, other.nativeUrlTls)
+                    && Objects.equals(httpUrl, other.httpUrl) && Objects.equals(httpUrlTls, other.httpUrlTls);
+        }
+        return false;
     }
 }

@@ -884,6 +884,12 @@ public class ServiceConfiguration implements PulsarConfiguration {
     private boolean allowAutoTopicCreation = true;
     @FieldContext(
         category = CATEGORY_STORAGE_ML,
+        doc = "Bundle read and write ownership can be independent"
+    )
+    private boolean splitReadWriteBundleOwnership = false;
+    private long unloadBundleTimeOutSec = 60 * 5;
+    @FieldContext(
+        category = CATEGORY_STORAGE_ML,
         doc = "Number of threads to be used for managed ledger tasks dispatching"
     )
     private int managedLedgerNumWorkerThreads = Runtime.getRuntime().availableProcessors();

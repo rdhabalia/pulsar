@@ -61,6 +61,7 @@ public class ManagedLedgerConfig {
     private long metadataOperationsTimeoutSeconds = 60;
     private long readEntryTimeoutSeconds = 120;
     private long addEntryTimeoutSeconds = 120;
+    private boolean delayedCursorInitialization = false;
     private DigestType digestType = DigestType.CRC32C;
     private byte[] password = "".getBytes(Charsets.UTF_8);
     private boolean unackedRangesOpenCacheSetEnabled = true;
@@ -585,6 +586,14 @@ public class ManagedLedgerConfig {
     public ManagedLedgerConfig setAddEntryTimeoutSeconds(long addEntryTimeoutSeconds) {
         this.addEntryTimeoutSeconds = addEntryTimeoutSeconds;
         return this;
+    }
+
+    public boolean isDelayedCursorInitialization() {
+        return delayedCursorInitialization;
+    }
+
+    public void setDelayedCursorInitialization(boolean delayedCursorInitialization) {
+        this.delayedCursorInitialization = delayedCursorInitialization;
     }
 
     /**

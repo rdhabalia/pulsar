@@ -90,6 +90,7 @@ public class TopicLookupBase extends PulsarWebResource {
             }
 
             LookupResult result = optionalResult.get();
+            log.info("********** lookup ******** {}, redirect {}",result,result.isRedirect());
             // We have found either a broker that owns the topic, or a broker to which we should redirect the client to
             if (result.isRedirect()) {
                 boolean newAuthoritative = this.isLeaderBroker();
@@ -253,6 +254,7 @@ public class TopicLookupBase extends PulsarWebResource {
                             }
                         }).exceptionally(ex -> {
                             if (ex instanceof CompletionException && ex.getCause() instanceof IllegalStateException) {
+                                log.info("pulsar url {}",pulsarService.getBrokerServiceUrl());
                                 log.info("Failed to lookup {} for topic {} with error {}", clientAppId,
                                         topicName.toString(), ex.getCause().getMessage());
                             } else {

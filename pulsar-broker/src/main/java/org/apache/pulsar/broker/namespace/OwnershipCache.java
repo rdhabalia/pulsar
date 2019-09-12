@@ -45,6 +45,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.AsyncCacheLoader;
 import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 import com.google.common.util.concurrent.MoreExecutors;
 
@@ -86,9 +87,14 @@ public class OwnershipCache {
     private final ZooKeeperDataCache<NamespaceEphemeralData> ownershipReadOnlyCache;
 
     /**
-     * The loading cache of locally owned <code>NamespaceBundle</code> objects
+     * The loading cache of locally owned <code>NamespaceBundle</code> objects for writes.
      */
-    private final AsyncLoadingCache<String, OwnedBundle> ownedBundlesCache;
+    private final AsyncLoadingCache<String, OwnedBundle> ownedBundlesCacheForWriters;
+    
+    /**
+     * The loading cache of locally owned <code>NamespaceBundle</code> objects for readers.
+     */
+    private final AsyncLoadingCache<String, OwnedBundle> ownedBundlesCacheForReaders;
 
     /**
      * The <code>ObjectMapper</code> to deserialize/serialize JSON objects
@@ -159,7 +165,9 @@ public class OwnershipCache {
         this.localZkCache = pulsar.getLocalZkCache();
         this.ownershipReadOnlyCache = pulsar.getLocalZkCacheService().ownerInfoCache();
         // ownedBundlesCache contains all namespaces that are owned by the local broker
-        this.ownedBundlesCache = Caffeine.newBuilder().executor(MoreExecutors.directExecutor())
+        this.ownedBundlesCacheForWriters = Caffeine.newBuilder().executor(MoreExecutors.directExecutor())
+                .buildAsync(new OwnedServiceUnitCacheLoader());
+        this.ownedBundlesCacheForReaders = Caffeine.newBuilder().executor(MoreExecutors.directExecutor())
                 .buildAsync(new OwnedServiceUnitCacheLoader());
     }
 
@@ -175,8 +183,9 @@ public class OwnershipCache {
     public CompletableFuture<Optional<NamespaceEphemeralData>> getOwnerAsync(NamespaceBundle suname) {
         String path = ServiceUnitZkUtils.path(suname);
 
-        CompletableFuture<OwnedBundle> ownedBundleFuture = ownedBundlesCache.getIfPresent(path);
+        CompletableFuture<OwnedBundle> ownedBundleFuture = ownedBundlesCacheForWriters.getIfPresent(path);
         if (ownedBundleFuture != null) {
+            LOG.info("****** owning budle in write-cache {}", selfOwnerInfo);
             // Either we're the owners or we're trying to become the owner.
             return ownedBundleFuture.thenApply(serviceUnit -> {
                 // We are the owner of the service unit
@@ -205,9 +214,16 @@ public class OwnershipCache {
 
         // Doing a get() on the ownedBundlesCache will trigger an async ZK write to acquire the lock over the
         // service unit
-        ownedBundlesCache.get(path).thenAccept(namespaceBundle -> {
-            LOG.info("Successfully acquired ownership of {}", path);
-            future.complete(selfOwnerInfo);
+        ownedBundlesCacheForWriters.get(path).thenAccept(namespaceBundle -> {
+            LOG.info("Successfully acquired ownership of {}, TODO: by{}", path, this.selfOwnerInfo);
+            tryAcquiringReadOwnership(bundle).handle((res, ex) -> {
+                if (ex != null) {
+                    LOG.warn("Failed to aquire read ownership of bundle for path{} , {}", path, ex.getMessage());
+                }
+                LOG.info("Successfully acquired read-ownership of {}", path);
+                future.complete(selfOwnerInfo);
+                return null;
+            });
         }).exceptionally(exception -> {
             // Failed to acquire ownership
             if (exception instanceof CompletionException
@@ -234,7 +250,7 @@ public class OwnershipCache {
             } else {
                 // Other ZK error, bailing out for now
                 LOG.warn("Failed to acquire ownership of {}: {}", bundle, exception.getMessage(), exception);
-                ownedBundlesCache.synchronous().invalidate(path);
+                ownedBundlesCacheForWriters.synchronous().invalidate(path);
                 future.completeExceptionally(exception);
             }
 
@@ -244,21 +260,96 @@ public class OwnershipCache {
         return future;
     }
 
+    public CompletableFuture<NamespaceEphemeralData> tryAcquiringReadOwnership(NamespaceBundle bundle) {
+        String path = ServiceUnitZkUtils.readPath(bundle);
+
+        CompletableFuture<NamespaceEphemeralData> future = new CompletableFuture<>();
+
+        LOG.info("Trying to acquire read-ownership of {} for path {}", bundle, path);
+
+        // Doing a get() on the ownedBundlesCache will trigger an async ZK write to acquire the lock over the
+        // service unit
+        ownedBundlesCacheForReaders.get(path).thenAccept(namespaceBundle -> {
+            LOG.info("Successfully acquired read-ownership of {} , by {}TODO:REMOVE", path, this);
+            future.complete(selfOwnerInfo);
+        }).exceptionally(exception -> {
+            // Failed to acquire ownership
+            if (exception instanceof CompletionException
+                    && exception.getCause() instanceof KeeperException.NodeExistsException) {
+                LOG.info("Failed to acquire reader-ownership of {} -- Already owned by other broker", path);
+                // Other broker acquired ownership at the same time, let's try to read it from the read-only cache
+                ownershipReadOnlyCache.getAsync(path).thenAccept(ownerData -> {
+                    if (LOG.isDebugEnabled()) {
+                        LOG.debug("Found read-owner for {} at {}", bundle, ownerData);
+                    }
+
+                    if (ownerData.isPresent()) {
+                        future.complete(ownerData.get());
+                    } else {
+                        // Strange scenario: we couldn't create a z-node because it was already existing, but when we
+                        // try to read it, it's not there anymore
+                        future.completeExceptionally(exception);
+                    }
+                }).exceptionally(ex -> {
+                    LOG.warn("Failed to check ownership of {}: {}", bundle, ex.getMessage(), ex);
+                    future.completeExceptionally(exception);
+                    return null;
+                });
+            } else {
+                // Other ZK error, bailing out for now
+                LOG.warn("Failed to acquire reader-ownership of {}: {}", bundle, exception.getMessage(), exception);
+                ownedBundlesCacheForReaders.synchronous().invalidate(path);
+                future.completeExceptionally(exception);
+            }
+
+            return null;
+        });
+
+        return future;
+    }
+
+    
     /**
      * Method to remove the ownership of local broker on the <code>NamespaceBundle</code>, if owned
      *
      */
     public CompletableFuture<Void> removeOwnership(NamespaceBundle bundle) {
+        CompletableFuture<Void> removeFuture = new CompletableFuture<>();
+        removeWriteOwnership(bundle, true).thenAccept(
+                w -> removeReadOwnership(bundle).thenAccept(r -> removeFuture.complete(null)).exceptionally(ex -> {
+                    removeFuture.completeExceptionally(ex);
+                    return null;
+                })).exceptionally(ex -> {
+                    removeFuture.completeExceptionally(ex);
+                    return null;
+                });
+        return removeFuture;
+    }
+    
+    public CompletableFuture<Void> removeWriteOwnership(NamespaceBundle bundle, boolean clearCache) {
+        String writePathKey = ServiceUnitZkUtils.path(bundle);
+        return removeOwnership(writePathKey, clearCache);
+    }
+
+    public CompletableFuture<Void> removeReadOwnership(NamespaceBundle bundle) {
+        String readerPathKey = ServiceUnitZkUtils.readPath(bundle);
+        return removeOwnership(readerPathKey, true);
+    }
+    
+    private CompletableFuture<Void> removeOwnership(String pathKey, boolean clearCache) {
         CompletableFuture<Void> result = new CompletableFuture<>();
-        String key = ServiceUnitZkUtils.path(bundle);
-        localZkCache.getZooKeeper().delete(key, -1, (rc, path, ctx) -> {
+        // TODO: check if the broker is owner of the path then only remove the ownership
+        localZkCache.getZooKeeper().delete(pathKey, -1, (rc, path, ctx) -> {
             if (rc == KeeperException.Code.OK.intValue() || rc == KeeperException.Code.NONODE.intValue()) {
-                LOG.info("[{}] Removed zk lock for service unit: {}", key, KeeperException.Code.get(rc));
-                ownedBundlesCache.synchronous().invalidate(key);
-                ownershipReadOnlyCache.invalidate(key);
+                LOG.info("[{}] Removed zk lock for service unit: {}", pathKey, KeeperException.Code.get(rc));
+                if (clearCache) {
+                    ownedBundlesCacheForWriters.synchronous().invalidate(pathKey);
+                    ownedBundlesCacheForReaders.synchronous().invalidate(pathKey);
+                    ownershipReadOnlyCache.invalidate(pathKey);
+                }
                 result.complete(null);
             } else {
-                LOG.warn("[{}] Failed to delete the namespace ephemeral node. key={}", key,
+                LOG.warn("[{}] Failed to delete the namespace ephemeral node. key={}", path,
                         KeeperException.Code.get(rc));
                 result.completeExceptionally(KeeperException.create(rc));
             }
@@ -266,16 +357,24 @@ public class OwnershipCache {
         return result;
     }
 
+    public void invalidateCache(NamespaceBundle bundle) {
+        String writePathKey = ServiceUnitZkUtils.path(bundle);
+        String readerPathKey = ServiceUnitZkUtils.readPath(bundle);
+        ownedBundlesCacheForWriters.synchronous().invalidate(writePathKey);
+        ownershipReadOnlyCache.invalidate(writePathKey);
+        ownedBundlesCacheForReaders.synchronous().invalidate(readerPathKey);
+    }
     /**
      * Method to remove ownership of all owned bundles
      *
      * @param bundles
      *            <code>NamespaceBundles</code> to remove from ownership cache
      */
-    public CompletableFuture<Void> removeOwnership(NamespaceBundles bundles) {
+    @VisibleForTesting
+    public CompletableFuture<Void> removeOwnership(NamespaceBundles bundles, boolean readOwnership) {
         List<CompletableFuture<Void>> allFutures = Lists.newArrayList();
         for (NamespaceBundle bundle : bundles.getBundles()) {
-            if (getOwnedBundle(bundle) == null) {
+            if (getOwnedBundle(bundle, readOwnership) == null) {
                 // continue
                 continue;
             }
@@ -291,7 +390,7 @@ public class OwnershipCache {
      * @return a map of owned <code>ServiceUnit</code> objects
      */
     public Map<String, OwnedBundle> getOwnedBundles() {
-        return this.ownedBundlesCache.synchronous().asMap();
+        return this.ownedBundlesCacheForWriters.synchronous().asMap();
     }
 
     /**
@@ -300,8 +399,8 @@ public class OwnershipCache {
      * @param bundle
      * @return
      */
-    public boolean isNamespaceBundleOwned(NamespaceBundle bundle) {
-        OwnedBundle ownedBundle = getOwnedBundle(bundle);
+    public boolean isNamespaceBundleOwned(NamespaceBundle bundle, boolean readOwnership) {
+        OwnedBundle ownedBundle = getOwnedBundle(bundle, readOwnership);
         return ownedBundle != null && ownedBundle.isActive();
     }
 
@@ -311,8 +410,11 @@ public class OwnershipCache {
      * @param bundle
      * @return
      */
-    public OwnedBundle getOwnedBundle(NamespaceBundle bundle) {
-        CompletableFuture<OwnedBundle> future = ownedBundlesCache.getIfPresent(ServiceUnitZkUtils.path(bundle));
+    public OwnedBundle getOwnedBundle(NamespaceBundle bundle, boolean readOwnership) {
+        AsyncLoadingCache<String, OwnedBundle> ownershipCache = readOwnership ? ownedBundlesCacheForReaders
+                : ownedBundlesCacheForWriters;
+        String path = readOwnership ? ServiceUnitZkUtils.readPath(bundle) : ServiceUnitZkUtils.path(bundle);
+        CompletableFuture<OwnedBundle> future = ownershipCache.getIfPresent(path);
         if (future != null && future.isDone() && !future.isCompletedExceptionally()) {
             return future.join();
         } else {
@@ -342,7 +444,7 @@ public class OwnershipCache {
     public void updateBundleState(NamespaceBundle bundle, boolean isActive) throws Exception {
         String path = ServiceUnitZkUtils.path(bundle);
         // Disable owned instance in local cache
-        CompletableFuture<OwnedBundle> f = ownedBundlesCache.getIfPresent(path);
+        CompletableFuture<OwnedBundle> f = ownedBundlesCacheForWriters.getIfPresent(path);
         if (f != null && f.isDone() && !f.isCompletedExceptionally()) {
             f.join().setActive(isActive);
         }
