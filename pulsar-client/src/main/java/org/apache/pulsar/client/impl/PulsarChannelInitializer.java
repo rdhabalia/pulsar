@@ -22,10 +22,12 @@ import java.security.cert.X509Certificate;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslHandler;
 
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
@@ -76,7 +78,16 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
     @Override
     public void initChannel(SocketChannel ch) throws Exception {
         if (tlsEnabled) {
-            ch.pipeline().addLast(TLS_HANDLER, sslContextSupplier.get().newHandler(ch.alloc()));
+            SslContext sslContext = sslContextSupplier.get();
+            String sniPeer = System.getProperty("sniHost");
+            String sniPort = System.getProperty("sniPort");
+            sniPeer="applyingimplying.corp.ne1.yahoo.com";
+            sniPort="8080";
+            if (sniPeer != null) {
+                ch.pipeline().addLast(TLS_HANDLER, sslContext.newHandler(ch.alloc(), sniPeer, Integer.parseInt(sniPort)));
+            } else {
+                ch.pipeline().addLast(TLS_HANDLER, sslContext.newHandler(ch.alloc()));
+            }
             ch.pipeline().addLast("ByteBufPairEncoder", ByteBufPair.COPYING_ENCODER);
         } else {
             ch.pipeline().addLast("ByteBufPairEncoder", ByteBufPair.ENCODER);
@@ -89,4 +100,5 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
                                 0, 4, 0, 4));
         ch.pipeline().addLast("handler", clientCnxSupplier.get());
     }
+    
 }

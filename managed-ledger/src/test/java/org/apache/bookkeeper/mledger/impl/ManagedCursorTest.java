@@ -70,6 +70,7 @@ import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl.VoidCallback;
 import org.apache.bookkeeper.mledger.impl.MetaStore.MetaStoreCallback;
 import org.apache.bookkeeper.mledger.impl.MetaStore.Stat;
 import org.apache.bookkeeper.mledger.proto.MLDataFormats.ManagedCursorInfo;
+import org.apache.bookkeeper.mledger.proto.MLDataFormats.ManagedLedgerInfo.LedgerInfo;
 import org.apache.bookkeeper.mledger.proto.MLDataFormats.PositionInfo;
 import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
 import org.apache.zookeeper.KeeperException.Code;
@@ -2901,6 +2902,49 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         assertEquals(c1.getNumberOfEntries(), totalEntries - totalDeletedMessages);
         assertEquals(c1.getMarkDeletedPosition(), positions[markDelete]);
         assertEquals(c1.getReadPosition(), positions[markDelete + 1]);
+    }
+
+    @Test
+    public void testTTLBacklogAsyncDelete() throws Exception {
+
+        ManagedLedgerConfig config = new ManagedLedgerConfig();
+        config.setMaxEntriesPerLedger(10);
+        config.setMetadataMaxEntriesPerLedger(5);
+        //retention time:
+        config.setRetentionSizeInMB(500);
+        int retentionTimeSec = 30;
+        config.setRetentionTime(retentionTimeSec, TimeUnit.SECONDS);
+        
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("my_test_ledger", config);
+        final ManagedCursor c1 = ledger.openCursor("c1");
+
+        final int N = 100;
+        Position[] positions = new Position[N];
+        for (int i = 0; i < N; i++) {
+            positions[i] = ledger.addEntry("entry".getBytes(Encoding));
+        }
+
+        List<LedgerInfo> list = ledger.getLedgersInfoAsList();
+        System.out.println("list.size()= "+list.size());
+        
+        c1.resetCursor(positions[N-1]);
+        Thread.sleep(retentionTimeSec);
+        
+        c1.resetCursor(positions[N/2]);
+        c1.markDelete(positions[N/2]);
+        c1.markDelete(positions[N/2]);
+
+        list = ledger.getLedgersInfoAsList();
+        System.out.println("list.size()= "+list.size());
+        
+        // Reopen
+        /*ManagedLedgerFactory factory2 = new ManagedLedgerFactoryImpl(bkc, bkc.getZkHandle());
+        ledger = factory2.open("my_test_ledger");
+        ManagedCursor c2 = ledger.openCursor("c1");
+
+        assertEquals(c2.getMarkDeletedPosition(), lastPosition.get());
+        factory2.shutdown();*/
+    
     }
     
     private static final Logger log = LoggerFactory.getLogger(ManagedCursorTest.class);

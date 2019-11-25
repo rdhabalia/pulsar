@@ -165,6 +165,7 @@ public class AuthenticationTlsHostnameVerificationTest extends ProducerConsumerB
 
         setup();
 
+        PulsarClient pulsarClient = PulsarClient.builder().serviceUrl("pulsar://applyingimplying.corp.ne1.yahoo.com:6651").build();
         try {
             pulsarClient.newConsumer().topic("persistent://my-property/my-ns/my-topic")
                     .subscriptionName("my-subscriber-name").subscribe();

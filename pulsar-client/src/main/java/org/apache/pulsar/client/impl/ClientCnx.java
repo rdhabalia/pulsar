@@ -25,6 +25,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Queues;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -178,6 +179,22 @@ public class ClientCnx extends PulsarHandler {
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
         super.channelActive(ctx);
+        /*String sniPeer = System.getProperty("sniHost");
+        String sniPort = System.getProperty("sniPort");
+        String cmd = "CONNECT " + sniPeer + ":" + sniPort + " HTTP/1.1\r\n";
+        log.info("sending HTTP CONNECT {}:{} and cmd={}", sniPeer, sniPort, cmd);
+        ByteBuf buf = Unpooled.wrappedBuffer(cmd.getBytes());
+        ctx.writeAndFlush(buf).addListener(future -> {
+            if (future.isSuccess()) {
+                log.info("Complete: {}", future.isSuccess());
+                state = State.SentConnectFrame;
+            } else {
+                log.warn("Error during handshake", future.cause());
+                ctx.close();
+            }
+        });*/
+    
+        
         this.timeoutTask = this.eventLoopGroup.scheduleAtFixedRate(() -> checkRequestTimeout(), operationTimeoutMs,
                 operationTimeoutMs, TimeUnit.MILLISECONDS);
 
