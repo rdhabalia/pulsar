@@ -220,6 +220,7 @@ class OpAddEntry extends SafeRunnable implements AddCallback, CloseCallback {
 
     private void updateLatency() {
         ml.mbean.addAddEntryLatencySample(System.nanoTime() - startTime, TimeUnit.NANOSECONDS);
+        ml.mbean.addLedgerAddEntryLatencySample(System.nanoTime() - lastInitTime, TimeUnit.NANOSECONDS);
     }
 
     /**
@@ -291,7 +292,6 @@ class OpAddEntry extends SafeRunnable implements AddCallback, CloseCallback {
         addOpCount = -1;
         closeWhenDone = false;
         entryId = -1;
-        startTime = -1;
         lastInitTime = -1;
         recyclerHandle.recycle(this);
     }
