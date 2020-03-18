@@ -26,7 +26,11 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslHandler;
+import lombok.Getter;
+import lombok.Setter;
 
+import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.util.ObjectCache;
@@ -39,9 +43,14 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
     public static final String TLS_HANDLER = "tls";
 
     private final Supplier<ClientCnx> clientCnxSupplier;
+    @Getter
     private final boolean tlsEnabled;
 
     private final Supplier<SslContext> sslContextSupplier;
+    @Setter
+    private String sniHostName;
+    @Setter
+    private int sniHostPort;
 
     private static final long TLS_CERTIFICATE_CACHE_MILLIS = TimeUnit.MINUTES.toMillis(1);
 
@@ -76,7 +85,10 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
     @Override
     public void initChannel(SocketChannel ch) throws Exception {
         if (tlsEnabled) {
-            ch.pipeline().addLast(TLS_HANDLER, sslContextSupplier.get().newHandler(ch.alloc()));
+            SslHandler handler = StringUtils.isNotBlank(sniHostName) ? 
+                    sslContextSupplier.get().newHandler(ch.alloc(), sniHostName, sniHostPort)
+                    : sslContextSupplier.get().newHandler(ch.alloc());
+            ch.pipeline().addLast(TLS_HANDLER, handler);
             ch.pipeline().addLast("ByteBufPairEncoder", ByteBufPair.COPYING_ENCODER);
         } else {
             ch.pipeline().addLast("ByteBufPairEncoder", ByteBufPair.ENCODER);
