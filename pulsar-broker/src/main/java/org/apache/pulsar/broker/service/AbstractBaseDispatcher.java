@@ -69,11 +69,63 @@ public abstract class AbstractBaseDispatcher implements Dispatcher {
      *            an object where the total size in messages and bytes will be returned back to the caller
      */
     public void filterEntriesForConsumer(List<Entry> entries, EntryBatchSizes batchSizes,
-             SendMessageInfo sendMessageInfo, EntryBatchIndexesAcks indexesAcks, ManagedCursor cursor) {
+            SendMessageInfo sendMessageInfo, EntryBatchIndexesAcks indexesAcks, ManagedCursor cursor) {
+        updateEntriesWithMetadata(entries);
+        updateMessageInfoForConsumer(entries, batchSizes, sendMessageInfo, indexesAcks, cursor);
+    }
+
+    /**
+     * Updates MessageInfo ({@link SendMessageInfo}, {@link EntryBatchIndexesAcks}) before dispatching entries.
+     * 
+     * @param entries
+     * @param batchSizes
+     * @param sendMessageInfo
+     * @param indexesAcks
+     * @param cursor
+     */
+    private void updateMessageInfoForConsumer(List<Entry> entries, EntryBatchSizes batchSizes,
+            SendMessageInfo sendMessageInfo, EntryBatchIndexesAcks indexesAcks, ManagedCursor cursor) {
         int totalMessages = 0;
         long totalBytes = 0;
         int totalChunkedMessages = 0;
 
+        for (int i = 0, entriesSize = entries.size(); i < entriesSize; i++) {
+            Entry entry = entries.get(i);
+            if (entry == null) {
+                continue;
+            }
+
+            int batchSize = entry.getNumberOfBatchMessages();
+            totalMessages += (batchSize > 0 ? batchSize : 1); // default 1 if entry is not updated with metadata.
+            totalBytes += (entry.getTotalSizeInBytes() > 0 ? entry.getTotalSizeInBytes() : 0);
+            totalChunkedMessages += (entry.getTotalChunkedMessages() > 0 ? entry.getTotalChunkedMessages() : 0);
+            batchSizes.setBatchSize(i, batchSize);
+            entry.setNumberOfBatchMessages(batchSize);
+            if (indexesAcks != null && cursor != null) {
+                long[] ackSet = cursor
+                        .getDeletedBatchIndexesAsLongArray(PositionImpl.get(entry.getLedgerId(), entry.getEntryId()));
+                if (ackSet != null) {
+                    indexesAcks.setIndexesAcks(i, Pair.of(batchSize, ackSet));
+                } else {
+                    indexesAcks.setIndexesAcks(i, null);
+                }
+            }
+        }
+
+        sendMessageInfo.setTotalMessages(totalMessages);
+        sendMessageInfo.setTotalBytes(totalBytes);
+        sendMessageInfo.setTotalChunkedMessages(totalChunkedMessages);
+    }
+
+    /**
+     * Update Entries with the metadata (batch-size, total-bytes) of each entry
+     *
+     * @param entries
+     * @return
+     */
+    protected int updateEntriesWithMetadata(List<Entry> entries) {
+
+        int totalBatchMessages = 0;
         for (int i = 0, entriesSize = entries.size(); i < entriesSize; i++) {
             Entry entry = entries.get(i);
             if (entry == null) {
@@ -107,26 +159,17 @@ public abstract class AbstractBaseDispatcher implements Dispatcher {
                 }
 
                 int batchSize = msgMetadata.getNumMessagesInBatch();
-                totalMessages += batchSize;
-                totalBytes += metadataAndPayload.readableBytes();
-                totalChunkedMessages += msgMetadata.hasChunkId() ? 1: 0;
-                batchSizes.setBatchSize(i, batchSize);
-                if (indexesAcks != null && cursor != null) {
-                    long[] ackSet = cursor.getDeletedBatchIndexesAsLongArray(PositionImpl.get(entry.getLedgerId(), entry.getEntryId()));
-                    if (ackSet != null) {
-                        indexesAcks.setIndexesAcks(i, Pair.of(batchSize, ackSet));
-                    } else {
-                        indexesAcks.setIndexesAcks(i,null);
-                    }
-                }
+                totalBatchMessages += batchSize;
+                int totalSizeInBytes = metadataAndPayload.readableBytes();
+                int totalChunkedMessages = msgMetadata.hasChunkId() ? 1 : 0;
+                entry.setNumberOfBatchMessages(batchSize);
+                entry.setTotalSizeInBytes(totalSizeInBytes);
+                entry.setTotalChunkedMessages(totalChunkedMessages);
             } finally {
                 msgMetadata.recycle();
             }
         }
-
-        sendMessageInfo.setTotalMessages(totalMessages);
-        sendMessageInfo.setTotalBytes(totalBytes);
-        sendMessageInfo.setTotalChunkedMessages(totalChunkedMessages);
+        return totalBatchMessages;
     }
 
     private void processReplicatedSubscriptionSnapshot(PositionImpl pos, ByteBuf headersAndPayload) {

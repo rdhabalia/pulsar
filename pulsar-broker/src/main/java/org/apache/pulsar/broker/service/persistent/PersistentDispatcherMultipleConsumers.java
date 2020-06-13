@@ -491,6 +491,8 @@ public class PersistentDispatcherMultipleConsumers extends AbstractDispatcherMul
         int start = 0;
         long totalMessagesSent = 0;
         long totalBytesSent = 0;
+        int totalMessages = updateEntriesWithMetadata(entries);
+        int avgBatchSizePerMsg = totalMessages > 0 ? Math.max(totalMessages / entries.size(), 1) : 1;
 
         while (entriesToDispatch > 0 && totalAvailablePermits > 0 && isAtleastOneConsumerAvailable()) {
             Consumer c = getNextConsumer();
@@ -508,9 +510,10 @@ public class PersistentDispatcherMultipleConsumers extends AbstractDispatcherMul
                 log.debug("[{}-{}] consumer is not writable. dispatching only 1 message to {} ", topic.getName(), name,
                         c);
             }
-            int messagesForC = Math.min(
-                    Math.min(entriesToDispatch, availablePermits),
+
+            int messagesForC = Math.min(Math.min(entriesToDispatch, availablePermits),
                     serviceConfig.getDispatcherMaxRoundRobinBatchSize());
+            messagesForC = Math.max(messagesForC / avgBatchSizePerMsg, 1);
 
             if (messagesForC > 0) {
 
