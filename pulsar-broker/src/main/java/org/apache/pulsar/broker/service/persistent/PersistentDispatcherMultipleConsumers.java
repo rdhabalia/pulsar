@@ -94,6 +94,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractDispatcherMul
             AtomicIntegerFieldUpdater.newUpdater(PersistentDispatcherMultipleConsumers.class, "totalAvailablePermits");
     protected volatile int totalAvailablePermits = 0;
     private volatile int readBatchSize;
+    private final int maxReadBatchSize;
     private final Backoff readFailureBackoff = new Backoff(15, TimeUnit.SECONDS, 1, TimeUnit.MINUTES, 0, TimeUnit.MILLISECONDS);
     private static final AtomicIntegerFieldUpdater<PersistentDispatcherMultipleConsumers> TOTAL_UNACKED_MESSAGES_UPDATER =
             AtomicIntegerFieldUpdater.newUpdater(PersistentDispatcherMultipleConsumers.class, "totalUnackedMessages");
@@ -119,6 +120,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractDispatcherMul
                 ? new InMemoryRedeliveryTracker()
                 : RedeliveryTrackerDisabled.REDELIVERY_TRACKER_DISABLED;
         this.readBatchSize = serviceConfig.getDispatcherMaxReadBatchSize();
+        this.maxReadBatchSize = readBatchSize;
         this.initializeDispatchRateLimiterIfNeeded(Optional.empty());
     }
 
@@ -552,6 +554,9 @@ public class PersistentDispatcherMultipleConsumers extends AbstractDispatcherMul
         }
 
         if (entriesToDispatch > 0) {
+            // Broker has to throw away already read extra messages. adding entry to replay-bucket makes dispatch
+            // slower. so,reduce batch size to avoid reading extra messages
+            readBatchSize = Math.max((maxReadBatchSize - entriesToDispatch), (int) (maxReadBatchSize * 0.10));
             if (log.isDebugEnabled()) {
                 log.debug("[{}] No consumers found with available permits, storing {} positions for later replay", name,
                         entries.size() - start);
@@ -560,6 +565,11 @@ public class PersistentDispatcherMultipleConsumers extends AbstractDispatcherMul
                 messagesToRedeliver.add(entry.getLedgerId(), entry.getEntryId());
                 entry.release();
             });
+        } else {
+            // if all entries have been dispatched successfully then make sure increase readBatchSize by 10% for next round
+            // incase if it was reduced earlier
+            readBatchSize = ((maxReadBatchSize - readBatchSize) < 10) ? maxReadBatchSize
+                    : (readBatchSize + (int) (maxReadBatchSize * 0.10));
         }
         readMoreEntries();
     }
