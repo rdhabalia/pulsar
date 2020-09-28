@@ -3215,5 +3215,78 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         entries.forEach(e -> e.release());
     }
 
+    @Test
+    void testMarkDelete() throws Exception {
+        ManagedLedgerFactoryConfig config = new ManagedLedgerFactoryConfig();
+        config.setMaxCacheSize(0);
+        factory = new ManagedLedgerFactoryImpl(bkc, bkc.getZkHandle(), config);
+        ManagedLedger ledger = factory.open("my_test_ledger", new ManagedLedgerConfig().setMaxEntriesPerLedger(1000).setUnackedRangesOpenCacheSetEnabled(false));
+
+        ManagedCursorImpl c1 = (ManagedCursorImpl) ledger.openCursor("c1");
+
+        int count = 100;
+        for(int i =0;i<count;i++) {
+            ledger.addEntry(("entry-" + i).getBytes(Encoding));            
+        }
+        
+
+        int firstRead=12;
+        List<Entry> entries = c1.readEntries(count);
+        Position p;
+        for(int i=0;i<firstRead;i++) {
+            Entry e = entries.get(i);
+            p = e.getPosition();
+            c1.delete(p);
+            e.release();
+        }
+        
+        PositionImpl mp1 = (PositionImpl) c1.getMarkDeletedPosition();
+        System.out.println(mp1);
+
+        int secondRead = count - firstRead;
+        int startDelete = 54;
+        List<Entry> unAcked = Lists.newArrayList();
+        for(int i=firstRead;i<count;i++) {
+            Entry e = entries.get(i);
+            p = e.getPosition();
+            if(i > startDelete) {
+                if(i%2==0) {
+                    c1.delete(p);
+                }else {
+                    unAcked.add(e);
+                    continue;
+                }
+            }
+            e.release();
+        }
+
+        Position mp2 = c1.getMarkDeletedPosition();
+        System.out.println(mp2);
+        
+        String d1 = c1.getIndividuallyDeletedMessages();
+        System.out.println(d1);
+        
+        int size = unAcked.size();
+        for(int i=0;i<size;i++) {
+            Entry e = unAcked.get(i);
+            p = e.getPosition();
+            c1.delete(p);
+            e.release();
+        }
+        
+        Position mp3 = c1.getMarkDeletedPosition();
+        
+        String d2 = c1.getIndividuallyDeletedMessages();
+        
+        for(int i =firstRead ; i<=secondRead ;i++) {
+            c1.delete( new PositionImpl(mp1.getLedgerId(), i)); 
+        }
+        
+        String d3 = c1.getIndividuallyDeletedMessages();
+        
+        System.out.println(d1);
+        
+    }
+
     private static final Logger log = LoggerFactory.getLogger(ManagedCursorTest.class);
 }
