@@ -87,7 +87,7 @@ public class SchemasResource extends SchemasResourceBase {
         @PathParam("tenant") String tenant,
         @PathParam("cluster") String cluster,
         @PathParam("namespace") String namespace,
-        @PathParam("topic") String topic,
+        @PathParam("topic") @Encoded String topic,
         @QueryParam("authoritative") @DefaultValue("false") boolean authoritative,
         @Suspended final AsyncResponse response
     ) {
@@ -112,7 +112,7 @@ public class SchemasResource extends SchemasResourceBase {
         @PathParam("tenant") String tenant,
         @PathParam("cluster") String cluster,
         @PathParam("namespace") String namespace,
-        @PathParam("topic") String topic,
+        @PathParam("topic") @Encoded String topic,
         @PathParam("version") @Encoded String version,
         @QueryParam("authoritative") @DefaultValue("false") boolean authoritative,
         @Suspended final AsyncResponse response
@@ -138,7 +138,7 @@ public class SchemasResource extends SchemasResourceBase {
             @PathParam("tenant") String tenant,
             @PathParam("cluster") String cluster,
             @PathParam("namespace") String namespace,
-            @PathParam("topic") String topic,
+            @PathParam("topic") @Encoded String topic,
             @QueryParam("authoritative") @DefaultValue("false") boolean authoritative,
             @Suspended final AsyncResponse response
     ) {
@@ -162,7 +162,7 @@ public class SchemasResource extends SchemasResourceBase {
         @PathParam("tenant") String tenant,
         @PathParam("cluster") String cluster,
         @PathParam("namespace") String namespace,
-        @PathParam("topic") String topic,
+        @PathParam("topic") @Encoded String topic,
         @QueryParam("authoritative") @DefaultValue("false") boolean authoritative,
         @Suspended final AsyncResponse response
     ) {
@@ -189,7 +189,7 @@ public class SchemasResource extends SchemasResourceBase {
         @PathParam("tenant") String tenant,
         @PathParam("cluster") String cluster,
         @PathParam("namespace") String namespace,
-        @PathParam("topic") String topic,
+        @PathParam("topic") @Encoded String topic,
         @ApiParam(
             value = "A JSON value presenting a schema playload. An example of the expected schema can be found down"
                 + " here.",
@@ -225,7 +225,7 @@ public class SchemasResource extends SchemasResourceBase {
             @PathParam("tenant") String tenant,
             @PathParam("cluster") String cluster,
             @PathParam("namespace") String namespace,
-            @PathParam("topic") String topic,
+            @PathParam("topic") @Encoded String topic,
             @ApiParam(
                     value = "A JSON value presenting a schema playload."
                             + " An example of the expected schema can be found down here.",
@@ -263,7 +263,7 @@ public class SchemasResource extends SchemasResourceBase {
             @PathParam("tenant") String tenant,
             @PathParam("cluster") String cluster,
             @PathParam("namespace") String namespace,
-            @PathParam("topic") String topic,
+            @PathParam("topic") @Encoded String topic,
             @ApiParam(
                     value = "A JSON value presenting a schema playload."
                             + " An example of the expected schema can be found down here.",

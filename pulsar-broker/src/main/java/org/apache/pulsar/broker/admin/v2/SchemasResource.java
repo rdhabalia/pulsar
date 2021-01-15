@@ -86,7 +86,7 @@ public class SchemasResource extends SchemasResourceBase {
     public void getSchema(
         @PathParam("tenant") String tenant,
         @PathParam("namespace") String namespace,
-        @PathParam("topic") String topic,
+        @PathParam("topic") @Encoded String topic,
         @QueryParam("authoritative") @DefaultValue("false") boolean authoritative,
         @Suspended final AsyncResponse response
     ) {
@@ -110,7 +110,7 @@ public class SchemasResource extends SchemasResourceBase {
     public void getSchema(
         @PathParam("tenant") String tenant,
         @PathParam("namespace") String namespace,
-        @PathParam("topic") String topic,
+        @PathParam("topic") @Encoded String topic,
         @PathParam("version") @Encoded String version,
         @QueryParam("authoritative") @DefaultValue("false") boolean authoritative,
         @Suspended final AsyncResponse response
@@ -135,7 +135,7 @@ public class SchemasResource extends SchemasResourceBase {
     public void getAllSchemas(
             @PathParam("tenant") String tenant,
             @PathParam("namespace") String namespace,
-            @PathParam("topic") String topic,
+            @PathParam("topic") @Encoded String topic,
             @QueryParam("authoritative") @DefaultValue("false") boolean authoritative,
             @Suspended final AsyncResponse response
     ) {
@@ -158,7 +158,7 @@ public class SchemasResource extends SchemasResourceBase {
     public void deleteSchema(
         @PathParam("tenant") String tenant,
         @PathParam("namespace") String namespace,
-        @PathParam("topic") String topic,
+        @PathParam("topic") @Encoded String topic,
         @QueryParam("authoritative") @DefaultValue("false") boolean authoritative,
         @Suspended final AsyncResponse response
     ) {
@@ -184,7 +184,7 @@ public class SchemasResource extends SchemasResourceBase {
     public void postSchema(
         @PathParam("tenant") String tenant,
         @PathParam("namespace") String namespace,
-        @PathParam("topic") String topic,
+        @PathParam("topic") @Encoded String topic,
         @ApiParam(
             value = "A JSON value presenting a schema playload. An example of the expected schema can be found down"
                 + " here.",
@@ -219,7 +219,7 @@ public class SchemasResource extends SchemasResourceBase {
     public void testCompatibility(
             @PathParam("tenant") String tenant,
             @PathParam("namespace") String namespace,
-            @PathParam("topic") String topic,
+            @PathParam("topic") @Encoded String topic,
             @ApiParam(
                     value = "A JSON value presenting a schema playload."
                             + " An example of the expected schema can be found down here.",
@@ -256,7 +256,7 @@ public class SchemasResource extends SchemasResourceBase {
     public void getVersionBySchema(
             @PathParam("tenant") String tenant,
             @PathParam("namespace") String namespace,
-            @PathParam("topic") String topic,
+            @PathParam("topic") @Encoded String topic,
             @ApiParam(
                     value = "A JSON value presenting a schema playload."
                             + " An example of the expected schema can be found down here.",
