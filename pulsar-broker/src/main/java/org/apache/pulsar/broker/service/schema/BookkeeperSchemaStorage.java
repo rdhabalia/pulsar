@@ -37,7 +37,9 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 import javax.validation.constraints.NotNull;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
@@ -129,7 +131,7 @@ public class BookkeeperSchemaStorage implements SchemaStorage {
     @Override
     public CompletableFuture<List<CompletableFuture<StoredSchema>>> getAll(String key) {
         CompletableFuture<List<CompletableFuture<StoredSchema>>> result = new CompletableFuture<>();
-        getSchemaLocator(getSchemaPath(key)).thenAccept(locator -> {
+        getLocator(key).thenAccept(locator -> {
             if (log.isDebugEnabled()) {
                 log.debug("[{}] Get all schemas - locator: {}", key, locator);
             }
@@ -154,9 +156,42 @@ public class BookkeeperSchemaStorage implements SchemaStorage {
         return result;
     }
 
+    private CompletableFuture<Optional<LocatorEntry>> getLocator(String key) {
+        return getSchemaLocator(getSchemaPath(key));
+    }
+
+    public void clearLocatorCache(String key) {
+        localZkCache.invalidate(getSchemaPath(key));
+    }
+
+    @VisibleForTesting
+    List<Long> getSchemaLedgerList(String key) throws IOException {
+        Optional<LocatorEntry> locatorEntry = null;
+        try {
+            locatorEntry = getLocator(key).get();
+        } catch (Exception e) {
+            log.warn("Failed to get list of schema-storage ledger for {}", key,
+                    (e instanceof ExecutionException ? e.getCause() : e));
+            throw new IOException("Failed to get schema ledger for" + key);
+        }
+        LocatorEntry entry = locatorEntry.orElse(null);
+        return entry != null ? entry.locator.getIndexList().stream().map(i -> i.getPosition().getLedgerId())
+                .collect(Collectors.toList()) : null;
+    }
+
+    @VisibleForTesting
+    BookKeeper getBookKeeper() {
+        return bookKeeper;
+    }
+
+    @Override
+    public CompletableFuture<SchemaVersion> delete(String key, boolean forcefully) {
+        return deleteSchema(key, forcefully).thenApply(LongSchemaVersion::new);
+    }
+
     @Override
     public CompletableFuture<SchemaVersion> delete(String key) {
-        return deleteSchema(key).thenApply(LongSchemaVersion::new);
+        return delete(key, false);
     }
 
     @NotNull
@@ -350,9 +385,10 @@ public class BookkeeperSchemaStorage implements SchemaStorage {
     }
 
     @NotNull
-    private CompletableFuture<Long> deleteSchema(String schemaId) {
-        return getSchema(schemaId).thenCompose(schemaAndVersion -> {
-            if (isNull(schemaAndVersion)) {
+    private CompletableFuture<Long> deleteSchema(String schemaId, boolean forceFully) {
+        return (forceFully ? CompletableFuture.completedFuture(null) : getSchema(schemaId))
+                .thenCompose(schemaAndVersion -> {
+            if (!forceFully && isNull(schemaAndVersion)) {
                 return completedFuture(null);
             } else {
                 // The version is only for the compatibility of the current interface
@@ -373,6 +409,7 @@ public class BookkeeperSchemaStorage implements SchemaStorage {
                                 } catch (InterruptedException | KeeperException e) {
                                     future.completeExceptionally(e);
                                 }
+                                clearLocatorCache(getSchemaPath(schemaId));
                                 future.complete(version);
                             }
                         }, null);
@@ -657,6 +694,6 @@ public class BookkeeperSchemaStorage implements SchemaStorage {
         if (entryId != -1) {
             message += " - entry=" + entryId;
         }
-        return new IOException(message);
+        return new IOException(message, new org.apache.bookkeeper.client.api.BKException(rc));
     }
 }

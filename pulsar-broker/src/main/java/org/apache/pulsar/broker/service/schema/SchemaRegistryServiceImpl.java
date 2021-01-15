@@ -20,7 +20,6 @@ package org.apache.pulsar.broker.service.schema;
 
 import static java.util.Objects.isNull;
 import static java.util.concurrent.CompletableFuture.completedFuture;
-import static org.apache.pulsar.broker.service.schema.SchemaRegistryServiceImpl.Functions.toMap;
 import static org.apache.pulsar.broker.service.schema.SchemaRegistryServiceImpl.Functions.toPairs;
 import static org.apache.pulsar.common.policies.data.SchemaCompatibilityStrategy.BACKWARD_TRANSITIVE;
 import static org.apache.pulsar.common.policies.data.SchemaCompatibilityStrategy.FORWARD_TRANSITIVE;
@@ -40,6 +39,8 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import javax.validation.constraints.NotNull;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.bookkeeper.client.api.BKException;
 import org.apache.bookkeeper.common.concurrent.FutureUtils;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.pulsar.broker.service.schema.exceptions.IncompatibleSchemaException;
@@ -54,6 +55,7 @@ import org.apache.pulsar.common.schema.LongSchemaVersion;
 import org.apache.pulsar.common.schema.SchemaType;
 import org.apache.pulsar.common.util.FutureUtil;
 
+@Slf4j
 public class SchemaRegistryServiceImpl implements SchemaRegistryService {
     private static HashFunction hashFunction = Hashing.sha256();
     private final Map<SchemaType, SchemaCompatibilityCheck> compatibilityChecks;
@@ -176,7 +178,12 @@ public class SchemaRegistryServiceImpl implements SchemaRegistryService {
 
     @Override
     public CompletableFuture<SchemaVersion> deleteSchemaStorage(String schemaId) {
-        return schemaStorage.delete(schemaId);
+        return deleteSchemaStorage(schemaId, false);
+    }
+
+    @Override
+    public CompletableFuture<SchemaVersion> deleteSchemaStorage(String schemaId, boolean forcefully) {
+        return schemaStorage.delete(schemaId, forcefully);
     }
 
     @Override
@@ -345,20 +352,59 @@ public class SchemaRegistryServiceImpl implements SchemaRegistryService {
     }
 
     public CompletableFuture<List<SchemaAndMetadata>> trimDeletedSchemaAndGetList(String schemaId) {
-        return getAllSchemas(schemaId).thenCompose(FutureUtils::collect).thenApply(list -> {
-            // Trim the prefix of schemas before the latest delete.
-            int lastIndex = list.size() - 1;
-            for (int i = lastIndex; i >= 0; i--) {
-                if (list.get(i).schema.isDeleted()) {
-                    if (i == lastIndex) { // if the latest schema is a delete, there's no schemas to compare
-                        return Collections.emptyList();
-                    } else {
-                        return list.subList(i + 1, list.size());
+
+        CompletableFuture<List<SchemaAndMetadata>> schemaResult = new CompletableFuture<>();
+        CompletableFuture<List<CompletableFuture<SchemaAndMetadata>>> schemaFutureList = getAllSchemas(schemaId);
+        schemaFutureList.thenCompose(FutureUtils::collect).handle((schemaList, ex) -> {
+            List<SchemaAndMetadata> list = ex != null ? new ArrayList<>() : schemaList;
+            if (ex != null) {
+                int code = ex.getCause() != null && (ex.getCause().getCause() instanceof BKException)
+                        ? ((BKException) ex.getCause().getCause()).getCode()
+                        : 0;
+                // if error is not recoverable then fail the request.
+                if (code != BKException.Code.NoSuchLedgerExistsException
+                        && code != BKException.Code.NoSuchEntryException) {
+                    schemaResult.completeExceptionally(ex.getCause());
+                    return null;
+                }
+                // clean the schema list for recoverable and delete the schema from zk
+                schemaFutureList.getNow(Collections.emptyList()).forEach(schemaFuture -> {
+                    if (!schemaFuture.isCompletedExceptionally()) {
+                        list.add(schemaFuture.getNow(null));
+                        return;
                     }
+                });
+                trimDeletedSchemaAndGetList(list);
+                // clean up the broken schema from zk
+                deleteSchemaStorage(schemaId, true).handle((sv, th) -> {
+                    log.info("Deletion of {} {}", schemaId,
+                            (th == null ? "successful" : "failed, " + th.getCause().getMessage()));
+                    schemaResult.complete(list);
+                    return null;
+                });
+                return null;
+            }
+            // trim the deleted schema and return the result if schema is retrieved successfully
+            trimDeletedSchemaAndGetList(list);
+            schemaResult.complete(list);
+            return null;
+        });
+        return schemaResult;
+    }
+
+    private List<SchemaAndMetadata> trimDeletedSchemaAndGetList(List<SchemaAndMetadata> list) {
+        // Trim the prefix of schemas before the latest delete.
+        int lastIndex = list.size() - 1;
+        for (int i = lastIndex; i >= 0; i--) {
+            if (list.get(i).schema.isDeleted()) {
+                if (i == lastIndex) { // if the latest schema is a delete, there's no schemas to compare
+                    return Collections.emptyList();
+                } else {
+                    return list.subList(i + 1, list.size());
                 }
             }
-            return list;
-        });
+        }
+        return list;
     }
 
     interface Functions {
