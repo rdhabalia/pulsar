@@ -63,6 +63,7 @@ public class TenantsBase extends PulsarWebResource {
             validateSuperUserAccess();
         } catch (Exception e) {
             asyncResponse.resume(e);
+            return;
         }
         tenantResources().getChildren(path(POLICIES)).whenComplete((tenants, e) -> {
             if (e != null) {
@@ -95,8 +96,10 @@ public class TenantsBase extends PulsarWebResource {
                 asyncResponse.resume(new RestException(Status.INTERNAL_SERVER_ERROR, "Failed to get Tenant"));
                 return;
             }
-            asyncResponse
-                    .resume(tenantInfo.orElseThrow(() -> new RestException(Status.NOT_FOUND, "Tenant does not exist")));
+            boolean response = tenantInfo.isPresent() ? asyncResponse.resume(tenantInfo.get())
+                    : asyncResponse.resume(new RestException(Status.NOT_FOUND, "Tenant does not exist"));
+            asyncResponse.resume(new RestException(Status.NOT_FOUND, "Tenant does not exist"));
+            return;
         });
     }
 
@@ -121,8 +124,10 @@ public class TenantsBase extends PulsarWebResource {
         } catch (IllegalArgumentException e) {
             log.warn("[{}] Failed to create tenant with invalid name {}", clientAppId(), tenant, e);
             asyncResponse.resume(new RestException(Status.PRECONDITION_FAILED, "Tenant name is not valid"));
+            return;
         } catch (Exception e) {
             asyncResponse.resume(e);
+            return;
         }
 
         tenantResources().getChildren(path(POLICIES)).whenComplete((tenants, e) -> {
@@ -142,7 +147,7 @@ public class TenantsBase extends PulsarWebResource {
                     return;
                 }
             }
-            tenantResources().create(path(POLICIES, tenant), tenantInfo).thenAccept((r) -> {
+            tenantResources().createAsync(path(POLICIES, tenant), tenantInfo).thenAccept((r) -> {
                 log.info("[{}] Created tenant {}", clientAppId(), tenant);
                 asyncResponse.resume(Response.noContent().build());
             }).exceptionally(ex -> {
@@ -165,9 +170,14 @@ public class TenantsBase extends PulsarWebResource {
     public void updateTenant(@Suspended final AsyncResponse asyncResponse,
             @ApiParam(value = "The tenant name") @PathParam("tenant") String tenant,
             @ApiParam(value = "TenantInfo") TenantInfo newTenantAdmin) {
-        validateSuperUserAccess();
-        validatePoliciesReadOnlyAccess();
-        validateClusters(newTenantAdmin);
+        try {
+            validateSuperUserAccess();
+            validatePoliciesReadOnlyAccess();
+            validateClusters(newTenantAdmin);
+        } catch (Exception e) {
+            asyncResponse.resume(e);
+            return;
+        }
 
         final String clientAddId = clientAppId();
         tenantResources().getAsync(path(POLICIES, tenant)).thenAccept(tenantAdmin -> {
@@ -177,8 +187,8 @@ public class TenantsBase extends PulsarWebResource {
             }
             TenantInfo oldTenantAdmin = tenantAdmin.get();
             Set<String> newClusters = new HashSet<>(newTenantAdmin.getAllowedClusters());
-            checkActiveNamespace(tenant, oldTenantAdmin.getAllowedClusters(), newClusters).thenApply(r -> {
-                tenantResources().set(path(POLICIES, tenant), old -> {
+            canUpdateCluster(tenant, oldTenantAdmin.getAllowedClusters(), newClusters).thenApply(r -> {
+                tenantResources().setAsync(path(POLICIES, tenant), old -> {
                     return newTenantAdmin;
                 }).thenAccept(done -> {
                     log.info("Successfully updated tenant info {}", tenant);
@@ -208,8 +218,13 @@ public class TenantsBase extends PulsarWebResource {
             @ApiResponse(code = 409, message = "The tenant still has active namespaces") })
     public void deleteTenant(@Suspended final AsyncResponse asyncResponse,
             @PathParam("tenant") @ApiParam(value = "The tenant name") String tenant) {
-        validateSuperUserAccess();
-        validatePoliciesReadOnlyAccess();
+        try {
+            validateSuperUserAccess();
+            validatePoliciesReadOnlyAccess();
+        } catch (Exception e) {
+            asyncResponse.resume(e);
+            return;
+        }
 
         hasActiveNamespace(tenant).thenAccept(ns -> {
             try {
@@ -268,32 +283,5 @@ public class TenantsBase extends PulsarWebResource {
             log.warn("[{}] Failed to validate due to clusters {} do not exist", clientAppId(), nonexistentClusters);
             throw new RestException(Status.PRECONDITION_FAILED, "Clusters do not exist");
         }
-    }
-
-    private CompletableFuture<Void> checkActiveNamespace(String tenant, Set<String> oldClusters,
-            Set<String> newClusters) {
-        List<CompletableFuture<Void>> activeNamespaceFuture = Lists.newArrayList();
-        for (String cluster : oldClusters) {
-            if (Constants.GLOBAL_CLUSTER.equals(cluster) || newClusters.contains(cluster)) {
-                continue;
-            }
-            CompletableFuture<Void> checkNs = new CompletableFuture<>();
-            activeNamespaceFuture.add(checkNs);
-            tenantResources().getChildren(path(POLICIES, tenant, cluster)).whenComplete((activeNamespaces, ex) -> {
-                if (ex != null) {
-                    log.warn("Failed to get namespaces under {}-{}, {}", tenant, cluster, ex.getCause().getMessage());
-                    checkNs.completeExceptionally(ex.getCause());
-                    return;
-                }
-                if (activeNamespaces.size() > 0) {
-                    log.warn("{}/{} Active-namespaces {}", tenant, cluster, activeNamespaces);
-                    checkNs.completeExceptionally(new RestException(Status.PRECONDITION_FAILED, "Active namespaces"));
-                    return;
-                }
-                checkNs.complete(null);
-            });
-        }
-        return activeNamespaceFuture.isEmpty() ? CompletableFuture.completedFuture(null)
-                : FutureUtil.waitForAll(activeNamespaceFuture);
     }
 }

@@ -28,7 +28,13 @@ import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.metadata.api.MetadataCache;
 import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 
-
+/**
+ * 
+ * Base class for all configuration resources to access configurations from metadata-store.
+ *
+ * @param <T>
+ *            type of configuration-resources.
+ */
 public class BaseResources<T> {
 
     @Getter
@@ -48,10 +54,9 @@ public class BaseResources<T> {
     public Optional<T> get(String path) throws PulsarServerException {
         try {
             return getAsync(path).get();
-        } catch (InterruptedException e) {
-            throw new PulsarServerException("Failed to get data from " + path, e);
-        } catch (ExecutionException e) {
-            throw new PulsarServerException("Failed to get data from " + path, e.getCause());
+        } catch (Exception e) {
+            throw new PulsarServerException("Failed to get data from " + path,
+                    (e instanceof ExecutionException) ? e.getCause() : e);
         }
     }
 
@@ -59,19 +64,55 @@ public class BaseResources<T> {
         return cache.get(path);
     }
 
-    public CompletableFuture<Void> set(String path, Function<T, T> modifyFunction) {
+    public void set(String path, Function<T, T> modifyFunction) throws PulsarServerException {
+        try {
+            setAsync(path, modifyFunction).get();
+        } catch (Exception e) {
+            throw new PulsarServerException("Failed to set data for " + path,
+                    (e instanceof ExecutionException) ? e.getCause() : e);
+        }
+    }
+
+    public CompletableFuture<Void> setAsync(String path, Function<T, T> modifyFunction) {
         return cache.readModifyUpdate(path, modifyFunction);
     }
 
-    public CompletableFuture<Void> create(String path, T data) {
+    public void create(String path, T data) throws PulsarServerException {
+        try {
+            createAsync(path, data).get();
+        } catch (Exception e) {
+            throw new PulsarServerException("Failed to create " + path,
+                    (e instanceof ExecutionException) ? e.getCause() : e);
+        }
+    }
+
+    public CompletableFuture<Void> createAsync(String path, T data) {
         return cache.readModifyUpdateOrCreate(path, t -> data);
+    }
+
+    public void delete(String path) throws PulsarServerException {
+        try {
+            deleteAsync(path).get();
+        } catch (Exception e) {
+            throw new PulsarServerException("Failed to delete " + path,
+                    (e instanceof ExecutionException) ? e.getCause() : e);
+        }
     }
 
     public CompletableFuture<Void> deleteAsync(String path) {
         return cache.delete(path);
     }
 
-    public CompletableFuture<Boolean> exists(String path) {
+    public Boolean exists(String path) throws PulsarServerException {
+        try {
+            return existsAsync(path).get();
+        } catch (Exception e) {
+            throw new PulsarServerException("Failed to check exist " + path,
+                    (e instanceof ExecutionException) ? e.getCause() : e);
+        }
+    }
+
+    public CompletableFuture<Boolean> existsAsync(String path) {
         return cache.exists(path);
     }
 }

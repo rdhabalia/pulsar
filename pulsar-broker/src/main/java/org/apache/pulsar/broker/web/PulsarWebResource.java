@@ -49,6 +49,7 @@ import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.admin.AdminResource;
 import org.apache.pulsar.broker.admin.impl.ClusterResources;
+import org.apache.pulsar.broker.admin.impl.NamespaceResources;
 import org.apache.pulsar.broker.admin.impl.TenantResources;
 import org.apache.pulsar.broker.authentication.AuthenticationDataHttps;
 import org.apache.pulsar.broker.authentication.AuthenticationDataSource;
@@ -73,6 +74,7 @@ import org.apache.pulsar.common.policies.data.TenantOperation;
 import org.apache.pulsar.common.policies.path.PolicyPath;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
+import org.apache.pulsar.metadata.api.MetadataStoreException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -252,7 +254,7 @@ public abstract class PulsarWebResource {
                     (isClientAuthenticated(clientAppId)), clientAppId);
         }
 
-        TenantInfo tenantInfo = pulsar.getTenatResource().get(path(POLICIES, tenant))
+        TenantInfo tenantInfo = pulsar.getPulsarResources().getTenatResources().get(path(POLICIES, tenant))
                 .orElseThrow(() -> new RestException(Status.NOT_FOUND, "Tenant does not exist"));
 
         if (pulsar.getConfiguration().isAuthenticationEnabled() && pulsar.getConfiguration().isAuthorizationEnabled()) {
@@ -308,7 +310,7 @@ public abstract class PulsarWebResource {
     protected void validateClusterForTenant(String tenant, String cluster) {
         TenantInfo tenantInfo;
         try {
-            tenantInfo = pulsar().getTenatResource().get(path(POLICIES, tenant))
+            tenantInfo = pulsar().getPulsarResources().getTenatResources().get(path(POLICIES, tenant))
                     .orElseThrow(() -> new RestException(Status.NOT_FOUND, "Tenant does not exist"));
         } catch (RestException e) {
             log.warn("Failed to get tenant admin data for tenant {}", tenant);
@@ -866,11 +868,15 @@ public abstract class PulsarWebResource {
     }
 
     protected TenantResources tenantResources() {
-        return pulsar().getTenatResource();
+        return pulsar().getPulsarResources().getTenatResources();
     }
 
     protected ClusterResources clusterResources() {
-        return pulsar().getClusterResource();
+        return pulsar().getPulsarResources().getClusterResources();
+    }
+
+    protected NamespaceResources namespaceResources() {
+        return pulsar().getPulsarResources().getNamespaceResources();
     }
 
     public static ObjectMapper jsonMapper() {
@@ -879,7 +885,7 @@ public abstract class PulsarWebResource {
 
     public void validatePoliciesReadOnlyAccess() {
         try {
-            if (clusterResources().exists(AdminResource.POLICIES_READONLY_FLAG_PATH).get()) {
+            if (clusterResources().existsAsync(AdminResource.POLICIES_READONLY_FLAG_PATH).get()) {
                 log.debug("Policies are read-only. Broker cannot do read-write operations");
                 throw new RestException(Status.FORBIDDEN, "Broker is forbidden to do read-write operations");
             }
@@ -917,8 +923,8 @@ public abstract class PulsarWebResource {
                             // created
                             // with the v1 admin format (prop/cluster/ns) and then deleted, so no need to
                             // add it to the list
-                            tenantResources().exists(path(POLICIES, namespace)).thenApply(exist -> {
-                                if (exist) {
+                            namespaceResources().getAsync(path(POLICIES, namespace)).thenApply(data -> {
+                                if (data.isPresent()) {
                                     checkNs.completeExceptionally(new RestException(Status.PRECONDITION_FAILED,
                                             "Tenant has active namespace"));
                                 } else {
@@ -926,8 +932,13 @@ public abstract class PulsarWebResource {
                                 }
                                 return null;
                             }).exceptionally(ex2 -> {
-                                checkNs.completeExceptionally(
-                                        new RestException(Status.INTERNAL_SERVER_ERROR, ex2.getCause()));
+                                if (ex2.getCause() instanceof MetadataStoreException.ContentDeserializationException) {
+                                    // it's not a valid namespace-node
+                                    checkNs.complete(null);
+                                } else {
+                                    checkNs.completeExceptionally(
+                                            new RestException(Status.INTERNAL_SERVER_ERROR, ex2.getCause()));
+                                }
                                 return null;
                             });
                         });
@@ -943,5 +954,32 @@ public abstract class PulsarWebResource {
             return null;
         });
         return activeNamespaceFuture;
+    }
+
+    protected CompletableFuture<Void> canUpdateCluster(String tenant, Set<String> oldClusters,
+            Set<String> newClusters) {
+        List<CompletableFuture<Void>> activeNamespaceFuture = Lists.newArrayList();
+        for (String cluster : oldClusters) {
+            if (Constants.GLOBAL_CLUSTER.equals(cluster) || newClusters.contains(cluster)) {
+                continue;
+            }
+            CompletableFuture<Void> checkNs = new CompletableFuture<>();
+            activeNamespaceFuture.add(checkNs);
+            tenantResources().getChildren(path(POLICIES, tenant, cluster)).whenComplete((activeNamespaces, ex) -> {
+                if (ex != null) {
+                    log.warn("Failed to get namespaces under {}-{}, {}", tenant, cluster, ex.getCause().getMessage());
+                    checkNs.completeExceptionally(ex.getCause());
+                    return;
+                }
+                if (activeNamespaces.size() > 0) {
+                    log.warn("{}/{} Active-namespaces {}", tenant, cluster, activeNamespaces);
+                    checkNs.completeExceptionally(new RestException(Status.PRECONDITION_FAILED, "Active namespaces"));
+                    return;
+                }
+                checkNs.complete(null);
+            });
+        }
+        return activeNamespaceFuture.isEmpty() ? CompletableFuture.completedFuture(null)
+                : FutureUtil.waitForAll(activeNamespaceFuture);
     }
 }

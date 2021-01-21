@@ -141,10 +141,7 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
         doNothing().when(clusters).validateSuperUserAccess();
 
         properties = spy(new Properties());
-        //properties.setServletContext(new MockServletContext());
         properties.setPulsar(pulsar);
-        //doReturn(mockZooKeeper).when(properties).globalZk();
-        //doReturn(configurationCache.propertiesCache()).when(properties).tenantsCache();
         doReturn("test").when(properties).clientAppId();
         doNothing().when(properties).validateSuperUserAccess();
 

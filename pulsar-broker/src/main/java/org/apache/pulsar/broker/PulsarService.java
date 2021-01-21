@@ -68,6 +68,8 @@ import org.apache.pulsar.PulsarVersion;
 import org.apache.pulsar.ZookeeperSessionExpiredHandlers;
 import org.apache.pulsar.broker.admin.AdminResource;
 import org.apache.pulsar.broker.admin.impl.ClusterResources;
+import org.apache.pulsar.broker.admin.impl.NamespaceResources;
+import org.apache.pulsar.broker.admin.impl.PulsarResources;
 import org.apache.pulsar.broker.admin.impl.TenantResources;
 import org.apache.pulsar.broker.authentication.AuthenticationService;
 import org.apache.pulsar.broker.authorization.AuthorizationService;
@@ -214,13 +216,8 @@ public class PulsarService implements AutoCloseable {
     private PrometheusMetricsServlet metricsServlet;
     private List<PrometheusRawMetricsProvider> pendingMetricsProviders;
 
-    private MetadataStoreExtended localMetadataStore;
-
-    @Getter
-    private TenantResources tenatResource;
-    @Getter
-    private ClusterResources clusterResource;
-
+    private MetadataStoreExtended configurationMetadataStore;
+    private PulsarResources pulsarResources;
 
     public enum State {
         Init, Started, Closed
@@ -281,8 +278,8 @@ public class PulsarService implements AutoCloseable {
                 new DefaultThreadFactory("zk-cache-callback"));
     }
 
-    public MetadataStoreExtended createLocalMetadataStore() throws MetadataStoreException {
-        return MetadataStoreExtended.create(config.getZookeeperServers(),
+    public MetadataStoreExtended createConfigurationMetadataStore() throws MetadataStoreException {
+        return MetadataStoreExtended.create(config.getConfigurationStoreServers(),
                 MetadataStoreConfig.builder()
                         .sessionTimeoutMillis((int) config.getZooKeeperSessionTimeoutMillis())
                         .allowReadOnlyOperations(false)
@@ -398,8 +395,8 @@ public class PulsarService implements AutoCloseable {
                 transactionBufferClient.close();
             }
 
-            if (localMetadataStore != null) {
-                localMetadataStore.close();
+            if (configurationMetadataStore != null) {
+                configurationMetadataStore.close();
             }
 
             state = State.Closed;
@@ -464,9 +461,8 @@ public class PulsarService implements AutoCloseable {
                 throw new IllegalArgumentException("brokerServicePort/brokerServicePortTls must be present");
             }
 
-            localMetadataStore = createLocalMetadataStore();
-            tenatResource = new TenantResources(localMetadataStore);
-            clusterResource = new ClusterResources(localMetadataStore);
+            configurationMetadataStore = createConfigurationMetadataStore();
+            pulsarResources = new PulsarResources(configurationMetadataStore);
 
             orderedExecutor = OrderedExecutor.newBuilder()
                     .numThreads(config.getNumOrderedExecutorThreads())
@@ -1380,9 +1376,5 @@ public class PulsarService implements AutoCloseable {
                 brokerConfig.getFunctionsWorkerServiceNarPackage());
         }
         return workerConfig;
-    }
-
-    public MetadataStoreExtended getLocalMetadataStore() {
-        return localMetadataStore;
     }
 }
