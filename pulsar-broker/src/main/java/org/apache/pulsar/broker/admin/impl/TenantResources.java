@@ -16,36 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.pulsar.broker;
+package org.apache.pulsar.broker.admin.impl;
 
-import java.io.IOException;
+import org.apache.pulsar.common.policies.data.TenantInfo;
+import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 
-public class PulsarServerException extends IOException {
-    private static final long serialVersionUID = 1;
-
-    public PulsarServerException(String message) {
-        super(message);
+public class TenantResources extends BaseResources<TenantInfo> {
+    public TenantResources(MetadataStoreExtended store) {
+        super(store, TenantInfo.class);
     }
-
-    public PulsarServerException(Throwable cause) {
-        super(cause);
-    }
-
-    public PulsarServerException(String message, Throwable cause) {
-        super(message, cause);
-    }
-
-	public static class NotFoundException extends PulsarServerException {
-		public NotFoundException(String msg) {
-			super(msg);
-		}
-
-		public NotFoundException(Throwable t) {
-			super(t);
-		}
-
-		public NotFoundException(String msg, Throwable t) {
-			super(msg, t);
-		}
-	}
 }

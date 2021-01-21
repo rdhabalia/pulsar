@@ -43,11 +43,15 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
 import javax.ws.rs.container.AsyncResponse;
+import javax.ws.rs.container.TimeoutHandler;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.Response.Status;
 import javax.ws.rs.core.StreamingOutput;
@@ -137,10 +141,10 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
         doNothing().when(clusters).validateSuperUserAccess();
 
         properties = spy(new Properties());
-        properties.setServletContext(new MockServletContext());
+        //properties.setServletContext(new MockServletContext());
         properties.setPulsar(pulsar);
-        doReturn(mockZooKeeper).when(properties).globalZk();
-        doReturn(configurationCache.propertiesCache()).when(properties).tenantsCache();
+        //doReturn(mockZooKeeper).when(properties).globalZk();
+        //doReturn(configurationCache.propertiesCache()).when(properties).tenantsCache();
         doReturn("test").when(properties).clientAppId();
         doNothing().when(properties).validateSuperUserAccess();
 
@@ -404,7 +408,9 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
 
     @Test
     public void properties() throws Exception {
-        assertEquals(properties.getTenants(), Lists.newArrayList());
+    	TestAsyncResponse responseCtx = new TestAsyncResponse();
+    	properties.getTenants(responseCtx);
+        assertEquals(responseCtx.response, Lists.newArrayList());
         verify(properties, times(1)).validateSuperUserAccess();
 
         // create local cluster
@@ -413,29 +419,33 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
         Set<String> allowedClusters = Sets.newHashSet();
         allowedClusters.add(configClusterName);
         TenantInfo tenantInfo = new TenantInfo(Sets.newHashSet("role1", "role2"), allowedClusters);
-        properties.createTenant("test-property", tenantInfo);
+        properties.createTenant(responseCtx, "test-property", tenantInfo);
         verify(properties, times(2)).validateSuperUserAccess();
 
-        assertEquals(properties.getTenants(), Lists.newArrayList("test-property"));
+        properties.getTenants(responseCtx);
+        assertEquals(responseCtx.response, Lists.newArrayList("test-property"));
         verify(properties, times(3)).validateSuperUserAccess();
 
-        assertEquals(properties.getTenantAdmin("test-property"), tenantInfo);
+        properties.getTenantAdmin(responseCtx, "test-property");
+        assertEquals(responseCtx.response, tenantInfo);
         verify(properties, times(4)).validateSuperUserAccess();
 
         TenantInfo newPropertyAdmin = new TenantInfo(Sets.newHashSet("role1", "other-role"), allowedClusters);
-        properties.updateTenant("test-property", newPropertyAdmin);
+        properties.updateTenant(responseCtx, "test-property", newPropertyAdmin);
         verify(properties, times(5)).validateSuperUserAccess();
 
         // Wait for updateTenant to take effect
         Thread.sleep(100);
 
-        assertEquals(properties.getTenantAdmin("test-property"), newPropertyAdmin);
-        assertNotSame(properties.getTenantAdmin("test-property"), tenantInfo);
+        properties.getTenantAdmin(responseCtx, "test-property");
+        assertEquals(responseCtx.response, newPropertyAdmin);
+        properties.getTenantAdmin(responseCtx, "test-property");
+        assertNotSame(responseCtx.response, tenantInfo);
         verify(properties, times(7)).validateSuperUserAccess();
 
         // Check creating existing property
         try {
-            properties.createTenant("test-property", tenantInfo);
+            properties.createTenant(responseCtx, "test-property", tenantInfo);
             fail("should have failed");
         } catch (RestException e) {
             assertEquals(e.getResponse().getStatus(), Status.CONFLICT.getStatusCode());
@@ -443,14 +453,14 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
 
         // Check non-existing property
         try {
-            properties.getTenantAdmin("non-existing");
+            properties.getTenantAdmin(responseCtx, "non-existing");
             fail("should have failed");
         } catch (RestException e) {
             assertEquals(e.getResponse().getStatus(), Status.NOT_FOUND.getStatusCode());
         }
 
         try {
-            properties.updateTenant("xxx-non-existing", newPropertyAdmin);
+            properties.updateTenant(responseCtx, "xxx-non-existing", newPropertyAdmin);
             fail("should have failed");
         } catch (RestException e) {
             assertEquals(e.getResponse().getStatus(), Status.NOT_FOUND.getStatusCode());
@@ -458,7 +468,7 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
 
         // Check deleting non-existing property
         try {
-            properties.deleteTenant("non-existing");
+            properties.deleteTenant(responseCtx, "non-existing");
             fail("should have failed");
         } catch (RestException e) {
             assertEquals(e.getResponse().getStatus(), Status.NOT_FOUND.getStatusCode());
@@ -470,7 +480,7 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
                     && path.equals("/admin/policies");
             });
         try {
-            properties.getTenants();
+            properties.getTenants(responseCtx);
             fail("should have failed");
         } catch (RestException e) {
             assertEquals(e.getResponse().getStatus(), Status.INTERNAL_SERVER_ERROR.getStatusCode());
@@ -481,7 +491,7 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
                     && path.equals("/admin/policies/my-tenant");
             });
         try {
-            properties.getTenantAdmin("my-tenant");
+            properties.getTenantAdmin(responseCtx, "my-tenant");
             fail("should have failed");
         } catch (RestException e) {
             assertEquals(e.getResponse().getStatus(), Status.INTERNAL_SERVER_ERROR.getStatusCode());
@@ -492,7 +502,7 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
                     && path.equals("/admin/policies/my-tenant");
             });
         try {
-            properties.updateTenant("my-tenant", newPropertyAdmin);
+            properties.updateTenant(responseCtx, "my-tenant", newPropertyAdmin);
             fail("should have failed");
         } catch (RestException e) {
             assertEquals(e.getResponse().getStatus(), Status.INTERNAL_SERVER_ERROR.getStatusCode());
@@ -503,7 +513,7 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
                     && path.equals("/admin/policies/test");
             });
         try {
-            properties.createTenant("test", tenantInfo);
+            properties.createTenant(responseCtx, "test", tenantInfo);
             fail("should have failed");
         } catch (RestException e) {
             assertEquals(e.getResponse().getStatus(), Status.INTERNAL_SERVER_ERROR.getStatusCode());
@@ -514,37 +524,39 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
                     && path.equals("/admin/policies/my-tenant");
             });
         try {
-            properties.deleteTenant("my-tenant");
+            properties.deleteTenant(responseCtx, "my-tenant");
             fail("should have failed");
         } catch (RestException e) {
             assertEquals(e.getResponse().getStatus(), Status.INTERNAL_SERVER_ERROR.getStatusCode());
         }
 
-        properties.createTenant("error-property", tenantInfo);
+        properties.createTenant(responseCtx, "error-property", tenantInfo);
 
         mockZooKeeper.failConditional(Code.SESSIONEXPIRED, (op, path) -> {
                 return op == MockZooKeeper.Op.DELETE
                     && path.equals("/admin/policies/error-property");
             });
         try {
-            properties.deleteTenant("error-property");
+            properties.deleteTenant(responseCtx, "error-property");
             fail("should have failed");
         } catch (RestException e) {
             assertEquals(e.getResponse().getStatus(), Status.INTERNAL_SERVER_ERROR.getStatusCode());
         }
 
-        properties.deleteTenant("test-property");
-        properties.deleteTenant("error-property");
-        assertEquals(properties.getTenants(), Lists.newArrayList());
+        properties.deleteTenant(responseCtx, "test-property");
+        properties.deleteTenant(responseCtx, "error-property");
+        responseCtx.response = Lists.newArrayList();
+        properties.getTenants(responseCtx);
+        assertEquals(responseCtx.response, Lists.newArrayList());
 
         // Create a namespace to test deleting a non-empty property
         newPropertyAdmin = new TenantInfo(Sets.newHashSet("role1", "other-role"), Sets.newHashSet("use"));
-        properties.createTenant("my-tenant", newPropertyAdmin);
+        properties.createTenant(responseCtx, "my-tenant", newPropertyAdmin);
 
         namespaces.createNamespace("my-tenant", "use", "my-namespace", new BundlesData());
 
         try {
-            properties.deleteTenant("my-tenant");
+            properties.deleteTenant(responseCtx, "my-tenant");
             fail("should have failed");
         } catch (RestException e) {
             // Ok
@@ -552,7 +564,7 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
 
         // Check name validation
         try {
-            properties.createTenant("test&", tenantInfo);
+            properties.createTenant(responseCtx, "test&", tenantInfo);
             fail("should have failed");
         } catch (RestException e) {
             assertEquals(e.getResponse().getStatus(), Status.PRECONDITION_FAILED.getStatusCode());
@@ -560,7 +572,7 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
 
         // Check tenantInfo is null
         try {
-            properties.createTenant("tenant-config-is-null", null);
+            properties.createTenant(responseCtx, "tenant-config-is-null", null);
             fail("should have failed");
         } catch (RestException e) {
             assertEquals(e.getResponse().getStatus(), Status.PRECONDITION_FAILED.getStatusCode());
@@ -571,7 +583,7 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
         Set<String> blankClusters = Sets.newHashSet(blankCluster);
         TenantInfo tenantWithEmptyCluster = new TenantInfo(Sets.newHashSet("role1", "role2"), blankClusters);
         try {
-            properties.createTenant("tenant-config-is-empty", tenantWithEmptyCluster);
+            properties.createTenant(responseCtx, "tenant-config-is-empty", tenantWithEmptyCluster);
             fail("should have failed");
         } catch (RestException e) {
             assertEquals(e.getResponse().getStatus(), Status.PRECONDITION_FAILED.getStatusCode());
@@ -582,7 +594,7 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
         containBlankClusters.add(configClusterName);
         TenantInfo tenantContainEmptyCluster = new TenantInfo(Sets.newHashSet(), containBlankClusters);
         try {
-            properties.createTenant("tenant-config-contain-empty", tenantContainEmptyCluster);
+            properties.createTenant(responseCtx, "tenant-config-contain-empty", tenantContainEmptyCluster);
             fail("should have failed");
         } catch (RestException e) {
             assertEquals(e.getResponse().getStatus(), Status.PRECONDITION_FAILED.getStatusCode());
@@ -593,7 +605,7 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
         ArgumentCaptor<Response> captor = ArgumentCaptor.forClass(Response.class);
         verify(response, timeout(5000).times(1)).resume(captor.capture());
         assertEquals(captor.getValue().getStatus(), Status.NO_CONTENT.getStatusCode());
-        properties.deleteTenant("my-tenant");
+        properties.deleteTenant(responseCtx, "my-tenant");
     }
 
     @Test
@@ -762,4 +774,92 @@ public class AdminTest extends MockedPulsarServiceBaseTest {
 
     }
 
+    static class TestAsyncResponse implements AsyncResponse {
+
+    	Object response;
+		@Override
+		public boolean resume(Object response) {
+			this.response = response;
+			return true;
+		}
+
+		@Override
+		public boolean resume(Throwable response) {
+			// TODO Auto-generated method stub
+			return false;
+		}
+
+		@Override
+		public boolean cancel() {
+			// TODO Auto-generated method stub
+			return false;
+		}
+
+		@Override
+		public boolean cancel(int retryAfter) {
+			// TODO Auto-generated method stub
+			return false;
+		}
+
+		@Override
+		public boolean cancel(Date retryAfter) {
+			// TODO Auto-generated method stub
+			return false;
+		}
+
+		@Override
+		public boolean isSuspended() {
+			// TODO Auto-generated method stub
+			return false;
+		}
+
+		@Override
+		public boolean isCancelled() {
+			// TODO Auto-generated method stub
+			return false;
+		}
+
+		@Override
+		public boolean isDone() {
+			// TODO Auto-generated method stub
+			return false;
+		}
+
+		@Override
+		public boolean setTimeout(long time, TimeUnit unit) {
+			// TODO Auto-generated method stub
+			return false;
+		}
+
+		@Override
+		public void setTimeoutHandler(TimeoutHandler handler) {
+			// TODO Auto-generated method stub
+			
+		}
+
+		@Override
+		public Collection<Class<?>> register(Class<?> callback) {
+			// TODO Auto-generated method stub
+			return null;
+		}
+
+		@Override
+		public Map<Class<?>, Collection<Class<?>>> register(Class<?> callback, Class<?>... callbacks) {
+			// TODO Auto-generated method stub
+			return null;
+		}
+
+		@Override
+		public Collection<Class<?>> register(Object callback) {
+			// TODO Auto-generated method stub
+			return null;
+		}
+
+		@Override
+		public Map<Class<?>, Collection<Class<?>>> register(Object callback, Object... callbacks) {
+			// TODO Auto-generated method stub
+			return null;
+		}
+    	
+    }
 }
