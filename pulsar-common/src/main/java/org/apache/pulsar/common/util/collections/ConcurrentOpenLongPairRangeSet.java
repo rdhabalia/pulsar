@@ -21,11 +21,20 @@ package org.apache.pulsar.common.util.collections;
 import static com.google.common.base.Preconditions.checkNotNull;
 import com.google.common.collect.BoundType;
 import com.google.common.collect.Range;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Map.Entry;
 import java.util.NavigableMap;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -379,4 +388,60 @@ public class ConcurrentOpenLongPairRangeSet<T extends Comparable<T>> implements 
         return this.threadSafe ? new ConcurrentBitSet(bitSetSize) : new BitSet(bitSetSize);
     }
 
+    public Optional<byte[]> serialize(int maxRanges) throws IOException {
+        Map<Long, byte[]> serializedBitSetMap = new HashMap<>();
+        AtomicInteger rangeCount = new AtomicInteger();
+        rangeBitSetMap.forEach((id, bmap) -> {
+            if (rangeCount.getAndAdd(bmap.cardinality()) > maxRanges) {
+                return;
+            }
+            ByteArrayOutputStream bitSetBytes = new ByteArrayOutputStream();
+            try (ObjectOutputStream objectOut = new ObjectOutputStream(bitSetBytes);) {
+                objectOut.writeUnshared(bmap);
+                objectOut.flush();
+                serializedBitSetMap.put(id, bitSetBytes.toByteArray());
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        // serialize bitset-byte map
+        ByteArrayOutputStream rangeMapBytes = new ByteArrayOutputStream();
+        try (ObjectOutputStream oos = new ObjectOutputStream(rangeMapBytes)) {
+            oos.writeObject(serializedBitSetMap);
+            return Optional.ofNullable(rangeMapBytes.toByteArray());
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public void deserialize(byte[] data) throws IOException {
+        try (ObjectInputStream ois = new ObjectInputStream(new ByteArrayInputStream(data))) {
+            @SuppressWarnings({ "unchecked", "rawtypes" })
+            Map<Long, byte[]> rangeMap = (HashMap) ois.readObject();
+            rangeBitSetMap.clear();
+            rangeMap.forEach((id, bmapByte) -> {
+                try (ObjectInputStream bois = new ObjectInputStream(new ByteArrayInputStream(bmapByte));) {
+                    BitSet bitSet = (BitSet) bois.readObject();
+                    rangeBitSetMap.put(id, bitSet);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+        } catch (Exception e) {
+            throw new IOException(e);
+        }
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (!(obj instanceof ConcurrentOpenLongPairRangeSet)) {
+            return false;
+        }
+        if (this == obj) {
+            return true;
+        }
+        @SuppressWarnings("rawtypes")
+        ConcurrentOpenLongPairRangeSet set = (ConcurrentOpenLongPairRangeSet) obj;
+        return this.rangeBitSetMap.equals(set.rangeBitSetMap);
+    }
 }
