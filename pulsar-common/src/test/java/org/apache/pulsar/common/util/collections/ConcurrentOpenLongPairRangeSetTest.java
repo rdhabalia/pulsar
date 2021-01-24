@@ -20,14 +20,15 @@ package org.apache.pulsar.common.util.collections;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertTrue;
 
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.pulsar.common.util.collections.LongPairRangeSet.LongPair;
 import org.apache.pulsar.common.util.collections.LongPairRangeSet.LongPairConsumer;
 import org.testng.annotations.Test;
-
 import com.google.common.collect.BoundType;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Range;
@@ -56,6 +57,50 @@ public class ConcurrentOpenLongPairRangeSetTest {
         assertEquals(ranges.get(count++), (Range.openClosed(new LongPair(0, 7), new LongPair(0, 10))));
         assertEquals(ranges.get(count++), (Range.openClosed(new LongPair(0, 97), new LongPair(0, 99))));
         assertEquals(ranges.get(count++), (Range.openClosed(new LongPair(0, 101), new LongPair(0, 106))));
+    }
+
+    @Test
+    public void testSetSearlization() throws Exception {
+        ConcurrentOpenLongPairRangeSet<LongPair> serSet = new ConcurrentOpenLongPairRangeSet<>(consumer);
+        int totalRanges = 10_000_000;
+        int totalKeys = 1000;
+        for (int key = 0; key < totalKeys; key++) {
+            int value = 0;
+            for (int i = 0; i < (totalRanges / totalKeys); i++) {
+                serSet.add(Range.closed(new LongPair(key, value++), new LongPair(key, value++)));
+                value += 2;
+            }
+        }
+        // serialize and deserialize into separate set
+        byte[] barray = serSet.serialize(Integer.MAX_VALUE).get();
+        ConcurrentOpenLongPairRangeSet<LongPair> desSet = new ConcurrentOpenLongPairRangeSet<>(consumer);
+        desSet.deserialize(barray);
+        assertTrue(serSet.rangeBitSetMap.equals(desSet.rangeBitSetMap));
+    }
+
+    @Test
+    public void testSetSearlizationWithMaxRange() throws Exception {
+        ConcurrentOpenLongPairRangeSet<LongPair> serSet = new ConcurrentOpenLongPairRangeSet<>(consumer);
+        int totalRanges = 10_000_000;
+        int totalKeys = 1000;
+        for (int key = 0; key < totalKeys; key++) {
+            int value = 0;
+            for (int i = 0; i < (totalRanges / totalKeys); i++) {
+                serSet.add(Range.closed(new LongPair(key, value++), new LongPair(key, value++)));
+                value += 2;
+            }
+        }
+        // serialize with max ranges
+        int maxRange = 10000;
+        byte[] barray = serSet.serialize(maxRange).get();
+        ConcurrentOpenLongPairRangeSet<LongPair> desSet = new ConcurrentOpenLongPairRangeSet<>(consumer);
+        desSet.deserialize(barray);
+        AtomicInteger count = new AtomicInteger();
+        desSet.forEach(p -> {
+            count.incrementAndGet();
+            return true;
+        });
+        assertEquals(count.get(), maxRange);
     }
 
     @Test

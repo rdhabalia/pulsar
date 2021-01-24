@@ -71,6 +71,9 @@ message PositionInfo {
 
     // Store which index in the batch message has been deleted
     repeated BatchedEntryDeletionIndexInfo batchedEntryDeletionIndexInfo = 5;
+
+    // serialized individualDeletedMessages
+    optional bytes serializedIndividualDeletedMessages = 6;
 }
 
 message NestedPositionInfo {

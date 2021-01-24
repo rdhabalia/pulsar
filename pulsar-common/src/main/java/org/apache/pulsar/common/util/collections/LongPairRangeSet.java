@@ -25,8 +25,10 @@ import com.google.common.collect.RangeSet;
 import com.google.common.collect.TreeRangeSet;
 import lombok.EqualsAndHashCode;
 
+import java.io.IOException;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -124,6 +126,28 @@ public interface LongPairRangeSet<T extends Comparable<T>> {
      * @return last biggest range into the set
      */
     Range<T> lastRange();
+
+    /**
+     * Serialize {@link LongPairRangeSet} to byte[].
+     * 
+     * @param maxRanges
+     *            to serialize.
+     * @return
+     * @throws IOException
+     */
+    default Optional<byte[]> serialize(int maxRanges) throws IOException {
+        return Optional.empty();
+    }
+
+    /**
+     * DeSerialize {@link LongPairRangeSet} from byte[].
+     * 
+     * @param data
+     * @throws IOException
+     */
+    default void deserialize(byte[] data) throws IOException {
+        throw new UnsupportedOperationException();
+    }
 
     /**
      * Represents a function that accepts two long arguments and produces a result.
