@@ -37,6 +37,7 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.google.common.base.Objects;
 import com.google.common.collect.BoundType;
 import com.google.common.collect.Range;
 
@@ -433,6 +434,11 @@ public class ConcurrentOpenLongPairRangeSet<T extends Comparable<T>> implements 
         } catch (Exception e) {
             throw new IOException(e);
         }
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hashCode(rangeBitSetMap);
     }
 
     @Override
