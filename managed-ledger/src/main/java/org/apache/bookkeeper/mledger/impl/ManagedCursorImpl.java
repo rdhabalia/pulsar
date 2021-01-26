@@ -100,6 +100,7 @@ import org.apache.bookkeeper.mledger.proto.MLDataFormats.ManagedLedgerInfo.Ledge
 import org.apache.bookkeeper.mledger.proto.MLDataFormats.MessageRange;
 import org.apache.bookkeeper.mledger.proto.MLDataFormats.PositionInfo;
 import org.apache.bookkeeper.mledger.proto.MLDataFormats.PositionInfo.Builder;
+import org.apache.commons.lang.mutable.MutableInt;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.common.util.collections.BitSetRecyclable;
 import org.apache.pulsar.common.util.collections.ConcurrentOpenLongPairRangeSet;
@@ -2445,6 +2446,7 @@ public class ManagedCursorImpl implements ManagedCursor {
             return Collections.emptyList();
         }
         List<LongListMap> longListMap = Lists.newArrayList();
+        MutableInt serializedSize = new MutableInt();
         properties.forEach((id, ranges) -> {
             if (ranges == null || ranges.length <= 0) {
                 return;
@@ -2454,8 +2456,11 @@ public class ManagedCursorImpl implements ManagedCursor {
             for (long range : ranges) {
                 lmBuilder.addValues(range);
             }
-            longListMap.add(lmBuilder.build());
+            LongListMap lm = lmBuilder.build();
+            longListMap.add(lm);
+            serializedSize.add(lm.getSerializedSize());
         });
+        individualDeletedMessagesSerializedSize = serializedSize.toInteger();
         return longListMap;
     }
 
@@ -2531,7 +2536,7 @@ public class ManagedCursorImpl implements ManagedCursor {
         } catch (Exception e) {
             log.warn("[{}]-{} Failed to serialize individualDeletedMessages", ledger.getName(), name, e);
         }
-        if (internalRanges!=null && !internalRanges.isEmpty()) {
+        if (internalRanges != null && !internalRanges.isEmpty()) {
             piBuilder.addAllIndividualDeletedMessageRanges(buildLongPropertiesMap(internalRanges));
         } else {
             piBuilder.addAllIndividualDeletedMessages(buildIndividualDeletedMessageRanges());
