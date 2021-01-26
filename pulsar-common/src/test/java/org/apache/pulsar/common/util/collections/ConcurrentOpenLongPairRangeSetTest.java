@@ -23,6 +23,7 @@ import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -60,7 +61,7 @@ public class ConcurrentOpenLongPairRangeSetTest {
     }
 
     @Test
-    public void testSetSearlization() throws Exception {
+    public void testInternalRanges() throws Exception {
         ConcurrentOpenLongPairRangeSet<LongPair> serSet = new ConcurrentOpenLongPairRangeSet<>(consumer);
         int totalRanges = 10_000_000;
         int totalKeys = 1000;
@@ -72,14 +73,14 @@ public class ConcurrentOpenLongPairRangeSetTest {
             }
         }
         // serialize and deserialize into separate set
-        byte[] barray = serSet.serialize(Integer.MAX_VALUE).get();
+        Map<Long, long[]> internalMap = serSet.toRanges(Integer.MAX_VALUE);
         ConcurrentOpenLongPairRangeSet<LongPair> desSet = new ConcurrentOpenLongPairRangeSet<>(consumer);
-        desSet.deserialize(barray);
+        desSet.build(internalMap);
         assertTrue(serSet.rangeBitSetMap.equals(desSet.rangeBitSetMap));
     }
 
     @Test
-    public void testSetSearlizationWithMaxRange() throws Exception {
+    public void testInternalRangeWithMaxRange() throws Exception {
         ConcurrentOpenLongPairRangeSet<LongPair> serSet = new ConcurrentOpenLongPairRangeSet<>(consumer);
         int totalRanges = 10_000_000;
         int totalKeys = 1000;
@@ -92,9 +93,9 @@ public class ConcurrentOpenLongPairRangeSetTest {
         }
         // serialize with max ranges
         int maxRange = 10000;
-        byte[] barray = serSet.serialize(maxRange).get();
+        Map<Long, long[]> internalMap = serSet.toRanges(maxRange);
         ConcurrentOpenLongPairRangeSet<LongPair> desSet = new ConcurrentOpenLongPairRangeSet<>(consumer);
-        desSet.deserialize(barray);
+        desSet.build(internalMap);
         AtomicInteger count = new AtomicInteger();
         desSet.forEach(p -> {
             count.incrementAndGet();

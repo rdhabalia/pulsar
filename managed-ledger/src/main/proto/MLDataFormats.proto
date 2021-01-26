@@ -72,8 +72,8 @@ message PositionInfo {
     // Store which index in the batch message has been deleted
     repeated BatchedEntryDeletionIndexInfo batchedEntryDeletionIndexInfo = 5;
 
-    // serialized individualDeletedMessages
-    optional bytes serializedIndividualDeletedMessages = 6;
+    // Store individualDeletedMessage ranges
+    repeated LongListMap individualDeletedMessageRanges = 6;
 }
 
 message NestedPositionInfo {
@@ -95,6 +95,11 @@ message BatchedEntryDeletionIndexInfo {
 message LongProperty {
     required string name = 1;
     required int64 value  = 2;
+}
+
+message LongListMap {
+    required int64 key = 1;
+    repeated int64 values  = 2;
 }
 
 message ManagedCursorInfo {

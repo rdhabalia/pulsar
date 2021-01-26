@@ -19,12 +19,7 @@
 package org.apache.pulsar.common.util.collections;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
+import static java.util.BitSet.valueOf;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.HashMap;
@@ -32,7 +27,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.NavigableMap;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -391,49 +385,21 @@ public class ConcurrentOpenLongPairRangeSet<T extends Comparable<T>> implements 
     }
 
     @Override
-    public Optional<byte[]> serialize(int maxRanges) throws IOException {
-        Map<Long, byte[]> serializedBitSetMap = new HashMap<>();
+    public Map<Long, long[]> toRanges(int maxRanges) {
+        Map<Long, long[]> internalBitSetMap = new HashMap<>();
         AtomicInteger rangeCount = new AtomicInteger();
         rangeBitSetMap.forEach((id, bmap) -> {
             if (rangeCount.getAndAdd(bmap.cardinality()) > maxRanges) {
                 return;
             }
-            ByteArrayOutputStream bitSetBytes = new ByteArrayOutputStream();
-            try (ObjectOutputStream objectOut = new ObjectOutputStream(bitSetBytes);) {
-                objectOut.writeUnshared(bmap);
-                objectOut.flush();
-                serializedBitSetMap.put(id, bitSetBytes.toByteArray());
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
+            internalBitSetMap.put(id, bmap.toLongArray());
         });
-        // serialize bitset-byte map
-        ByteArrayOutputStream rangeMapBytes = new ByteArrayOutputStream();
-        try (ObjectOutputStream oos = new ObjectOutputStream(rangeMapBytes)) {
-            oos.writeObject(serializedBitSetMap);
-            return Optional.ofNullable(rangeMapBytes.toByteArray());
-        } catch (Exception e) {
-            throw new IOException(e);
-        }
+        return internalBitSetMap;
     }
 
     @Override
-    public void deserialize(byte[] data) throws IOException {
-        try (ObjectInputStream ois = new ObjectInputStream(new ByteArrayInputStream(data))) {
-            @SuppressWarnings({ "unchecked", "rawtypes" })
-            Map<Long, byte[]> rangeMap = (HashMap) ois.readObject();
-            rangeBitSetMap.clear();
-            rangeMap.forEach((id, bmapByte) -> {
-                try (ObjectInputStream bois = new ObjectInputStream(new ByteArrayInputStream(bmapByte))) {
-                    BitSet bitSet = (BitSet) bois.readObject();
-                    rangeBitSetMap.put(id, bitSet);
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            });
-        } catch (Exception e) {
-            throw new IOException(e);
-        }
+    public void build(Map<Long, long[]> internalRange) {
+        internalRange.forEach((id, ranges) -> rangeBitSetMap.put(id, valueOf(ranges)));
     }
 
     @Override

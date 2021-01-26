@@ -64,6 +64,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.stream.Collectors;
 
 import org.apache.bookkeeper.client.AsyncCallback.CloseCallback;
 import org.apache.bookkeeper.client.AsyncCallback.DeleteCallback;
@@ -92,6 +93,7 @@ import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl.PositionBound;
 import org.apache.bookkeeper.mledger.impl.MetaStore.MetaStoreCallback;
 import org.apache.bookkeeper.mledger.proto.MLDataFormats;
+import org.apache.bookkeeper.mledger.proto.MLDataFormats.LongListMap;
 import org.apache.bookkeeper.mledger.proto.MLDataFormats.LongProperty;
 import org.apache.bookkeeper.mledger.proto.MLDataFormats.ManagedCursorInfo;
 import org.apache.bookkeeper.mledger.proto.MLDataFormats.ManagedLedgerInfo.LedgerInfo;
@@ -399,18 +401,7 @@ public class ManagedCursorImpl implements ManagedCursor {
                 }
 
                 PositionImpl position = new PositionImpl(positionInfo);
-                if (positionInfo.getIndividualDeletedMessagesCount() > 0) {
-                    recoverIndividualDeletedMessages(positionInfo.getIndividualDeletedMessagesList());
-                } else if (positionInfo.getSerializedIndividualDeletedMessages() != null
-                        && !positionInfo.getSerializedIndividualDeletedMessages().isEmpty()) {
-                    byte[] serializedMessages = positionInfo.getSerializedIndividualDeletedMessages().toByteArray();
-                    try {
-                        individualDeletedMessages.deserialize(serializedMessages);
-                    } catch (Exception e) {
-                        log.warn("[{}]-{} Failed to recover individualDeletedMessages from serialized data",
-                                ledger.getName(), name, e);
-                    }
-                }
+                recoverIndividualDeletedMessages(positionInfo);
                 if (config.isDeletionAtBatchIndexLevelEnabled() && batchDeletedIndexes != null
                     && positionInfo.getBatchedEntryDeletionIndexInfoCount() > 0) {
                     recoverBatchDeletedIndexes(positionInfo.getBatchedEntryDeletionIndexInfoList());
@@ -425,6 +416,22 @@ public class ManagedCursorImpl implements ManagedCursor {
             log.error("[{}] Encountered error on opening cursor ledger {} for cursor {}",
                 ledger.getName(), ledgerId, name, t);
             openCallback.openComplete(BKException.Code.UnexpectedConditionException, null, null);
+        }
+    }
+
+    public void recoverIndividualDeletedMessages(PositionInfo positionInfo) {
+        if (positionInfo.getIndividualDeletedMessagesCount() > 0) {
+            recoverIndividualDeletedMessages(positionInfo.getIndividualDeletedMessagesList());
+        } else if (positionInfo.getIndividualDeletedMessageRangesCount() > 0) {
+            List<LongListMap> rangeList = positionInfo.getIndividualDeletedMessageRangesList();
+            try {
+                Map<Long, long[]> rangeMap = rangeList.stream().collect(Collectors.toMap(LongListMap::getKey,
+                        list -> list.getValuesList().stream().mapToLong(i -> i).toArray()));
+                individualDeletedMessages.build(rangeMap);
+            } catch (Exception e) {
+                log.warn("[{}]-{} Failed to recover individualDeletedMessages from serialized data", ledger.getName(),
+                        name, e);
+            }
         }
     }
 
@@ -2433,6 +2440,25 @@ public class ManagedCursorImpl implements ManagedCursor {
         return longProperties;
     }
 
+    private List<LongListMap> buildLongPropertiesMap(Map<Long, long[]> properties) {
+        if (properties.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<LongListMap> longListMap = Lists.newArrayList();
+        properties.forEach((id, ranges) -> {
+            if (ranges == null || ranges.length <= 0) {
+                return;
+            }
+            org.apache.bookkeeper.mledger.proto.MLDataFormats.LongListMap.Builder lmBuilder = LongListMap.newBuilder()
+                    .setKey(id);
+            for (long range : ranges) {
+                lmBuilder.addValues(range);
+            }
+            longListMap.add(lmBuilder.build());
+        });
+        return longListMap;
+    }
+
     private List<MLDataFormats.MessageRange> buildIndividualDeletedMessageRanges() {
         lock.readLock().lock();
         try {
@@ -2499,14 +2525,14 @@ public class ManagedCursorImpl implements ManagedCursor {
                 .addAllBatchedEntryDeletionIndexInfo(buildBatchEntryDeletionIndexInfoList())
                 .addAllProperties(buildPropertiesMap(mdEntry.properties));
         
-        Optional<byte[]> serializedRange = Optional.empty();
+        Map<Long, long[]> internalRanges = null;
         try {
-            serializedRange = individualDeletedMessages.serialize(config.getMaxUnackedRangesToPersist());
+            internalRanges = individualDeletedMessages.toRanges(config.getMaxUnackedRangesToPersist());
         } catch (Exception e) {
             log.warn("[{}]-{} Failed to serialize individualDeletedMessages", ledger.getName(), name, e);
         }
-        if (serializedRange.isPresent()) {
-            piBuilder.setSerializedIndividualDeletedMessages(ByteString.copyFrom(serializedRange.get()));
+        if (internalRanges!=null && !internalRanges.isEmpty()) {
+            piBuilder.addAllIndividualDeletedMessageRanges(buildLongPropertiesMap(internalRanges));
         } else {
             piBuilder.addAllIndividualDeletedMessages(buildIndividualDeletedMessageRanges());
         }
