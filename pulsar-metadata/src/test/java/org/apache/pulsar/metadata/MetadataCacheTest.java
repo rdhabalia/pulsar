@@ -255,5 +255,4 @@ public class MetadataCacheTest extends BaseMetadataStoreTest {
             return new MyClass(v.a, v.b + 1);
         }).join();
     }
-
 }
