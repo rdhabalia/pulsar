@@ -51,12 +51,20 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.admin.AdminResource;
+<<<<<<< HEAD
 import org.apache.pulsar.broker.admin.impl.BaseResources;
 import org.apache.pulsar.broker.admin.impl.ClusterResources;
 import org.apache.pulsar.broker.admin.impl.DynamicConfigurationResources;
 import org.apache.pulsar.broker.admin.impl.NamespaceResources;
 import org.apache.pulsar.broker.admin.impl.NamespaceResources.IsolationPolicyResources;
 import org.apache.pulsar.broker.admin.impl.TenantResources;
+=======
+import org.apache.pulsar.broker.cache.ClusterResources;
+import org.apache.pulsar.broker.cache.DynamicConfigurationResources;
+import org.apache.pulsar.broker.cache.NamespaceResources;
+import org.apache.pulsar.broker.cache.NamespaceResources.IsolationPolicyResources;
+import org.apache.pulsar.broker.cache.TenantResources;
+>>>>>>> 1ee64eaf4... [pulsar-broker] Use metadata-api for authorization api
 import org.apache.pulsar.broker.authentication.AuthenticationDataHttps;
 import org.apache.pulsar.broker.authentication.AuthenticationDataSource;
 import org.apache.pulsar.broker.authorization.AuthorizationService;

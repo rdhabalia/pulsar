@@ -33,12 +33,16 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.bookkeeper.common.util.OrderedScheduler;
 import org.apache.pulsar.broker.authentication.AuthenticationDataSource;
+import org.apache.pulsar.broker.cache.PulsarResources;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.partition.PartitionedTopicMetadata;
 import org.apache.pulsar.common.policies.data.TenantInfo;
 import org.apache.pulsar.discovery.service.server.ServiceConfig;
 import org.apache.pulsar.discovery.service.web.ZookeeperCacheLoader;
+import org.apache.pulsar.metadata.api.MetadataStoreConfig;
+import org.apache.pulsar.metadata.api.MetadataStoreException;
+import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 import org.apache.pulsar.policies.data.loadbalancer.LoadManagerReport;
 import org.apache.pulsar.zookeeper.GlobalZooKeeperCache;
 import org.apache.pulsar.zookeeper.ZooKeeperClientFactory;
@@ -58,6 +62,9 @@ public class BrokerDiscoveryProvider implements Closeable {
 
     final ZookeeperCacheLoader localZkCache;
     final GlobalZooKeeperCache globalZkCache;
+    final MetadataStoreExtended localMetadataStore;
+    final MetadataStoreExtended configMetadataStore;
+    final PulsarResources pulsarResources;
     private final AtomicInteger counter = new AtomicInteger();
 
     private final OrderedScheduler orderedExecutor = OrderedScheduler.newSchedulerBuilder().numThreads(4)
@@ -70,6 +77,9 @@ public class BrokerDiscoveryProvider implements Closeable {
     public BrokerDiscoveryProvider(ServiceConfig config, ZooKeeperClientFactory zkClientFactory)
             throws PulsarServerException {
         try {
+            localMetadataStore = createMetadataStore(config.getZookeeperServers(), config.getZookeeperSessionTimeoutMs());
+            configMetadataStore = createMetadataStore(config.getConfigurationStoreServers(), config.getZookeeperSessionTimeoutMs());
+            pulsarResources = new PulsarResources(localMetadataStore, configMetadataStore);
             localZkCache = new ZookeeperCacheLoader(zkClientFactory, config.getZookeeperServers(),
                     config.getZookeeperSessionTimeoutMs());
             globalZkCache = new GlobalZooKeeperCache(zkClientFactory, config.getZookeeperSessionTimeoutMs(),
@@ -183,6 +193,22 @@ public class BrokerDiscoveryProvider implements Closeable {
         globalZkCache.close();
         orderedExecutor.shutdown();
         scheduledExecutorScheduler.shutdownNow();
+        try {
+            configMetadataStore.close();
+        } catch (Exception e) {
+            LOG.warn("Failed to close config metadata store", e);
+        }
+        try {
+            localMetadataStore.close();
+        } catch (Exception e) {
+            LOG.warn("Failed to close config metadata store", e);
+        }
+    }
+
+    public MetadataStoreExtended createMetadataStore(String serverUrls, int sessionTimeoutMs) throws MetadataStoreException {
+        return MetadataStoreExtended.create(serverUrls,
+                MetadataStoreConfig.builder().sessionTimeoutMillis(sessionTimeoutMs)
+                        .allowReadOnlyOperations(false).build());
     }
 
     private static final Logger LOG = LoggerFactory.getLogger(BrokerDiscoveryProvider.class);

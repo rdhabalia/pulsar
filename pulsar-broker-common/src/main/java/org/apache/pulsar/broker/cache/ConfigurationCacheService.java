@@ -19,10 +19,14 @@
 package org.apache.pulsar.broker.cache;
 
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ExecutionException;
 
 import org.apache.bookkeeper.util.ZkUtils;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import org.apache.pulsar.broker.PulsarServerException;
+import org.apache.pulsar.broker.cache.ClusterResources.FailureDomainResources;
+import org.apache.pulsar.broker.cache.NamespaceResources.IsolationPolicyResources;
 import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.policies.data.FailureDomain;
 import org.apache.pulsar.common.policies.data.NamespaceIsolationData;
@@ -30,6 +34,7 @@ import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.TenantInfo;
 import org.apache.pulsar.common.policies.impl.NamespaceIsolationPolicies;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
+import org.apache.pulsar.metadata.api.MetadataStoreException.AlreadyExistsException;
 import org.apache.pulsar.zookeeper.ZooKeeperCache;
 import org.apache.pulsar.zookeeper.ZooKeeperChildrenCache;
 import org.apache.pulsar.zookeeper.ZooKeeperDataCache;
@@ -41,6 +46,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+
+import lombok.Getter;
 
 /**
  * ConfigurationCacheService maintains a local in-memory cache of all the configurations and policies stored in
@@ -59,6 +66,18 @@ public class ConfigurationCacheService {
     private ZooKeeperDataCache<NamespaceIsolationPolicies> namespaceIsolationPoliciesCache;
     private ZooKeeperDataCache<FailureDomain> failureDomainCache;
 
+    @Getter
+    private TenantResources tenantResources;
+    @Getter
+    private NamespaceResources policiesResources;
+    @Getter
+    private ClusterResources clustersResources;
+    @Getter
+    private IsolationPolicyResources namespaceIsolationPoliciesResources;
+    @Getter
+    private FailureDomainResources failureDomainResources;
+    private PulsarResources pulsarResources;
+
     public static final String POLICIES = "policies";
     public static final String FAILURE_DOMAIN = "failureDomain";
     public final String CLUSTER_FAILURE_DOMAIN_ROOT;
@@ -67,12 +86,15 @@ public class ConfigurationCacheService {
 
     public static final String PARTITIONED_TOPICS_ROOT = "/admin/partitioned-topics";
 
-    public ConfigurationCacheService(ZooKeeperCache cache) throws PulsarServerException {
-        this(cache, null);
-    }
 
-    public ConfigurationCacheService(ZooKeeperCache cache, String configuredClusterName) throws PulsarServerException {
+    public ConfigurationCacheService(PulsarResources pulsarResources, ZooKeeperCache cache, String configuredClusterName) throws PulsarServerException {
         this.cache = cache;
+        this.pulsarResources = pulsarResources;
+        this.tenantResources = pulsarResources.getTenatResources();
+        this.policiesResources = pulsarResources.getNamespaceResources();
+        this.clustersResources = pulsarResources.getClusterResources();
+        this.namespaceIsolationPoliciesResources = policiesResources.getIsolationPolicies();
+        this.failureDomainResources = clustersResources.getFailureDomainResources();
 
         initZK();
 
@@ -127,16 +149,20 @@ public class ConfigurationCacheService {
         try {
             final int index = path.lastIndexOf('/');
             final String clusterZnodePath = (index > 0) ? path.substring(0, index) : null;
-            if (zk.exists(clusterZnodePath, false) != null && zk.exists(path, false) == null) {
+            if (clustersResources.exists(clusterZnodePath) && !clustersResources.exists(path)) {
                 try {
                     byte[] data = "".getBytes();
-                    ZkUtils.createFullPathOptimistic(zk, path, data, Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
+                    pulsarResources.getConfigurationMetadataStore().put(clusterZnodePath, data, Optional.of(-1L)).get();
                     LOG.info("Successfully created failure-domain znode at {}", path);
-                } catch (KeeperException.NodeExistsException e) {
-                    // Ok
+                } catch (ExecutionException e) {
+                    if (e.getCause() instanceof AlreadyExistsException) {
+                        // Ok
+                    } else {
+                        throw (Exception) e.getCause();
+                    }
                 }
             }
-        } catch (KeeperException.NodeExistsException e) {
+        } catch (AlreadyExistsException e) {
             // Ok
         } catch (Exception e) {
             LOG.warn("Failed to create failure-domain znode {} ", path, e);

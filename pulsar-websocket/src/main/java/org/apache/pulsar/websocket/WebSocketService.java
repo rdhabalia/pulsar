@@ -36,6 +36,7 @@ import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.authentication.AuthenticationService;
 import org.apache.pulsar.broker.authorization.AuthorizationService;
 import org.apache.pulsar.broker.cache.ConfigurationCacheService;
+import org.apache.pulsar.broker.cache.PulsarResources;
 import org.apache.pulsar.client.api.ClientBuilder;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
@@ -43,6 +44,9 @@ import org.apache.pulsar.common.configuration.PulsarConfigurationLoader;
 import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.util.collections.ConcurrentOpenHashMap;
 import org.apache.pulsar.common.util.collections.ConcurrentOpenHashSet;
+import org.apache.pulsar.metadata.api.MetadataStoreConfig;
+import org.apache.pulsar.metadata.api.MetadataStoreException;
+import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 import org.apache.pulsar.websocket.service.WebSocketProxyConfiguration;
 import org.apache.pulsar.websocket.stats.ProxyStats;
 import org.apache.pulsar.zookeeper.GlobalZooKeeperCache;
@@ -74,6 +78,9 @@ public class WebSocketService implements Closeable {
     private ZooKeeperClientFactory zkClientFactory;
     private ServiceConfiguration config;
     private ConfigurationCacheService configurationCacheService;
+    private MetadataStoreExtended localMetadataStore;
+    private MetadataStoreExtended configMetadataStore;
+    private PulsarResources pulsarResources;
 
     private ClusterData localCluster;
     private final ConcurrentOpenHashMap<String, ConcurrentOpenHashSet<ProducerHandler>> topicProducerMap;
@@ -105,10 +112,14 @@ public class WebSocketService implements Closeable {
                     config.getZooKeeperCacheExpirySeconds());
             try {
                 this.globalZkCache.start();
+                this.localMetadataStore = createMetadataStore(config.getZookeeperServers(), (int) config.getZooKeeperSessionTimeoutMillis());
+                this.configMetadataStore = createMetadataStore(config.getConfigurationStoreServers(), (int) config.getZooKeeperSessionTimeoutMillis());
+                this.pulsarResources = new PulsarResources(localMetadataStore, configMetadataStore);
             } catch (IOException e) {
                 throw new PulsarServerException(e);
             }
-            this.configurationCacheService = new ConfigurationCacheService(getGlobalZkCache());
+
+            this.configurationCacheService = new ConfigurationCacheService(pulsarResources, getGlobalZkCache(), null);
             log.info("Global Zookeeper cache started");
         }
 
@@ -137,6 +148,17 @@ public class WebSocketService implements Closeable {
 
         if (globalZkCache != null) {
             globalZkCache.close();
+        }
+
+        try {
+            configMetadataStore.close();
+        } catch (Exception e) {
+            log.warn("Failed to close config metadata store", e);
+        }
+        try {
+            localMetadataStore.close();
+        } catch (Exception e) {
+            log.warn("Failed to close config metadata store", e);
         }
 
         executor.shutdown();
@@ -315,5 +337,10 @@ public class WebSocketService implements Closeable {
         return config;
     }
 
+    public MetadataStoreExtended createMetadataStore(String serverUrls, int sessionTimeoutMs) throws MetadataStoreException {
+        return MetadataStoreExtended.create(serverUrls,
+                MetadataStoreConfig.builder().sessionTimeoutMillis(sessionTimeoutMs)
+                        .allowReadOnlyOperations(false).build());
+    }
     private static final Logger log = LoggerFactory.getLogger(WebSocketService.class);
 }

@@ -88,7 +88,8 @@ public class DiscoveryService implements Closeable {
      */
     public void start() throws Exception {
         discoveryProvider = new BrokerDiscoveryProvider(this.config, getZooKeeperClientFactory());
-        this.configurationCacheService = new ConfigurationCacheService(discoveryProvider.globalZkCache);
+        this.configurationCacheService = new ConfigurationCacheService(discoveryProvider.pulsarResources,
+                discoveryProvider.globalZkCache, null);
         ServiceConfiguration serviceConfiguration = PulsarConfigurationLoader.convertFrom(config);
         authenticationService = new AuthenticationService(serviceConfiguration);
         authorizationService = new AuthorizationService(serviceConfiguration, configurationCacheService);

@@ -21,19 +21,18 @@ package org.apache.pulsar.broker.authorization;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.apache.pulsar.broker.cache.ConfigurationCacheService.POLICIES;
-import static org.apache.pulsar.common.util.ObjectMapperFactory.getThreadLocal;
-
 import java.io.IOException;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-
+import javax.ws.rs.core.Response;
 import com.google.common.base.Joiner;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.authentication.AuthenticationDataSource;
 import org.apache.pulsar.broker.cache.ConfigurationCacheService;
+import org.apache.pulsar.broker.cache.NamespaceResources;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.policies.data.AuthAction;
@@ -46,15 +45,10 @@ import org.apache.pulsar.common.policies.data.TenantOperation;
 import org.apache.pulsar.common.policies.data.TopicOperation;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.RestException;
-import org.apache.pulsar.zookeeper.ZooKeeperCache;
-import org.apache.zookeeper.KeeperException;
-import org.apache.zookeeper.ZooKeeper;
-import org.apache.zookeeper.ZooKeeper.States;
-import org.apache.zookeeper.data.Stat;
+import org.apache.pulsar.metadata.api.MetadataStoreException.BadVersionException;
+import org.apache.pulsar.metadata.api.MetadataStoreException.NotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import javax.ws.rs.core.Response;
 
 /**
  * Default authorization provider that stores authorization policies under local-zookeeper.
@@ -115,7 +109,7 @@ public class PulsarAuthorizationProvider implements AuthorizationProvider {
             AuthenticationDataSource authenticationData, String subscription) {
         CompletableFuture<Boolean> permissionFuture = new CompletableFuture<>();
         try {
-            configCache.policiesCache().getAsync(POLICY_ROOT + topicName.getNamespace()).thenAccept(policies -> {
+            configCache.getPoliciesResources().getAsync(POLICY_ROOT + topicName.getNamespace()).thenAccept(policies -> {
                 if (!policies.isPresent()) {
                     if (log.isDebugEnabled()) {
                         log.debug("Policies node couldn't be found for topic : {}", topicName);
@@ -237,7 +231,7 @@ public class PulsarAuthorizationProvider implements AuthorizationProvider {
                                                                        AuthAction authAction) {
         CompletableFuture<Boolean> permissionFuture = new CompletableFuture<>();
         try {
-            configCache.policiesCache().getAsync(POLICY_ROOT + namespaceName.toString()).thenAccept(policies -> {
+            configCache.getPoliciesResources().getAsync(POLICY_ROOT + namespaceName.toString()).thenAccept(policies -> {
                 if (!policies.isPresent()) {
                     if (log.isDebugEnabled()) {
                         log.debug("Policies node couldn't be found for namespace : {}", namespaceName);
@@ -292,27 +286,19 @@ public class PulsarAuthorizationProvider implements AuthorizationProvider {
             result.completeExceptionally(e);
         }
 
-        ZooKeeper globalZk = configCache.getZooKeeper();
         final String policiesPath = String.format("/%s/%s/%s", "admin", POLICIES, namespaceName.toString());
-
         try {
-            Stat nodeStat = new Stat();
-            byte[] content = globalZk.getData(policiesPath, null, nodeStat);
-            Policies policies = getThreadLocal().readValue(content, Policies.class);
-            policies.auth_policies.namespace_auth.put(role, actions);
-
-            // Write back the new policies into zookeeper
-            globalZk.setData(policiesPath, getThreadLocal().writeValueAsBytes(policies), nodeStat.getVersion());
-
-            configCache.policiesCache().invalidate(policiesPath);
-
+            configCache.getPoliciesResources().set(policiesPath, policies -> {
+                policies.auth_policies.namespace_auth.put(role, actions);
+                return policies;
+            });
             log.info("[{}] Successfully granted access for role {}: {} - namespace {}", role, role, actions,
                     namespaceName);
             result.complete(null);
-        } catch (KeeperException.NoNodeException e) {
+        } catch (NotFoundException e) {
             log.warn("[{}] Failed to set permissions for namespace {}: does not exist", role, namespaceName);
             result.completeExceptionally(new IllegalArgumentException("Namespace does not exist" + namespaceName));
-        } catch (KeeperException.BadVersionException e) {
+        } catch (BadVersionException e) {
             log.warn("[{}] Failed to set permissions for namespace {}: concurrent modification", role, namespaceName);
             result.completeExceptionally(new IllegalStateException(
                     "Concurrent modification on zk path: " + policiesPath + ", " + e.getMessage()));
@@ -347,36 +333,33 @@ public class PulsarAuthorizationProvider implements AuthorizationProvider {
             result.completeExceptionally(e);
         }
 
-        ZooKeeper globalZk = configCache.getZooKeeper();
         final String policiesPath = String.format("/%s/%s/%s", "admin", POLICIES, namespace.toString());
-
         try {
-            Stat nodeStat = new Stat();
-            byte[] content = globalZk.getData(policiesPath, null, nodeStat);
-            Policies policies = getThreadLocal().readValue(content, Policies.class);
+            configCache.getPoliciesResources().set(policiesPath, policies -> {
+                return policies;
+            });
+            Policies policies = configCache.getPoliciesResources().get(policiesPath)
+                    .orElseThrow(() -> new NotFoundException(policiesPath + " not found"));
             if (remove) {
                 if (policies.auth_policies.subscription_auth_roles.get(subscriptionName) != null) {
                     policies.auth_policies.subscription_auth_roles.get(subscriptionName).removeAll(roles);
-                }else {
-                    log.info("[{}] Couldn't find role {} while revoking for sub = {}", namespace, subscriptionName, roles);
+                } else {
+                    log.info("[{}] Couldn't find role {} while revoking for sub = {}", namespace, subscriptionName,
+                            roles);
                     result.completeExceptionally(new IllegalArgumentException("couldn't find subscription"));
                     return result;
                 }
             } else {
                 policies.auth_policies.subscription_auth_roles.put(subscriptionName, roles);
             }
-
             // Write back the new policies into zookeeper
-            globalZk.setData(policiesPath, getThreadLocal().writeValueAsBytes(policies), nodeStat.getVersion());
-
-            configCache.policiesCache().invalidate(policiesPath);
-
+            configCache.getPoliciesResources().set(policiesPath, p -> policies);
             log.info("[{}] Successfully granted access for role {} for sub = {}", namespace, subscriptionName, roles);
             result.complete(null);
-        } catch (KeeperException.NoNodeException e) {
+        } catch (NotFoundException e) {
             log.warn("[{}] Failed to set permissions for namespace {}: does not exist", subscriptionName, namespace);
             result.completeExceptionally(new IllegalArgumentException("Namespace does not exist" + namespace));
-        } catch (KeeperException.BadVersionException e) {
+        } catch (BadVersionException e) {
             log.warn("[{}] Failed to set permissions for {} on namespace {}: concurrent modification", subscriptionName, roles, namespace);
             result.completeExceptionally(new IllegalStateException(
                     "Concurrent modification on zk path: " + policiesPath + ", " + e.getMessage()));
@@ -409,7 +392,7 @@ public class PulsarAuthorizationProvider implements AuthorizationProvider {
     public CompletableFuture<Boolean> checkPermission(TopicName topicName, String role, AuthAction action) {
         CompletableFuture<Boolean> permissionFuture = new CompletableFuture<>();
         try {
-            configCache.policiesCache().getAsync(POLICY_ROOT + topicName.getNamespace()).thenAccept(policies -> {
+            configCache.getPoliciesResources().getAsync(POLICY_ROOT + topicName.getNamespace()).thenAccept(policies -> {
                 if (!policies.isPresent()) {
                     if (log.isDebugEnabled()) {
                         log.debug("Policies node couldn't be found for topic : {}", topicName);
@@ -497,10 +480,10 @@ public class PulsarAuthorizationProvider implements AuthorizationProvider {
 
     private void validatePoliciesReadOnlyAccess() {
         boolean arePoliciesReadOnly = true;
-        ZooKeeperCache globalZkCache = configCache.cache();
+        NamespaceResources policiesResources = configCache.getPoliciesResources();
 
         try {
-            arePoliciesReadOnly = globalZkCache.exists(POLICIES_READONLY_FLAG_PATH);
+            arePoliciesReadOnly = policiesResources.exists(POLICIES_READONLY_FLAG_PATH);
         } catch (Exception e) {
             log.warn("Unable to fetch contents of [{}] from global zookeeper", POLICIES_READONLY_FLAG_PATH, e);
             throw new IllegalStateException("Unable to fetch content from global zk");
@@ -511,17 +494,6 @@ public class PulsarAuthorizationProvider implements AuthorizationProvider {
                 log.debug("Policies are read-only. Broker cannot do read-write operations");
             }
             throw new IllegalStateException("policies are in readonly mode");
-        } else {
-            // Make sure the broker is connected to the global zookeeper before writing. If not, throw an exception.
-            if (globalZkCache.getZooKeeper().getState() != States.CONNECTED) {
-                if (log.isDebugEnabled()) {
-                    log.debug("Broker is not connected to the global zookeeper");
-                }
-                throw new IllegalStateException("not connected woith global zookeeper");
-            } else {
-                // Do nothing, just log the message.
-                log.debug("Broker is allowed to make read-write operations");
-            }
         }
     }
 
@@ -606,7 +578,7 @@ public class PulsarAuthorizationProvider implements AuthorizationProvider {
                                                                  String role,
                                                                 AuthenticationDataSource authData) {
         try {
-            TenantInfo tenantInfo = configCache.propertiesCache()
+            TenantInfo tenantInfo = configCache.getTenantResources()
                     .get(path(POLICIES, tenantName))
                     .orElseThrow(() -> new RestException(Response.Status.NOT_FOUND, "Tenant does not exist"));
 
@@ -616,7 +588,7 @@ public class PulsarAuthorizationProvider implements AuthorizationProvider {
             return isRoleSuperUserFuture
                     .thenCombine(isRoleTenantAdminFuture, (isRoleSuperUser, isRoleTenantAdmin) ->
                             isRoleSuperUser || isRoleTenantAdmin);
-        } catch (KeeperException.NoNodeException e) {
+        } catch (NotFoundException e) {
             log.warn("Failed to get tenant info data for non existing tenant {}", tenantName);
             throw new RestException(Response.Status.NOT_FOUND, "Tenant does not exist");
         } catch (Exception e) {

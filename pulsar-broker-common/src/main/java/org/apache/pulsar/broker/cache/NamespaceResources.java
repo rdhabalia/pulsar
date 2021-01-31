@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.pulsar.broker.admin.impl;
+package org.apache.pulsar.broker.cache;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import java.util.Map;
@@ -32,6 +32,7 @@ import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 
 @Getter
 public class NamespaceResources extends BaseResources<Policies> {
+
     private IsolationPolicyResources isolationPolicies;
     private LocalPoliciesResources localPolicies;
     private PartitionedTopicResources partitionedTopicResouces;

@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.pulsar.broker.admin.impl;
+package org.apache.pulsar.broker.cache;
 
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -30,7 +30,12 @@ public class PulsarResources {
     private NamespaceResources namespaceResources;
     private DynamicConfigurationResources dynamicConfigResources;
 
+    private MetadataStoreExtended localMetadataStore;
+    private MetadataStoreExtended configurationMetadataStore;
+
     public PulsarResources(MetadataStoreExtended localMetadataStore, MetadataStoreExtended configurationMetadataStore) {
+        this.localMetadataStore = localMetadataStore;
+        this.configurationMetadataStore = configurationMetadataStore;
         tenatResources = new TenantResources(configurationMetadataStore);
         clusterResources = new ClusterResources(configurationMetadataStore);
         dynamicConfigResources = new DynamicConfigurationResources(localMetadataStore);
