@@ -340,6 +340,23 @@ public class PersistentTopicsBase extends AdminResource {
         }
     }
 
+    protected void internalRedeliveryUnAckMessages(String subscription) {
+        // This operation should be reading from zookeeper and it should be allowed without having admin privileges
+        validateAdminAccessForTenant(namespaceName.getTenant());
+        validatePoliciesReadOnlyAccess();
+
+        PartitionedTopicMetadata meta = getPartitionedTopicMetadata(topicName, true, false);
+        int numPartitions = meta.partitions;
+        if (numPartitions > 0) {
+            for (int i = 0; i < numPartitions; i++) {
+                // TODO: throw exception
+                TopicName topicNamePartition = topicName.getPartition(i);
+                //redeliverUnackMessages(topicNamePartition.toString(), subscription);
+            }
+        }
+        redeliverUnackMessages(subscription);
+    }
+
     protected void internalGrantPermissionsOnTopic(String role, Set<AuthAction> actions) {
         // This operation should be reading from zookeeper and it should be allowed without having admin privileges
         validateAdminAccessForTenant(namespaceName.getTenant());
@@ -3910,5 +3927,15 @@ public class PersistentTopicsBase extends AdminResource {
                 asyncResponse.resume(res);
             }
         }
+    }
+
+    private void redeliverUnackMessages(String subscription) {
+        validateAdminAndClientPermission();
+        if (topicName.isGlobal()) {
+            validateGlobalNamespaceOwnership(namespaceName);
+        }
+        validateTopicOwnership(topicName, true);
+        Topic topic = getTopicReference(topicName);
+        topic.redeliverUnackMessages(subscription);
     }
 }

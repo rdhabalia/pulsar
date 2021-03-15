@@ -111,6 +111,21 @@ public class PersistentTopics extends PersistentTopicsBase {
     }
 
     @POST
+    @Path("/{property}/{cluster}/{namespace}/{topic}/redelivery/{subscription}")
+    @ApiOperation(hidden = true, value = "Redeliver unack messages for the subscription.")
+    @ApiResponses(value = {
+            @ApiResponse(code = 307, message = "Current broker doesn't serve the namespace of this topic"),
+            @ApiResponse(code = 403, message = "Don't have admin permission"),
+            @ApiResponse(code = 404, message = "Namespace doesn't exist"),
+            @ApiResponse(code = 409, message = "Concurrent modification") })
+    public void redeliveryUnAckMessages(@PathParam("property") String property,
+            @PathParam("cluster") String cluster, @PathParam("namespace") String namespace,
+            @PathParam("topic") @Encoded String encodedTopic, @PathParam("subscription") String subscription) {
+        validateTopicName(property, cluster, namespace, encodedTopic);
+        internalRedeliveryUnAckMessages(subscription);
+    }
+
+    @POST
     @Path("/{property}/{cluster}/{namespace}/{topic}/permissions/{role}")
     @ApiOperation(hidden = true, value = "Grant a new permission to a role on a single topic.")
     @ApiResponses(value = {

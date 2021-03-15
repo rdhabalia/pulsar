@@ -300,6 +300,7 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         ProducerBuilder<byte[]> producerBuilder = pulsarClient.newProducer()
                 .topic("persistent://my-property/my-ns/my-topic1");
 
+        batchMessageDelayMs = 0;
         if (batchMessageDelayMs != 0) {
             producerBuilder.enableBatching(true);
             producerBuilder.batchingMaxPublishDelay(batchMessageDelayMs, TimeUnit.MILLISECONDS);

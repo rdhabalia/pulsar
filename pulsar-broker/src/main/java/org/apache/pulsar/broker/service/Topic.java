@@ -261,4 +261,13 @@ public interface Topic {
      */
     CompletableFuture<Void> endTxn(TxnID txnID, int txnAction, long lowWaterMark);
 
+    /**
+     * Deliver unack messages for the given subscription.
+     *
+     * @param subscription
+     */
+    default void redeliverUnackMessages(String subscription) {
+        // No-op
+    }
+
 }

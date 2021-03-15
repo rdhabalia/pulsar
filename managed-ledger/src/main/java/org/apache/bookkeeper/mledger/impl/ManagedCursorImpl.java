@@ -101,6 +101,7 @@ import org.apache.pulsar.common.util.collections.BitSetRecyclable;
 import org.apache.pulsar.common.util.collections.ConcurrentOpenLongPairRangeSet;
 import org.apache.pulsar.common.util.collections.LongPairRangeSet;
 import org.apache.pulsar.common.util.collections.LongPairRangeSet.LongPairConsumer;
+import org.apache.pulsar.common.util.collections.LongPairSet;
 import org.apache.pulsar.metadata.api.Stat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -1256,6 +1257,44 @@ public class ManagedCursorImpl implements ManagedCursor {
                 });
 
         return alreadyAcknowledgedPositions;
+    }
+
+    protected void getNonDeletedMessages(LongPairSet messageSet) {
+        
+        AtomicReference<Range> currentRange = new AtomicReference<>();
+        PositionImpl start = markDeletePosition;
+        List<LedgerInfo> ledgers = ledger.getLedgersInfoAsList();
+        individualDeletedMessages.forEach((r) -> {
+            long rangeLowerLedgerId = r.lowerEndpoint().getLedgerId();
+            if(currentRange.get()==null) {
+                long startEntry = 0;
+                for(LedgerInfo ledger : ledgers) {
+                    if (rangeLowerLedgerId < ledger.getLedgerId()) {
+                        break;
+                    }
+                    if(rangeLowerLedgerId == ledger.getLedgerId()) {
+                        addLedgerEntries(messageSet, rangeLowerLedgerId, startEntry, r.lowerEndpoint().entryId);
+                        startEntry = r.lowerEndpoint().entryId+1;
+                    }
+                    if(rangeLowerLedgerId > ledger.getLedgerId()) {
+                        addLedgerEntries(messageSet, ledger.getLedgerId(), 0, ledger.getEntries());
+                    }
+                    
+                }
+                currentRange.set(r);
+                Range<PositionImpl> range = Range.openClosed(markDeletePosition, markDeletePosition);
+                //range.gap(r)
+                return true;
+            }
+            
+            
+            return true;
+        });
+    }
+
+    private void addLedgerEntries(LongPairSet messageSet, long ledgerId, long start, long end) {
+        // TODO Auto-generated method stub
+        
     }
 
     protected long getNumberOfEntries(Range<PositionImpl> range) {

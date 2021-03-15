@@ -2708,6 +2708,11 @@ public class PersistentTopic extends AbstractTopic
         });
     }
 
+    @Override
+    public void redeliverUnackMessages(String subscriptionName) {
+        PersistentSubscription subscription = this.subscriptions.get(subscriptionName);
+    }
+
     public long getDelayedDeliveryTickTimeMillis() {
         TopicPolicies topicPolicies = getTopicPolicies(TopicName.get(topic));
         //Topic level setting has higher priority than namespace level
