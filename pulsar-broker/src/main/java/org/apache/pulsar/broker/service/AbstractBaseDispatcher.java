@@ -67,6 +67,7 @@ public abstract class AbstractBaseDispatcher implements Dispatcher {
 
             ByteBuf metadataAndPayload = entry.getDataBuffer();
             MessageMetadata msgMetadata = Commands.peekMessageMetadata(metadataAndPayload, subscription.toString(), -1);
+            System.out.println(entry.getEntryId()+" - "+msgMetadata.hasDeliverAtTime());
             EntryWrapper entryWrapper = EntryWrapper.get(entry, msgMetadata);
             entryWrappers[i] = entryWrapper;
             int batchSize = msgMetadata.getNumMessagesInBatch();
@@ -114,31 +115,50 @@ public abstract class AbstractBaseDispatcher implements Dispatcher {
                 continue;
             }
             ByteBuf metadataAndPayload = entry.getDataBuffer();
-            MessageMetadata msgMetadata = entryWrapper.isPresent() && entryWrapper.get()[i] != null
-                    ? entryWrapper.get()[i].getMetadata()
-                    : null;
-            msgMetadata = msgMetadata == null
-                    ? Commands.peekMessageMetadata(metadataAndPayload, subscription.toString(), -1)
-                    : msgMetadata;
-            if (!isReplayRead && msgMetadata != null && msgMetadata.hasTxnidMostBits()
-                    && msgMetadata.hasTxnidLeastBits()) {
-                if (Markers.isTxnMarker(msgMetadata)) {
+            
+            boolean metadataPresent = false;
+            int markerType = -1;
+            long txnidMostBits = -1;
+            long txnidLeastBits = -1;
+            long deliverAtTime = -1;
+            
+            if (entryWrapper.isPresent() && entryWrapper.get()[i] != null) {
+                EntryWrapper ew = entryWrapper.get()[i];
+                metadataPresent = ew.isMetadataPresent();
+                markerType = ew.getMarkerType();
+                txnidMostBits = ew.getTxnidMostBits();
+                txnidLeastBits = ew.getTxnidLeastBits();
+                deliverAtTime = ew.getDeliverAtTime();
+            } else {
+                MessageMetadata msgMetadata = Commands.peekMessageMetadata(metadataAndPayload, subscription.toString(),
+                        -1);
+                if (msgMetadata != null) {
+                    metadataPresent = true;
+                    markerType = msgMetadata.hasMarkerType() ? msgMetadata.getMarkerType() : -1;
+                    txnidMostBits = msgMetadata.hasTxnidMostBits() ? msgMetadata.getTxnidMostBits() : -1;
+                    txnidLeastBits = msgMetadata.hasTxnidLeastBits() ? msgMetadata.getTxnidLeastBits() : -1;
+                    deliverAtTime = msgMetadata.hasDeliverAtTime() ? msgMetadata.getDeliverAtTime() : -1;
+                }
+            }
+            if (!isReplayRead && metadataPresent &&txnidMostBits!=-1
+                    && txnidLeastBits!=-1) {
+                if (Markers.isTxnMarker(markerType)) {
                     entries.set(i, null);
                     entry.release();
                     continue;
                 } else if (((PersistentTopic) subscription.getTopic())
-                        .isTxnAborted(new TxnID(msgMetadata.getTxnidMostBits(), msgMetadata.getTxnidLeastBits()))) {
+                        .isTxnAborted(new TxnID(txnidMostBits, txnidLeastBits))) {
                     subscription.acknowledgeMessage(Collections.singletonList(entry.getPosition()), AckType.Individual,
                             Collections.emptyMap());
                     entries.set(i, null);
                     entry.release();
                     continue;
                 }
-            } else if (msgMetadata == null || Markers.isServerOnlyMarker(msgMetadata)) {
+            } else if (!metadataPresent || Markers.isServerOnlyMarker(markerType != -1)) {
                 PositionImpl pos = (PositionImpl) entry.getPosition();
                 // Message metadata was corrupted or the messages was a server-only marker
 
-                if (Markers.isReplicatedSubscriptionSnapshotMarker(msgMetadata)) {
+                if (Markers.isReplicatedSubscriptionSnapshotMarker(markerType)) {
                     processReplicatedSubscriptionSnapshot(pos, metadataAndPayload);
                 }
 
@@ -147,8 +167,8 @@ public abstract class AbstractBaseDispatcher implements Dispatcher {
                 subscription.acknowledgeMessage(Collections.singletonList(pos), AckType.Individual,
                         Collections.emptyMap());
                 continue;
-            } else if (msgMetadata.hasDeliverAtTime()
-                    && trackDelayedDelivery(entry.getLedgerId(), entry.getEntryId(), msgMetadata)) {
+            } else if (deliverAtTime!=-1
+                    && trackDelayedDelivery(entry.getLedgerId(), entry.getEntryId(), deliverAtTime)) {
                 // The message is marked for delayed delivery. Ignore for now.
                 entries.set(i, null);
                 entry.release();

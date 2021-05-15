@@ -24,7 +24,6 @@ import java.util.concurrent.CompletableFuture;
 import org.apache.bookkeeper.mledger.impl.PositionImpl;
 import org.apache.pulsar.broker.service.persistent.DispatchRateLimiter;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.SubType;
-import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.policies.data.DispatchRate;
 import org.apache.pulsar.common.policies.data.Policies;
 
@@ -104,7 +103,7 @@ public interface Dispatcher {
      * Check with dispatcher if the message should be added to the delayed delivery tracker.
      * Return true if the message should be delayed and ignored at this point.
      */
-    default boolean trackDelayedDelivery(long ledgerId, long entryId, MessageMetadata msgMetadata) {
+    default boolean trackDelayedDelivery(long ledgerId, long entryId, long deliverAtTime) {
         return false;
     }
 

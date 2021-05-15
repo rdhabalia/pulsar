@@ -806,7 +806,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractDispatcherMul
     }
 
     @Override
-    public boolean trackDelayedDelivery(long ledgerId, long entryId, MessageMetadata msgMetadata) {
+    public boolean trackDelayedDelivery(long ledgerId, long entryId, long deliverAtTime) {
         if (!topic.isDelayedDeliveryEnabled()) {
             // If broker has the feature disabled, always deliver messages immediately
             return false;
@@ -820,7 +820,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractDispatcherMul
             }
 
             delayedDeliveryTracker.get().resetTickTime(topic.getDelayedDeliveryTickTimeMillis());
-            return delayedDeliveryTracker.get().addMessage(ledgerId, entryId, msgMetadata.getDeliverAtTime());
+            return delayedDeliveryTracker.get().addMessage(ledgerId, entryId, deliverAtTime);
         }
     }
 

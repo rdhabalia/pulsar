@@ -124,7 +124,7 @@ public class DelayedDeliveryTest extends ProducerConsumerBase {
         }
     }
 
-    @Test
+    @Test(timeOut = 10000000)
     public void testInterleavedMessages()
             throws Exception {
         String topic = BrokerTestUtil.newUniqueName("testInterleavedMessages");
@@ -149,7 +149,7 @@ public class DelayedDeliveryTest extends ProducerConsumerBase {
 
             producer.newMessage()
                     .value("delayed-msg-" + i)
-                    .deliverAfter(5, TimeUnit.SECONDS)
+                    .deliverAfter(500, TimeUnit.SECONDS)
                     .sendAsync();
         }
 

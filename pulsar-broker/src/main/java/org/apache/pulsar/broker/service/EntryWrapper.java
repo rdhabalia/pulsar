@@ -24,12 +24,23 @@ import org.apache.pulsar.common.api.proto.MessageMetadata;
 
 public class EntryWrapper {
     private Entry entry = null;
-    private MessageMetadata metadata = null;
+    private boolean metadataPresent=false;
+    private int markerType;
+    private long txnidMostBits;
+    private long txnidLeastBits;
+    private long deliverAtTime;
+    private static final long NON_EXIST_VALUE = -1;
 
     public static EntryWrapper get(Entry entry, MessageMetadata metadata) {
         EntryWrapper entryWrapper = RECYCLER.get();
         entryWrapper.entry = entry;
-        entryWrapper.metadata = metadata;
+        if (metadata != null) {
+            entryWrapper.metadataPresent = true;
+            entryWrapper.markerType = metadata.hasMarkerType() ? metadata.getMarkerType() : (int) NON_EXIST_VALUE;
+            entryWrapper.txnidMostBits = metadata.hasTxnidMostBits() ? metadata.getTxnidMostBits() : NON_EXIST_VALUE;
+            entryWrapper.txnidLeastBits = metadata.hasTxnidLeastBits() ? metadata.getTxnidLeastBits() : NON_EXIST_VALUE;
+            entryWrapper.deliverAtTime = metadata.hasDeliverAtTime() ? metadata.getDeliverAtTime() : NON_EXIST_VALUE;
+        }
         return entryWrapper;
     }
 
@@ -41,8 +52,8 @@ public class EntryWrapper {
         return entry;
     }
 
-    public MessageMetadata getMetadata() {
-        return metadata;
+    public boolean isMetadataPresent() {
+        return metadataPresent;
     }
 
     private final Recycler.Handle<EntryWrapper> handle;
@@ -53,9 +64,40 @@ public class EntryWrapper {
         }
     };
 
+    public int getMarkerType() {
+        return markerType;
+    }
+
+    public boolean hasMarkerType() {
+        return this.markerType != NON_EXIST_VALUE;
+    }
+
+    public long getTxnidMostBits() {
+        return txnidMostBits;
+    }
+
+    public boolean hasTxnidMostBits() {
+        return this.txnidMostBits != NON_EXIST_VALUE;
+    }
+
+    public long getTxnidLeastBits() {
+        return txnidLeastBits;
+    }
+
+    public boolean hasTxnidLeastBits() {
+        return this.txnidLeastBits != NON_EXIST_VALUE;
+    }
+
+    public long getDeliverAtTime() {
+        return deliverAtTime;
+    }
+
     public void recycle() {
         entry = null;
-        metadata = null;
+        metadataPresent = false;
+        txnidMostBits = NON_EXIST_VALUE;
+        txnidLeastBits= NON_EXIST_VALUE;
+        deliverAtTime=NON_EXIST_VALUE;
         handle.recycle(this);
     }
 }

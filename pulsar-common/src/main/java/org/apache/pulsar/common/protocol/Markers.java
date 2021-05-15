@@ -95,16 +95,15 @@ public class Markers {
         return Commands.serializeMetadataAndPayload(ChecksumType.Crc32c, msgMetadata, payload);
     }
 
-    public static boolean isServerOnlyMarker(MessageMetadata msgMetadata) {
+    public static boolean isServerOnlyMarker(boolean hasMarkerType) {
         // In future, if we add more marker types that can be also sent to clients
         // we'll have to do finer check here.
-        return msgMetadata.hasMarkerType();
+        return hasMarkerType;
     }
 
-    public static boolean isReplicatedSubscriptionSnapshotMarker(MessageMetadata msgMetadata) {
-        return msgMetadata != null
-                && msgMetadata.hasMarkerType()
-                && msgMetadata.getMarkerType() == MarkerType.REPLICATED_SUBSCRIPTION_SNAPSHOT.getValue();
+    public static boolean isReplicatedSubscriptionSnapshotMarker(int markerType) {
+        return markerType != -1
+                && markerType == MarkerType.REPLICATED_SUBSCRIPTION_SNAPSHOT.getValue();
     }
 
     public static ByteBuf newReplicatedSubscriptionsSnapshotRequest(String snapshotId, String sourceCluster) {
@@ -226,11 +225,10 @@ public class Markers {
                && msgMetadata.getMarkerType() == MarkerType.TXN_COMMIT.getValue();
     }
 
-    public static boolean isTxnMarker(MessageMetadata msgMetadata) {
-        return msgMetadata != null
-                && msgMetadata.hasMarkerType()
-                && (msgMetadata.getMarkerType() == MarkerType.TXN_COMMIT.getValue()
-                || msgMetadata.getMarkerType() == MarkerType.TXN_ABORT.getValue());
+    public static boolean isTxnMarker(int markerType) {
+        return markerType != -1
+                && (markerType == MarkerType.TXN_COMMIT.getValue()
+                        || markerType == MarkerType.TXN_ABORT.getValue());
     }
 
     public static ByteBuf newTxnCommitMarker(long sequenceId, long txnMostBits,
