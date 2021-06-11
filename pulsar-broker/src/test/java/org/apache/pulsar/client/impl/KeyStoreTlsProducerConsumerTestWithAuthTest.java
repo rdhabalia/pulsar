@@ -39,6 +39,7 @@ import org.apache.pulsar.client.api.ProducerConsumerBase;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.client.impl.auth.AuthenticationKeyStoreTls;
+import org.apache.pulsar.client.impl.auth.AuthenticationTls;
 import org.apache.pulsar.common.policies.data.ClusterDataImpl;
 import org.apache.pulsar.common.policies.data.TenantInfoImpl;
 import org.testng.Assert;
@@ -119,7 +120,7 @@ public class KeyStoreTlsProducerConsumerTestWithAuthTest extends ProducerConsume
         }
 
         Set<String> tlsProtocols = Sets.newConcurrentHashSet();
-        tlsProtocols.add("TLSv1.3");
+        //tlsProtocols.add("TLSv1.3");
         tlsProtocols.add("TLSv1.2");
 
         ClientBuilder clientBuilder = PulsarClient.builder().serviceUrl(lookupUrl)
