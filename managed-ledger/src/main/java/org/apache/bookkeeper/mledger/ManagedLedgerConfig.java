@@ -77,6 +77,9 @@ public class ManagedLedgerConfig {
     private int newEntriesCheckDelayInMillis = 10;
     private Clock clock = Clock.systemUTC();
     private ManagedLedgerInterceptor managedLedgerInterceptor;
+    private int minimumBacklogCursorsForCaching = 0;
+    private int minimumBacklogEntriesForCaching = 1000;
+    private int maxBacklogBetweenCursorsForCaching = 1000;
 
     public boolean isCreateIfMissing() {
         return createIfMissing;
@@ -645,5 +648,62 @@ public class ManagedLedgerConfig {
 
     public void setManagedLedgerInterceptor(ManagedLedgerInterceptor managedLedgerInterceptor) {
         this.managedLedgerInterceptor = managedLedgerInterceptor;
+    }
+
+    /**
+     * Minimum cursors with backlog after which broker is allowed to cache read entries to reuse them for other cursors'
+     * backlog reads. (Default = 0, broker will not cache backlog reads)
+     *
+     * @return
+     */
+    public int getMinimumBacklogCursorsForCaching() {
+        return minimumBacklogCursorsForCaching;
+    }
+
+    /**
+     * Set Minimum cursors with backlog after which broker is allowed to cache read entries to reuse them for other
+     * cursors' backlog reads.
+     *
+     * @param minimumBacklogCursorsForCaching
+     */
+    public void setMinimumBacklogCursorsForCaching(int minimumBacklogCursorsForCaching) {
+        this.minimumBacklogCursorsForCaching = minimumBacklogCursorsForCaching;
+    }
+
+    /**
+     * Minimum backlog should exist to leverage caching for backlog reads.
+     *
+     * @return
+     */
+    public int getMinimumBacklogEntriesForCaching() {
+        return minimumBacklogEntriesForCaching;
+    }
+
+    /**
+     * Set Minimum backlog after that broker will start caching backlog reads.
+     *
+     * @param minimumBacklogEntriesForCaching
+     */
+    public void setMinimumBacklogEntriesForCaching(int minimumBacklogEntriesForCaching) {
+        this.minimumBacklogEntriesForCaching = minimumBacklogEntriesForCaching;
+    }
+
+    /**
+     * Max backlog gap between backlogged cursors while caching to avoid caching entry which can be invalidated before other backlog
+     * cursor can reuse it from cache.
+     *
+     * @return
+     */
+    public int getMaxBacklogBetweenCursorsForCaching() {
+        return maxBacklogBetweenCursorsForCaching;
+    }
+
+    /**
+     * Set maximum backlog distance between backlogged curosr to avoid caching unused entry.
+     *
+     * @param maxBacklogBetweenCursorsForCaching
+     */
+    public void setMaxBacklogBetweenCursorsForCaching(int maxBacklogBetweenCursorsForCaching) {
+        this.maxBacklogBetweenCursorsForCaching = maxBacklogBetweenCursorsForCaching;
     }
 }

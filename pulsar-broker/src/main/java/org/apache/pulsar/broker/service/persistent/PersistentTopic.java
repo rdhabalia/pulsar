@@ -2328,6 +2328,15 @@ public class PersistentTopic extends AbstractTopic
     }
 
     @Override
+    public void checkCursorsToCacheEntries() {
+        try {
+            ledger.checkCursorsToCacheEntries();
+        } catch (Exception e) {
+            log.warn("Failed to check cursors to cache entries", e);
+        }
+    }
+
+    @Override
     public void checkDeduplicationSnapshot() {
         messageDeduplication.takeSnapshot();
     }

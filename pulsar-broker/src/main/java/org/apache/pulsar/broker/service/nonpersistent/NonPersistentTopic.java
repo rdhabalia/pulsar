@@ -934,6 +934,11 @@ public class NonPersistentTopic extends AbstractTopic implements Topic {
     }
 
     @Override
+    public void checkCursorsToCacheEntries() {
+        // no-op
+    }
+
+    @Override
     public void checkDeduplicationSnapshot() {
         // no-op
     }

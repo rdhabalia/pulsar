@@ -636,4 +636,9 @@ public interface ManagedLedger {
      * @return the future of managed ledger internal stats
      */
     CompletableFuture<ManagedLedgerInternalStats> getManagedLedgerInternalStats(boolean includeLedgerMetadata);
+
+    /**
+     * Check if managed ledger should cache backlog reads.
+     */
+    void checkCursorsToCacheEntries();
 }

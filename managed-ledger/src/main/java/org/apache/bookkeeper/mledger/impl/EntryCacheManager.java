@@ -191,7 +191,7 @@ public class EntryCacheManager {
         }
 
         @Override
-        public void asyncReadEntry(ReadHandle lh, long firstEntry, long lastEntry, boolean isSlowestReader,
+        public void asyncReadEntry(ReadHandle lh, long firstEntry, long lastEntry, boolean shouldCacheEntry,
                 final ReadEntriesCallback callback, Object ctx) {
             lh.readAsync(firstEntry, lastEntry).whenComplete(
                     (ledgerEntries, exception) -> {
