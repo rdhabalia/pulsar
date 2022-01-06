@@ -51,7 +51,13 @@ public class TenantInfoImpl implements TenantInfo {
             name = "allowedClusters"
     )
     private Set<String> allowedClusters;
+    
+    private long lastUpdatedTimestamp;
 
+    public TenantInfoImpl(Set<String> adminRoles, Set<String> allowedClusters) {
+        this.adminRoles = adminRoles;
+        this.allowedClusters = allowedClusters;
+    }
 
     public static TenantInfoImplBuilder builder() {
         return new TenantInfoImplBuilder();
@@ -60,6 +66,7 @@ public class TenantInfoImpl implements TenantInfo {
     public static class TenantInfoImplBuilder implements TenantInfo.Builder {
         private Set<String> adminRoles;
         private Set<String> allowedClusters;
+        private long lastUpdatedTimestamp;
 
         TenantInfoImplBuilder() {
         }
@@ -81,7 +88,7 @@ public class TenantInfoImpl implements TenantInfo {
             if (allowedClusters == null) {
                 allowedClusters = new HashSet<>();
             }
-            return new TenantInfoImpl(adminRoles, allowedClusters);
+            return new TenantInfoImpl(adminRoles, allowedClusters, lastUpdatedTimestamp);
         }
     }
 }

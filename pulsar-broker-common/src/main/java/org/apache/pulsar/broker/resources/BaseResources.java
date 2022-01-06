@@ -25,12 +25,14 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.metadata.api.MetadataCache;
 import org.apache.pulsar.metadata.api.MetadataStore;
 import org.apache.pulsar.metadata.api.MetadataStoreException;
+import org.apache.pulsar.metadata.api.Notification;
 
 /**
  * Base class for all configuration resources to access configurations from metadata-store.
@@ -41,8 +43,8 @@ import org.apache.pulsar.metadata.api.MetadataStoreException;
 @Slf4j
 public class BaseResources<T> {
 
-    protected static final String BASE_POLICIES_PATH = "/admin/policies";
-    protected static final String BASE_CLUSTERS_PATH = "/admin/clusters";
+    public static final String BASE_POLICIES_PATH = "/admin/policies";
+    public static final String BASE_CLUSTERS_PATH = "/admin/clusters";
 
     @Getter
     private final MetadataStore store;
@@ -190,6 +192,14 @@ public class BaseResources<T> {
         return operationTimeoutSec;
     }
 
+    protected void registerListener(String basePath, Consumer<Notification> listener) {
+        store.registerListener((n) -> {
+            if (n.getPath().startsWith(basePath)) {
+                listener.accept(n);
+            }
+        });
+    }
+    
     protected static String joinPath(String... parts) {
         StringBuilder sb = new StringBuilder();
         Joiner.on('/').appendTo(sb, parts);

@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.resources;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -26,7 +27,9 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.common.naming.NamespaceName;
+import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.TenantInfo;
+import org.apache.pulsar.common.policies.data.TenantInfoImpl;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.metadata.api.MetadataStore;
 import org.apache.pulsar.metadata.api.MetadataStoreException;
@@ -74,7 +77,11 @@ public class TenantResources extends BaseResources<TenantInfo> {
     }
 
     public CompletableFuture<Void> updateTenantAsync(String tenantName, Function<TenantInfo, TenantInfo> f) {
-        return setAsync(joinPath(BASE_POLICIES_PATH, tenantName), f);
+        return setAsync(joinPath(BASE_POLICIES_PATH, tenantName), (p1) -> {
+            TenantInfoImpl p2 = (TenantInfoImpl) f.apply(p1);
+            p2.setLastUpdatedTimestamp(Instant.now().toEpochMilli());
+            return p2;
+        });
     }
 
     public CompletableFuture<Boolean> tenantExistsAsync(String tenantName) {

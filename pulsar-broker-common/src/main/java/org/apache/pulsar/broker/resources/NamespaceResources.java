@@ -19,10 +19,13 @@
 package org.apache.pulsar.broker.resources;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.Getter;
@@ -38,6 +41,7 @@ import org.apache.pulsar.common.util.Codec;
 import org.apache.pulsar.metadata.api.MetadataCache;
 import org.apache.pulsar.metadata.api.MetadataStore;
 import org.apache.pulsar.metadata.api.MetadataStoreException;
+import org.apache.pulsar.metadata.api.Notification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -80,6 +84,14 @@ public class NamespaceResources extends BaseResources<Policies> {
         create(joinPath(BASE_POLICIES_PATH, ns.toString()), policies);
     }
 
+    public CompletableFuture<Void> createPoliciesAsync(NamespaceName ns, Policies policies) {
+        return createAsync(joinPath(BASE_POLICIES_PATH, ns.toString()), policies);
+    }
+
+    public void registerListener(Consumer<Notification> listener) {
+        registerListener(BASE_POLICIES_PATH, listener);
+    }
+
     public boolean namespaceExists(NamespaceName ns) throws MetadataStoreException {
         String path = joinPath(BASE_POLICIES_PATH, ns.toString());
         return super.exists(path) &&
@@ -119,11 +131,19 @@ public class NamespaceResources extends BaseResources<Policies> {
     }
 
     public void setPolicies(NamespaceName ns, Function<Policies, Policies> function) throws MetadataStoreException {
-        set(joinPath(BASE_POLICIES_PATH, ns.toString()), function);
+        set(joinPath(BASE_POLICIES_PATH, ns.toString()), (p1) -> {
+            Policies p2 = function.apply(p1);
+            p2.lastUpdatedTimestamp = Instant.now().toEpochMilli();
+            return p2;
+        });
     }
 
     public CompletableFuture<Void> setPoliciesAsync(NamespaceName ns, Function<Policies, Policies> function) {
-        return setAsync(joinPath(BASE_POLICIES_PATH, ns.toString()), function);
+        return setAsync(joinPath(BASE_POLICIES_PATH, ns.toString()), (p1) -> {
+            Policies p2 = function.apply(p1);
+            p2.lastUpdatedTimestamp = Instant.now().toEpochMilli();
+            return p2;
+        });
     }
 
     public static boolean pathIsFromNamespace(String path) {
