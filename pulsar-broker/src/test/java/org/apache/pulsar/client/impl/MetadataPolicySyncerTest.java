@@ -18,98 +18,33 @@
  */
 package org.apache.pulsar.client.impl;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.UUID.randomUUID;
-import static org.mockito.Mockito.any;
-import static org.mockito.Mockito.atLeastOnce;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.doNothing;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.verify;
 import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertFalse;
-import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertNotNull;
-import static org.testng.Assert.assertNull;
-import static org.testng.Assert.assertTrue;
-import static org.testng.Assert.fail;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Sets;
-import io.netty.buffer.ByteBuf;
-import java.lang.reflect.Field;
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.NavigableMap;
-import java.util.Optional;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import lombok.Cleanup;
-import lombok.EqualsAndHashCode;
-import lombok.Getter;
-import lombok.Setter;
-import org.apache.bookkeeper.client.AsyncCallback.AddCallback;
-import org.apache.bookkeeper.client.BKException;
-import org.apache.bookkeeper.client.BookKeeper.DigestType;
-import org.apache.bookkeeper.client.PulsarMockBookKeeper;
-import org.apache.bookkeeper.client.PulsarMockLedgerHandle;
-import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
-import org.apache.pulsar.broker.auth.MockedPulsarServiceBaseTest;
-import org.apache.pulsar.broker.namespace.OwnershipCache;
-import org.apache.pulsar.broker.resources.BaseResources;
+
 import org.apache.pulsar.broker.service.MetadataChangeEvent;
-import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.broker.service.MetadataChangeEvent.EventType;
 import org.apache.pulsar.broker.service.MetadataChangeEvent.ResourceType;
-import org.apache.pulsar.broker.service.persistent.PersistentTopic;
-import org.apache.pulsar.client.admin.PulsarAdminException;
+import org.apache.pulsar.broker.service.MetadataPolicySyncer;
 import org.apache.pulsar.client.api.Consumer;
-import org.apache.pulsar.client.api.ConsumerBuilder;
 import org.apache.pulsar.client.api.Message;
-import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.ProducerConsumerBase;
-import org.apache.pulsar.client.api.PulsarClient;
-import org.apache.pulsar.client.api.PulsarClientException;
-import org.apache.pulsar.client.api.Reader;
-import org.apache.pulsar.client.api.Schema;
-import org.apache.pulsar.client.api.SubscriptionType;
-import org.apache.pulsar.client.api.schema.SchemaDefinition;
-import org.apache.pulsar.client.api.schema.SchemaReader;
-import org.apache.pulsar.client.api.schema.SchemaWriter;
-import org.apache.pulsar.client.impl.HandlerState.State;
 import org.apache.pulsar.client.impl.schema.AvroSchema;
-import org.apache.pulsar.client.impl.schema.SchemaDefinitionBuilderImpl;
-import org.apache.pulsar.client.impl.schema.reader.JacksonJsonReader;
-import org.apache.pulsar.client.impl.schema.writer.JacksonJsonWriter;
-import org.apache.pulsar.common.naming.NamespaceBundle;
-import org.apache.pulsar.common.naming.TopicName;
-import org.apache.pulsar.common.policies.data.ClusterData;
-import org.apache.pulsar.common.policies.data.RetentionPolicies;
-import org.apache.pulsar.common.protocol.PulsarHandler;
-import org.apache.pulsar.common.util.FutureUtil;
-import org.apache.pulsar.common.util.collections.ConcurrentLongHashMap;
-import org.apache.pulsar.common.util.collections.ConcurrentOpenHashMap;
+import org.apache.pulsar.common.naming.NamespaceName;
+import org.apache.pulsar.common.policies.data.Policies;
+import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.awaitility.Awaitility;
-import org.mockito.Mockito;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
-import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
+
+import com.google.common.collect.Sets;
+
+import lombok.Cleanup;
 
 @Test(groups = "broker-impl")
 public class MetadataPolicySyncerTest extends ProducerConsumerBase {
@@ -128,21 +63,199 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         super.internalCleanup();
     }
 
-    /**
-     * Verifies: 1. Closing of Broker service unloads all bundle gracefully and there must not be any connected bundles
-     * after closing broker service
-     *
-     * @throws Exception
-     */
     @Test
-    public void testCloseBrokerService() throws Exception {
+    public void testNamespaceMetadataEventSyncerPublish() throws Exception {
+        String metadataEventNs = "my-property/metadataTopic";
+        String metadataEventTopic = "persistent://" + metadataEventNs + "/event";
+        admin.namespaces().createNamespace(metadataEventNs, Sets.newHashSet("test"));
+        conf.setMetadataSyncEventTopic(metadataEventTopic);
+        restartBroker();
+
+        Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> pulsar.getMetadataSyncer().isActive());
+
+        Policies policies = new Policies();
+        policies.replication_clusters = Sets.newHashSet("test1", "test2");
+        byte[] data = ObjectMapperFactory.getThreadLocal().writer().writeValueAsBytes(policies);
+        // (1) create a new namespace
+        String ns2 = "my-property/brok-ns2";
+        MetadataChangeEvent event = new MetadataChangeEvent();
+        event.setResource(ResourceType.Namespaces);
+        event.setType(EventType.Created);
+        event.setSourceCluster("test2");
+        event.setResourceName(ns2);
+        event.setData(data);
+
+        @Cleanup
+        Producer<MetadataChangeEvent> producer1 = pulsarClient.newProducer(AvroSchema.of(MetadataChangeEvent.class))
+                .topic(metadataEventTopic).create();
+
+        // (1) create namespace
+        producer1.newMessage().value(event).send();
+        Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
+            try {
+                admin.namespaces().getPolicies(ns2);
+                return true;
+            } catch (Exception e) {
+                // ok
+                return false;
+            }
+        });
+        policies = admin.namespaces().getPolicies(ns2);
+        assertNotNull(policies);
+        assertEquals(policies.replication_clusters, Sets.newHashSet("test1", "test2"));
+
+        // (2) try to publish : create namespace message again. even should be acked successfully
+        policies.lastUpdatedTimestamp += 1;
+        data = ObjectMapperFactory.getThreadLocal().writer().writeValueAsBytes(policies);
+        event.setData(data);
+        producer1.newMessage().value(event).send();
+        Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
+            try {
+                return admin.topics().getStats(metadataEventTopic).getSubscriptions()
+                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+            } catch (Exception e) {
+                // ok
+                return false;
+            }
+        });
+        assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
+                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+        // check lastUpdated time of policies
+        long time = pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
+                .get().lastUpdatedTimestamp;
+
+        // (3) update with old event time
+        event.setType(EventType.Modified);
+        policies.lastUpdatedTimestamp -= 1;
+        data = ObjectMapperFactory.getThreadLocal().writer().writeValueAsBytes(policies);
+        event.setData(data);
+        producer1.newMessage().value(event).send();
+        Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
+            try {
+                return admin.topics().getStats(metadataEventTopic).getSubscriptions()
+                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+            } catch (Exception e) {
+                // ok
+                return false;
+            }
+        });
+        assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
+                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+        // check lastUpdated time of policies
+        assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
+                .get().lastUpdatedTimestamp, time);
+
+        // (4) update with new event time
+        event.setType(EventType.Modified);
+        time = policies.lastUpdatedTimestamp + 1;
+        policies.lastUpdatedTimestamp = time;
+        policies.replication_clusters = Sets.newHashSet("test1", "test2", "test3");
+        data = ObjectMapperFactory.getThreadLocal().writer().writeValueAsBytes(policies);
+        event.setData(data);
+        producer1.newMessage().value(event).send();
+        Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
+            try {
+                return admin.topics().getStats(metadataEventTopic).getSubscriptions()
+                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+            } catch (Exception e) {
+                // ok
+                return false;
+            }
+        });
+        assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
+                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+        // check lastUpdated time of policies
+        assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
+                .get().lastUpdatedTimestamp, time);
+        assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
+                .get().replication_clusters, Sets.newHashSet("test1", "test2", "test3"));
+
+        // (5) Invalid data
+        event.setType(EventType.Modified);
+        policies.lastUpdatedTimestamp += 1;
+        policies.replication_clusters = Sets.newHashSet("test1", "test2", "test3");
+        data = ObjectMapperFactory.getThreadLocal().writer().writeValueAsBytes("invalid-data");
+        event.setData(data);
+        producer1.newMessage().value(event).send();
+        Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
+            try {
+                return admin.topics().getStats(metadataEventTopic).getSubscriptions()
+                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+            } catch (Exception e) {
+                // ok
+                return false;
+            }
+        });
+        assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
+                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+        // check lastUpdated time of policies which should have not changed
+        assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
+                .get().lastUpdatedTimestamp, time);
+
+        // (6) timestamp racecondition but pick cluster-name to win the update: local cluster will win
+        event.setType(EventType.Modified);
+        time = pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
+                .get().lastUpdatedTimestamp;
+        policies.lastUpdatedTimestamp = time;
+        policies.replication_clusters = Sets.newHashSet("test1");
+        data = ObjectMapperFactory.getThreadLocal().writer().writeValueAsBytes(policies);
+        event.setSourceCluster("abc"); // "test" < "abc". event should be skipped
+        event.setData(data);
+        producer1.newMessage().value(event).send();
+        Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
+            try {
+                return admin.topics().getStats(metadataEventTopic).getSubscriptions()
+                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+            } catch (Exception e) {
+                // ok
+                return false;
+            }
+        });
+        assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
+                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+        // check lastUpdated time of policies
+        assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
+                .get().lastUpdatedTimestamp, time);
+        assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
+                .get().replication_clusters, Sets.newHashSet("test1", "test2", "test3"));
+
+        // (7) timestamp racecondition but pick cluster-name to win the update: remote cluster will win
+        event.setType(EventType.Modified);
+        policies.lastUpdatedTimestamp = time + 1;
+        policies.replication_clusters = Sets.newHashSet("test1");
+        data = ObjectMapperFactory.getThreadLocal().writer().writeValueAsBytes(policies);
+        event.setSourceCluster("uvw"); // "test" < "uvw". event should be skipped
+        event.setData(data);
+        producer1.newMessage().value(event).send();
+        Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
+            try {
+                return admin.topics().getStats(metadataEventTopic).getSubscriptions()
+                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+            } catch (Exception e) {
+                // ok
+                return false;
+            }
+        });
+        assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
+                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+        // check lastUpdated time of policies
+        assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
+                .get().lastUpdatedTimestamp, time + 1);
+        assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
+                .get().replication_clusters, Sets.newHashSet("test1"));
+
+        producer1.close();
+    }
+
+    @Test
+    public void testNamespaceMetadataEventSyncer0() throws Exception {
 
         String metadataEventNs = "my-property/metadataTopic";
         String metadataEventTopic = "persistent://" + metadataEventNs + "/event";
         admin.namespaces().createNamespace(metadataEventNs, Sets.newHashSet("test"));
         conf.setMetadataSyncEventTopic(metadataEventTopic);
         restartBroker();
-        
+
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> pulsar.getMetadataSyncer().isActive());
 
         @Cleanup
@@ -163,20 +276,20 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         assertNotNull(event.getData());
 
         @Cleanup
-        Producer<MetadataChangeEvent> producer1 =  pulsarClient.newProducer(AvroSchema.of(MetadataChangeEvent.class)).topic(metadataEventTopic)
-                .create();
-        
-        String ns2 = event.getResourceName()+"-2";
+        Producer<MetadataChangeEvent> producer1 = pulsarClient.newProducer(AvroSchema.of(MetadataChangeEvent.class))
+                .topic(metadataEventTopic).create();
+
+        String ns2 = event.getResourceName() + "-2";
         event.setResourceName(ns2);
         event.setSourceCluster("test2");
         producer1.newMessage().value(event).send();
-        
+
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 admin.namespaces().getPolicies(ns2);
                 return true;
-            }catch(Exception e) {
-                //ok
+            } catch (Exception e) {
+                // ok
                 return false;
             }
         });

@@ -21,23 +21,24 @@ package org.apache.pulsar.broker.service;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 @AllArgsConstructor
 @NoArgsConstructor
 @Data
+@ToString
 public class MetadataChangeEvent {
     private EventType type;
     private ResourceType resource;
     private String resourceName;
     private byte[] data;
     private String sourceCluster;
-    private long updateTime;
 
     public enum EventType {
         Created, Modified, Deleted;
     }
 
     public enum ResourceType {
-        Tenants, Namespaces;
+        Tenants, Namespaces, TOPIC_PARTITION;
     }
 }

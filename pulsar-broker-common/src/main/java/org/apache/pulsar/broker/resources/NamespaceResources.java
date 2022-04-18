@@ -81,10 +81,12 @@ public class NamespaceResources extends BaseResources<Policies> {
     }
 
     public void createPolicies(NamespaceName ns, Policies policies) throws MetadataStoreException{
+        policies.lastUpdatedTimestamp = Instant.now().toEpochMilli();
         create(joinPath(BASE_POLICIES_PATH, ns.toString()), policies);
     }
 
     public CompletableFuture<Void> createPoliciesAsync(NamespaceName ns, Policies policies) {
+        policies.lastUpdatedTimestamp = Instant.now().toEpochMilli();
         return createAsync(joinPath(BASE_POLICIES_PATH, ns.toString()), policies);
     }
 
@@ -133,7 +135,8 @@ public class NamespaceResources extends BaseResources<Policies> {
     public void setPolicies(NamespaceName ns, Function<Policies, Policies> function) throws MetadataStoreException {
         set(joinPath(BASE_POLICIES_PATH, ns.toString()), (p1) -> {
             Policies p2 = function.apply(p1);
-            p2.lastUpdatedTimestamp = Instant.now().toEpochMilli();
+            p2.lastUpdatedTimestamp = p2.lastUpdatedTimestamp > 0 ? p2.lastUpdatedTimestamp
+                    : Instant.now().toEpochMilli();
             return p2;
         });
     }
@@ -141,7 +144,8 @@ public class NamespaceResources extends BaseResources<Policies> {
     public CompletableFuture<Void> setPoliciesAsync(NamespaceName ns, Function<Policies, Policies> function) {
         return setAsync(joinPath(BASE_POLICIES_PATH, ns.toString()), (p1) -> {
             Policies p2 = function.apply(p1);
-            p2.lastUpdatedTimestamp = Instant.now().toEpochMilli();
+            p2.lastUpdatedTimestamp = p2.lastUpdatedTimestamp > 0 ? p2.lastUpdatedTimestamp
+                    : Instant.now().toEpochMilli();
             return p2;
         });
     }

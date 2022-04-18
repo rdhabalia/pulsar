@@ -124,7 +124,7 @@ public class Policies {
 
     @SuppressWarnings("checkstyle:MemberName")
     public String resource_group_name = null;
-    
+
     public long lastUpdatedTimestamp;
 
     public enum BundleType {

@@ -25,6 +25,7 @@ public class PartitionedTopicMetadata {
 
     /* Number of partitions for the topic */
     public int partitions;
+    public long lastUpdatedTimestamp;;
 
     public PartitionedTopicMetadata() {
         this.partitions = 0;
