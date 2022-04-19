@@ -217,7 +217,8 @@ public class MetadataStoreSynchronizer extends AbstractMetadataStoreSynchronizer
                                  // latest remote update or lexicographical-sorting on clustername if timestamp is same
                                     && ((existingPartitions.lastUpdatedTimestamp < partitions.lastUpdatedTimestamp)
                                             || (event.getSourceCluster() != null
-                                                    && existingPartitions.lastUpdatedTimestamp == partitions.lastUpdatedTimestamp
+                                                    && existingPartitions.lastUpdatedTimestamp
+                                                    == partitions.lastUpdatedTimestamp
                                                     && pulsar.getConfig().getClusterName()
                                                             .compareTo(event.getSourceCluster()) < 0))) {
                                 result = pulsar.getAdminClient().topics().updatePartitionedTopicAsync(topic,

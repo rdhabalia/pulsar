@@ -23,7 +23,6 @@ import static org.testng.Assert.assertNotNull;
 
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-
 import org.apache.pulsar.broker.service.MetadataChangeEvent;
 import org.apache.pulsar.broker.service.MetadataChangeEvent.EventType;
 import org.apache.pulsar.broker.service.MetadataChangeEvent.ResourceType;
@@ -41,12 +40,9 @@ import org.apache.pulsar.common.policies.data.TenantInfo;
 import org.apache.pulsar.common.policies.data.TenantInfoImpl;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.awaitility.Awaitility;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
-
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 

@@ -19,12 +19,11 @@
 package org.apache.pulsar.broker.service;
 
 import static org.apache.pulsar.broker.service.persistent.PersistentTopic.MESSAGE_RATE_BACKOFF_MS;
-
+import io.netty.util.concurrent.ScheduledFuture;
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
-
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.PulsarService;
@@ -46,12 +45,10 @@ import org.apache.pulsar.metadata.api.NotificationType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.netty.util.concurrent.ScheduledFuture;
-
 public abstract class AbstractMetadataStoreSynchronizer {
-    
+
     private static final Logger log = LoggerFactory.getLogger(AbstractMetadataStoreSynchronizer.class);
-    
+
     protected PulsarService pulsar;
     protected BrokerService brokerService;
     protected String topicName;
@@ -64,7 +61,7 @@ public abstract class AbstractMetadataStoreSynchronizer {
     AtomicReferenceFieldUpdater.newUpdater(AbstractMetadataStoreSynchronizer.class, State.class, "state");
     private volatile State state = State.Stopped;
     private volatile boolean isActive = false;
-    public static String SUBSCRIPTION_NAME = "metadata-syncer";
+    public static final String SUBSCRIPTION_NAME = "metadata-syncer";
     protected final Backoff backOff = new Backoff(100, TimeUnit.MILLISECONDS, 1, TimeUnit.MINUTES, 0,
             TimeUnit.MILLISECONDS);
 
@@ -151,7 +148,6 @@ public abstract class AbstractMetadataStoreSynchronizer {
 
     /**
      * Handle metadata change event and update namespace metadata into metadata store.
-     * 
      * @param event
      * @return
      */
@@ -159,7 +155,6 @@ public abstract class AbstractMetadataStoreSynchronizer {
 
     /**
      * Handle metadata change event and update tenant metadata into metadata store.
-     * 
      * @param event
      * @return
      */
@@ -167,7 +162,6 @@ public abstract class AbstractMetadataStoreSynchronizer {
 
     /**
      * Handle metadata change event and update partitioned metadata into metadata store.
-     * 
      * @param event
      * @return
      */
