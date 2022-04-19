@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit;
 import org.apache.pulsar.broker.service.MetadataChangeEvent;
 import org.apache.pulsar.broker.service.MetadataChangeEvent.EventType;
 import org.apache.pulsar.broker.service.MetadataChangeEvent.ResourceType;
-import org.apache.pulsar.broker.service.MetadataPolicySyncer;
+import org.apache.pulsar.broker.service.MetadataStoreSynchronizer;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.Producer;
@@ -53,8 +53,7 @@ import com.google.common.collect.Sets;
 import lombok.Cleanup;
 
 @Test(groups = "broker-impl")
-public class MetadataPolicySyncerTest extends ProducerConsumerBase {
-    private static final Logger log = LoggerFactory.getLogger(MetadataPolicySyncerTest.class);
+public class MetadataStoreSynchronizerTest extends ProducerConsumerBase {
 
     @BeforeMethod
     @Override
@@ -118,14 +117,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of policies
         long time = pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
                 .get().lastUpdatedTimestamp;
@@ -139,14 +138,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of policies
         assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
                 .get().lastUpdatedTimestamp, time);
@@ -162,14 +161,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of policies
         assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
                 .get().lastUpdatedTimestamp, time);
@@ -186,14 +185,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of policies which should have not changed
         assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
                 .get().lastUpdatedTimestamp, time);
@@ -211,14 +210,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of policies
         assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
                 .get().lastUpdatedTimestamp, time);
@@ -236,14 +235,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of policies
         assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPolicies(NamespaceName.get(ns2))
                 .get().lastUpdatedTimestamp, time + 1);
@@ -301,14 +300,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of tenant
         long time = ((TenantInfoImpl) pulsar.getPulsarResources().getTenantResources().getTenant(tenantName).get())
                 .getLastUpdatedTimestamp();
@@ -322,14 +321,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of policies
         assertEquals(((TenantInfoImpl) pulsar.getPulsarResources().getTenantResources().getTenant(tenantName).get())
                 .getLastUpdatedTimestamp(), time);
@@ -345,14 +344,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of policies
         assertEquals(((TenantInfoImpl) pulsar.getPulsarResources().getTenantResources().getTenant(tenantName).get())
                 .getLastUpdatedTimestamp(), time);
@@ -369,14 +368,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of policies which should have not changed
         assertEquals(((TenantInfoImpl) pulsar.getPulsarResources().getTenantResources().getTenant(tenantName).get())
                 .getLastUpdatedTimestamp(), time);
@@ -394,14 +393,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of policies
         assertEquals(((TenantInfoImpl) pulsar.getPulsarResources().getTenantResources().getTenant(tenantName).get())
                 .getLastUpdatedTimestamp(), time);
@@ -419,14 +418,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of policies
         assertEquals(((TenantInfoImpl) pulsar.getPulsarResources().getTenantResources().getTenant(tenantName).get())
                 .getLastUpdatedTimestamp(), time + 1);
@@ -485,14 +484,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of policies
         long time = pulsar.getPulsarResources().getNamespaceResources().getPartitionedTopicResources()
                 .getPartitionedTopicMetadataAsync(TopicName.get(topicName)).get().get().lastUpdatedTimestamp;
@@ -506,14 +505,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of policies
         assertEquals(
                 pulsar.getPulsarResources().getNamespaceResources().getPartitionedTopicResources()
@@ -531,14 +530,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of partitioned-topic metadata
         assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPartitionedTopicResources()
                 .getPartitionedTopicMetadataAsync(TopicName.get(topicName)).get().get().partitions, 4);
@@ -553,14 +552,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
        
         // (6) timestamp racecondition but pick cluster-name to win the update: local cluster will win
         event.setType(EventType.Modified);
@@ -575,14 +574,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         // check lastUpdated time of policies
         assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPartitionedTopicResources()
                 .getPartitionedTopicMetadataAsync(TopicName.get(topicName)).get().get().partitions, 4);
@@ -598,14 +597,14 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
         Awaitility.waitAtMost(5, TimeUnit.SECONDS).until(() -> {
             try {
                 return admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                        .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
+                        .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize() == 0;
             } catch (Exception e) {
                 // ok
                 return false;
             }
         });
         assertEquals(admin.topics().getStats(metadataEventTopic).getSubscriptions()
-                .get(MetadataPolicySyncer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
+                .get(MetadataStoreSynchronizer.SUBSCRIPTION_NAME).getBacklogSize(), 0);
         assertEquals(pulsar.getPulsarResources().getNamespaceResources().getPartitionedTopicResources()
                 .getPartitionedTopicMetadataAsync(TopicName.get(topicName)).get().get().partitions, 10);
 
@@ -695,7 +694,7 @@ public class MetadataPolicySyncerTest extends ProducerConsumerBase {
                     c.acknowledgeAsync(m);
                 }).subscribe();
 
-        MetadataPolicySyncer syncer = pulsar.getMetadataSyncer();
+        MetadataStoreSynchronizer syncer = pulsar.getMetadataSyncer();
         syncer.triggerSyncSnapshot();
 
         Awaitility.waitAtMost(135, TimeUnit.SECONDS).until(() -> {
