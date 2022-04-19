@@ -20,6 +20,7 @@ package org.apache.pulsar.broker.service;
 
 import static org.apache.pulsar.broker.service.persistent.PersistentTopic.MESSAGE_RATE_BACKOFF_MS;
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
@@ -27,6 +28,8 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.resources.BaseResources;
+import org.apache.pulsar.broker.resources.NamespaceResources;
+import org.apache.pulsar.broker.resources.TenantResources;
 import org.apache.pulsar.broker.service.MetadataChangeEvent.EventType;
 import org.apache.pulsar.broker.service.MetadataChangeEvent.ResourceType;
 import org.apache.pulsar.client.api.Consumer;
@@ -44,9 +47,9 @@ import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.partition.PartitionedTopicMetadata;
 import org.apache.pulsar.common.policies.data.Policies;
-import org.apache.pulsar.common.policies.data.TenantInfo;
 import org.apache.pulsar.common.policies.data.TenantInfoImpl;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
+import org.apache.pulsar.metadata.api.MetadataStoreException;
 import org.apache.pulsar.metadata.api.NotificationType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -158,7 +161,9 @@ public class MetadataPolicySyncer {
         pulsar.getPulsarResources().getNamespaceResources().getPoliciesAsync(namespaceName).thenAccept(old -> {
             Policies existingNamespace = old.isPresent() ? old.get() : null;
             CompletableFuture<Void> result = null;
-            switch (event.getType()) {
+            EventType type = event.getType() != EventType.Synchronize ? event.getType()
+                    : (old.isPresent() ? EventType.Modified : EventType.Created);
+            switch (type) {
             case Created:
                 if (existingNamespace == null) {
                     result = pulsar.getPulsarResources().getNamespaceResources().createPoliciesAsync(namespaceName,
@@ -183,7 +188,7 @@ public class MetadataPolicySyncer {
                 }
                 break;
             case Deleted:
-                if (existingNamespace != null && existingNamespace.lastUpdatedTimestamp < policies.lastUpdatedTimestamp) {
+                if (existingNamespace != null && existingNamespace.lastUpdatedTimestamp < event.getEventTime()) {
                     result = pulsar.getPulsarResources().getNamespaceResources().deletePoliciesAsync(namespaceName);
                 }
                 break;
@@ -229,21 +234,32 @@ public class MetadataPolicySyncer {
         pulsar.getPulsarResources().getTenantResources().getTenantAsync(tenantName).thenAccept(old -> {
             TenantInfoImpl existingTenant = old.isPresent() ? (TenantInfoImpl) old.get() : null;
             CompletableFuture<Void> result = null;
-            switch (event.getType()) {
+            EventType type = event.getType() != EventType.Synchronize ? event.getType()
+                    : (old.isPresent() ? EventType.Modified : EventType.Created);
+            switch (type) {
             case Created:
                 if (existingTenant == null) {
                     result = pulsar.getPulsarResources().getTenantResources().createTenantAsync(tenantName, tenant);
                 }
                 break;
             case Modified:
-                if (existingTenant != null && existingTenant.getLastUpdatedTimestamp() < tenant.getLastUpdatedTimestamp()) {
+                if (existingTenant != null
+                        && ((existingTenant.getLastUpdatedTimestamp() < tenant.getLastUpdatedTimestamp())
+                                || (event.getSourceCluster() != null
+                                        && (existingTenant.getLastUpdatedTimestamp() == tenant.getLastUpdatedTimestamp()
+                                                && pulsar.getConfig().getClusterName()
+                                                        .compareTo(event.getSourceCluster()) < 0)))) {
                     result = pulsar.getPulsarResources().getTenantResources().updateTenantAsync(tenantName, __ -> {
                         return tenant;
                     });
+                } else {
+                    log.info("skip change-event with {} for tenant {} updated at {}", tenant.getLastUpdatedTimestamp(),
+                            tenantName, existingTenant.getLastUpdatedTimestamp());
                 }
+                
                 break;
             case Deleted:
-                if (existingTenant != null && existingTenant.getLastUpdatedTimestamp() < tenant.getLastUpdatedTimestamp()) {
+                if (existingTenant != null && existingTenant.getLastUpdatedTimestamp() < event.getEventTime()) {
                     result = pulsar.getPulsarResources().getTenantResources().deleteTenantAsync(tenantName);
                 }
                 break;
@@ -256,7 +272,6 @@ public class MetadataPolicySyncer {
                     updateResult.complete(null);
                     c.acknowledgeAsync(msg);
                 }).exceptionally(ue -> {
-                    // TODO: handle conflic error
                     log.warn("Failed while updating tenant metadata {}", msg.getMessageId(), ue);
                     updateResult.completeExceptionally(ue);
                     return null;
@@ -304,19 +319,27 @@ public class MetadataPolicySyncer {
                             break;
                         case Modified:
                             if (existingPartitions != null
-                                    && existingPartitions.lastUpdatedTimestamp < partitions.lastUpdatedTimestamp) {
+                                    && ((existingPartitions.lastUpdatedTimestamp < partitions.lastUpdatedTimestamp)
+                                            || (event.getSourceCluster() != null
+                                                    && existingPartitions.lastUpdatedTimestamp == partitions.lastUpdatedTimestamp
+                                                    && pulsar.getConfig().getClusterName()
+                                                            .compareTo(event.getSourceCluster()) < 0))) {
                                 result = pulsar.getAdminClient().topics().updatePartitionedTopicAsync(topic,
                                         partitions.partitions);
+                            } else {
+                                log.info("skip change-event with {} for partitions {} updated at {}",
+                                        partitions.lastUpdatedTimestamp, topic,
+                                        existingPartitions.lastUpdatedTimestamp);
                             }
                             break;
                         case Deleted:
                             if (existingPartitions != null
-                                    && existingPartitions.lastUpdatedTimestamp < partitions.lastUpdatedTimestamp) {
+                                    && existingPartitions.lastUpdatedTimestamp < event.getEventTime()) {
                                 result = pulsar.getAdminClient().topics().deletePartitionedTopicAsync(topic);
                             }
                             break;
                         default:
-                            log.info("Skipped tenant update with {}", event);
+                            log.info("Skipped partitioned update with {}", event);
                         }
                     } catch (Exception e) {
                         log.warn("Failed to get admin-client while updating partitioned metadata {}", event, e);
@@ -329,7 +352,6 @@ public class MetadataPolicySyncer {
                             updateResult.complete(null);
                             c.acknowledgeAsync(msg);
                         }).exceptionally(ue -> {
-                            //TODO: handle conflict
                             log.warn("Failed while updating tenant metadata {}", msg.getMessageId(), ue);
                             updateResult.completeExceptionally(ue);
                             return null;
@@ -339,7 +361,7 @@ public class MetadataPolicySyncer {
                         c.acknowledgeAsync(msg);
                     }
                 }).exceptionally(ex -> {
-                    log.warn("Failed to update tenant metadata {}", msg.getMessageId(), ex);
+                    log.warn("Failed to update partitioned metadata {}", msg.getMessageId(), ex);
                     updateResult.completeExceptionally(ex);
                     return null;
                 });
@@ -379,7 +401,7 @@ public class MetadataPolicySyncer {
             default:
                 return;
             }
-            publishAsync(path, resourceType, resource, eventType, Instant.now().toEpochMilli());
+            publishAsync(path, resourceType, resource, eventType);
         });
     }
 
@@ -387,25 +409,25 @@ public class MetadataPolicySyncer {
         return isActive;
     }
 
-    public void publishAsync(String path, ResourceType resourceType, String resource, EventType type, long time) {
+    public void publishAsync(String path, ResourceType resourceType, String resource, EventType type) {
         pulsar.getConfigurationMetadataStore().get(path).thenAccept(result -> {
             if (result.isPresent()) {
                 byte[] data = result.get().getValue();
-                publishAsync(data, resourceType, resource, type, time);
+                publishAsync(data, resourceType, resource, type);
             }
         });
     }
 
-    public void publishAsync(byte[] data, ResourceType resourceType, String resource, EventType type, long time) {
+    public void publishAsync(byte[] data, ResourceType resourceType, String resource, EventType type) {
         MetadataChangeEvent event = new MetadataChangeEvent(type, resourceType, resource, data,
-                pulsar.getConfig().getClusterName());
+                pulsar.getConfig().getClusterName(), Instant.now().toEpochMilli());
         producer.newMessage().value(event).sendAsync()
                 .thenAccept(__ -> log.info("successfully published metadata change event {}", event))
                 .exceptionally(ex -> {
                     log.warn("failed to publish metadata update {}, will retry in {}", topicName,
                             MESSAGE_RATE_BACKOFF_MS, ex);
                     pulsar.getBrokerService().executor().schedule(
-                            () -> publishAsync(data, resourceType, resource, type, time), MESSAGE_RATE_BACKOFF_MS,
+                            () -> publishAsync(data, resourceType, resource, type), MESSAGE_RATE_BACKOFF_MS,
                             TimeUnit.MILLISECONDS);
                     return null;
                 });
@@ -466,7 +488,22 @@ public class MetadataPolicySyncer {
 
     public void triggerSyncSnapshot() {
         pulsar.getPulsarResources().getTenantResources().listTenantsAsync().thenAccept(tenants -> {
-            publishAsync(topicName, null, SUBSCRIPTION_NAME, null, MESSAGE_RATE_BACKOFF_MS);
+            tenants.forEach(tenant -> {
+                publishAsync(TenantResources.getPath(tenant), ResourceType.Tenants, tenant, EventType.Synchronize);
+                brokerService.executor().execute(() -> {
+                    try {
+                        List<String> namespaces = pulsar.getPulsarResources().getTenantResources()
+                                .getListOfNamespaces(tenant);
+                        namespaces.forEach(ns -> {
+                            log.info("trigger {} with namespace {}", NamespaceResources.getPath(ns), ns);
+                            publishAsync(NamespaceResources.getPath(ns), ResourceType.Namespaces, ns,
+                                    EventType.Synchronize);
+                        });
+                    } catch (MetadataStoreException e) {
+                        log.warn("Failed to get list of namesapces for {}, {}", tenant, e.getMessage());
+                    }
+                });
+            });
         });
     }
 

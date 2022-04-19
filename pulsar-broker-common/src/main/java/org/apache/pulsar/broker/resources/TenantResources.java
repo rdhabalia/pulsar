@@ -68,17 +68,20 @@ public class TenantResources extends BaseResources<TenantInfo> {
     }
 
     public void createTenant(String tenantName, TenantInfo ti) throws MetadataStoreException {
+        ((TenantInfoImpl) ti).setLastUpdatedTimestamp(Instant.now().toEpochMilli());
         create(joinPath(BASE_POLICIES_PATH, tenantName), ti);
     }
 
     public CompletableFuture<Void> createTenantAsync(String tenantName, TenantInfo ti) {
+        ((TenantInfoImpl) ti).setLastUpdatedTimestamp(Instant.now().toEpochMilli());
         return createAsync(joinPath(BASE_POLICIES_PATH, tenantName), ti);
     }
 
     public CompletableFuture<Void> updateTenantAsync(String tenantName, Function<TenantInfo, TenantInfo> f) {
         return setAsync(joinPath(BASE_POLICIES_PATH, tenantName), (p1) -> {
             TenantInfoImpl p2 = (TenantInfoImpl) f.apply(p1);
-            p2.setLastUpdatedTimestamp(Instant.now().toEpochMilli());
+            p2.setLastUpdatedTimestamp(
+                    p2.getLastUpdatedTimestamp() > 0 ? p2.getLastUpdatedTimestamp() : Instant.now().toEpochMilli());
             return p2;
         });
     }
@@ -118,6 +121,10 @@ public class TenantResources extends BaseResources<TenantInfo> {
 
     public CompletableFuture<List<String>> getActiveNamespaces(String tenant, String cluster) {
         return getChildrenAsync(joinPath(BASE_POLICIES_PATH, tenant, cluster));
+    }
+
+    public static String getPath(String tenant) {
+        return joinPath(BASE_POLICIES_PATH, tenant);
     }
 
     public CompletableFuture<Void> hasActiveNamespace(String tenant) {

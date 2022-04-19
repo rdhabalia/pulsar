@@ -76,6 +76,10 @@ public class NamespaceResources extends BaseResources<Policies> {
         return getChildrenAsync(joinPath(BASE_POLICIES_PATH, tenant));
     }
 
+    public static String getPath(String namespace) {
+        return joinPath(BASE_POLICIES_PATH, namespace);
+    }
+
     public boolean getPoliciesReadOnly() throws MetadataStoreException {
         return super.exists(POLICIES_READONLY_FLAG_PATH);
     }
@@ -217,17 +221,30 @@ public class NamespaceResources extends BaseResources<Policies> {
             super(configurationStore, PartitionedTopicMetadata.class, operationTimeoutSec);
         }
 
-        public CompletableFuture<Void> updatePartitionedTopicAsync(TopicName tn, Function<PartitionedTopicMetadata,PartitionedTopicMetadata> f) {
+        public static String getPath(TopicName tn) throws MetadataStoreException {
+            return joinPath(PARTITIONED_TOPIC_PATH, tn.getNamespace(), tn.getDomain().value(),
+                    tn.getEncodedLocalName());
+        }
+
+        public CompletableFuture<Void> updatePartitionedTopicAsync(TopicName tn,
+                Function<PartitionedTopicMetadata, PartitionedTopicMetadata> f) {
             return setAsync(joinPath(PARTITIONED_TOPIC_PATH, tn.getNamespace(), tn.getDomain().value(),
-                    tn.getEncodedLocalName()), f);
+                    tn.getEncodedLocalName()), (t) -> {
+                        PartitionedTopicMetadata t2 = f.apply(t);
+                        t2.lastUpdatedTimestamp = t2.lastUpdatedTimestamp > 0 ? t2.lastUpdatedTimestamp
+                                : Instant.now().toEpochMilli();
+                        return t2;
+                    });
         }
 
         public void createPartitionedTopic(TopicName tn, PartitionedTopicMetadata tm) throws MetadataStoreException {
+            tm.lastUpdatedTimestamp = Instant.now().toEpochMilli();
             create(joinPath(PARTITIONED_TOPIC_PATH, tn.getNamespace(), tn.getDomain().value(),
                     tn.getEncodedLocalName()), tm);
         }
 
         public CompletableFuture<Void> createPartitionedTopicAsync(TopicName tn, PartitionedTopicMetadata tm) {
+            tm.lastUpdatedTimestamp = Instant.now().toEpochMilli();
             return createAsync(joinPath(PARTITIONED_TOPIC_PATH, tn.getNamespace(), tn.getDomain().value(),
                     tn.getEncodedLocalName()), tm);
         }

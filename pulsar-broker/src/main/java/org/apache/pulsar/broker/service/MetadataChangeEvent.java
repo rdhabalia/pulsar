@@ -33,9 +33,10 @@ public class MetadataChangeEvent {
     private String resourceName;
     private byte[] data;
     private String sourceCluster;
+    private long eventTime;
 
     public enum EventType {
-        Created, Modified, Deleted;
+        Created, Modified, Deleted, Synchronize;
     }
 
     public enum ResourceType {
