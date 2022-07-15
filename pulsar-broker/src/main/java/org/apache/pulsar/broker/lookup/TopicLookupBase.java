@@ -226,6 +226,13 @@ public class TopicLookupBase extends PulsarWebResource {
                         differentClusterData.getBrokerServiceUrlTls(), true, LookupType.Redirect,
                         requestId, false));
             } else {
+                
+                isClusterMigrated(pulsarService, cluster).thenAccept(isMigrated -> {
+                    if(isMigrated) {
+                        isTopicMigrated(pulsarService, topicName);
+                    }
+                });
+                
                 // (2) authorize client
                 checkAuthorizationAsync(pulsarService, topicName, clientAppId, authenticationData).thenRun(() -> {
                         // (3) validate global namespace
@@ -337,6 +344,11 @@ public class TopicLookupBase extends PulsarWebResource {
         });
 
         return lookupfuture;
+    }
+
+    private static void isTopicMigrated(PulsarService pulsarService, TopicName topicName) {
+        // TODO Auto-generated method stub
+//       pulsarService.getBrokerService(). 
     }
 
     protected TopicName getTopicName(String topicDomain, String tenant, String cluster, String namespace,

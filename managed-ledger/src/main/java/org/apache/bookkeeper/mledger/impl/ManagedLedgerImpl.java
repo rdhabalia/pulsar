@@ -263,6 +263,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     private static final AtomicReferenceFieldUpdater<ManagedLedgerImpl, State> STATE_UPDATER =
             AtomicReferenceFieldUpdater.newUpdater(ManagedLedgerImpl.class, State.class, "state");
     protected volatile State state = null;
+    private volatile boolean migrated = false;
 
     @Getter
     private final OrderedScheduler scheduledExecutor;
@@ -356,7 +357,10 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                     lastConfirmedEntry = new PositionImpl(mlInfo.getTerminatedPosition());
                     log.info("[{}] Recovering managed ledger terminated at {}", name, lastConfirmedEntry);
                 }
-
+                if (mlInfo.hasMigrated()) {
+                    migrated = mlInfo.getMigrated();
+                    log.info("[{}] Recovering managed ledger migrated", name);
+                }
                 for (LedgerInfo ls : mlInfo.getLedgerInfoList()) {
                     ledgers.put(ls.getLedgerId(), ls);
                 }
@@ -1258,6 +1262,22 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         }
     }
 
+    public CompletableFuture<Position> asyncMigrate() {
+        CompletableFuture<Position> result = new CompletableFuture<>();
+        asyncTerminate(new TerminateCallback() {
+
+            @Override
+            public void terminateComplete(Position lastCommittedPosition, Object ctx) {
+                result.complete(lastCommittedPosition);
+            }
+            @Override
+            public void terminateFailed(ManagedLedgerException exception, Object ctx) {
+                result.completeExceptionally(exception);
+            }
+        }, null);
+        return result;
+    }
+
     @Override
     public synchronized void asyncTerminate(TerminateCallback callback, Object ctx) {
         if (state == State.Fenced) {
@@ -1347,6 +1367,11 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     @Override
     public boolean isTerminated() {
         return state == State.Terminated;
+    }
+
+    @Override
+    public boolean isMigrated() {
+        return migrated;
     }
 
     @Override

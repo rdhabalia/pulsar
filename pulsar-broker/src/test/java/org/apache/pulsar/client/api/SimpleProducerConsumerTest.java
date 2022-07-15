@@ -2522,7 +2522,7 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         log.info("-- Exiting {} test --", methodName);
     }
 
-    @Test(timeOut = 100000)
+    @Test//(timeOut = 100000)
     public void testECDSAEncryption() throws Exception {
         log.info("-- Starting {} test --", methodName);
         String topicName = "persistent://my-property/my-ns/myecdsa-topic1-" + System.currentTimeMillis();

@@ -895,6 +895,11 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
     }
 
     @Override
+    public void checkClusterMigration() {
+    	
+    }
+
+    @Override
     public void checkGC() {
         if (!isDeleteWhileInactive()) {
             // This topic is not included in GC
@@ -1120,6 +1125,12 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
     }
 
     protected boolean isTerminated() {
+        return false;
+    }
+
+
+    @Override
+    protected boolean isMigrated() {
         return false;
     }
 

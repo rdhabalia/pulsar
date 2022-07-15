@@ -1165,6 +1165,8 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener<TopicP
     }
 
     protected abstract boolean isTerminated();
+    
+    protected abstract boolean isMigrated();
 
     private static final Logger log = LoggerFactory.getLogger(AbstractTopic.class);
 

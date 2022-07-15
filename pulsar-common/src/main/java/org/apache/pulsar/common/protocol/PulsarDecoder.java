@@ -58,6 +58,7 @@ import org.apache.pulsar.common.api.proto.CommandGetTopicsOfNamespaceResponse;
 import org.apache.pulsar.common.api.proto.CommandLookupTopic;
 import org.apache.pulsar.common.api.proto.CommandLookupTopicResponse;
 import org.apache.pulsar.common.api.proto.CommandMessage;
+import org.apache.pulsar.common.api.proto.CommandMigratedTopic;
 import org.apache.pulsar.common.api.proto.CommandNewTxn;
 import org.apache.pulsar.common.api.proto.CommandNewTxnResponse;
 import org.apache.pulsar.common.api.proto.CommandPartitionedTopicMetadata;
@@ -597,6 +598,10 @@ public abstract class PulsarDecoder extends ChannelInboundHandlerAdapter {
     }
 
     protected void handleReachedEndOfTopic(CommandReachedEndOfTopic commandReachedEndOfTopic) {
+        throw new UnsupportedOperationException();
+    }
+
+    protected void handleMigratedTopic(CommandMigratedTopic commandMigratedTopic) {
         throw new UnsupportedOperationException();
     }
 

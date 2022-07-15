@@ -617,6 +617,15 @@ message CommandReachedEndOfTopic {
     required uint64 consumer_id = 1;
 }
 
+message CommandMigratedTopic {
+    required uint64 consumer_id = 1;
+    
+    optional string brokerServiceUrl      = 2;
+    optional string brokerServiceUrlTls   = 3;
+    
+}
+
+
 message CommandCloseProducer {
     required uint64 producer_id = 1;
     required uint64 request_id = 2;

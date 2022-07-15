@@ -67,15 +67,21 @@ import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerAlreadyClosedException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerFencedException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerTerminatedException;
+import org.apache.bookkeeper.mledger.ManagedLedgerException.MetaStoreException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.MetadataNotFoundException;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.impl.ManagedCursorContainer;
 import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl;
+import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
+import org.apache.bookkeeper.mledger.impl.MetaStore.MetaStoreCallback;
 import org.apache.bookkeeper.mledger.impl.PositionImpl;
+import org.apache.bookkeeper.mledger.proto.MLDataFormats.ManagedLedgerInfo;
 import org.apache.bookkeeper.net.BookieId;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.pulsar.broker.ManagedLedgerClientFactory;
 import org.apache.pulsar.broker.PulsarServerException;
+import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.namespace.NamespaceService;
 import org.apache.pulsar.broker.resources.NamespaceResources.PartitionedTopicResources;
 import org.apache.pulsar.broker.service.AbstractReplicator;
@@ -109,6 +115,7 @@ import org.apache.pulsar.broker.service.schema.BookkeeperSchemaStorage;
 import org.apache.pulsar.broker.stats.ClusterReplicationMetrics;
 import org.apache.pulsar.broker.stats.NamespaceStats;
 import org.apache.pulsar.broker.stats.ReplicationMetrics;
+import org.apache.pulsar.broker.storage.ManagedLedgerStorage;
 import org.apache.pulsar.broker.transaction.buffer.TransactionBuffer;
 import org.apache.pulsar.broker.transaction.buffer.impl.TransactionBufferDisable;
 import org.apache.pulsar.broker.transaction.pendingack.impl.MLPendingAckStore;
@@ -130,6 +137,7 @@ import org.apache.pulsar.common.naming.SystemTopicNames;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.BacklogQuota;
 import org.apache.pulsar.common.policies.data.BacklogQuota.BacklogQuotaType;
+import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.policies.data.InactiveTopicDeleteMode;
 import org.apache.pulsar.common.policies.data.ManagedLedgerInternalStats.CursorStats;
 import org.apache.pulsar.common.policies.data.ManagedLedgerInternalStats.LedgerInfo;
@@ -159,6 +167,7 @@ import org.apache.pulsar.compaction.CompactedTopicImpl;
 import org.apache.pulsar.compaction.Compactor;
 import org.apache.pulsar.compaction.CompactorMXBean;
 import org.apache.pulsar.metadata.api.MetadataStoreException;
+import org.apache.pulsar.metadata.api.Stat;
 import org.apache.pulsar.policies.data.loadbalancer.NamespaceBundleStats;
 import org.apache.pulsar.utils.StatsOutputStream;
 import org.slf4j.Logger;
@@ -1592,6 +1601,25 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         return replicators.get(remoteCluster);
     }
 
+    public static CompletableFuture<Boolean> getManagedLedgerInfo(PulsarService pulsar, TopicName topic) {
+        String mlName = topic.getPersistenceNamingEncoding();
+        CompletableFuture<Boolean> future = new CompletableFuture<>();
+        ManagedLedgerFactoryImpl factory = (ManagedLedgerFactoryImpl) pulsar.getManagedLedgerFactory();
+        factory.getMetaStore().getManagedLedgerInfo(mlName, true, new MetaStoreCallback<ManagedLedgerInfo>() {
+
+            @Override
+            public void operationComplete(ManagedLedgerInfo result, Stat stat) {
+                future.complete(result.getMigrated());
+            }
+
+            @Override
+            public void operationFailed(MetaStoreException e) {
+                future.completeExceptionally(e);
+            }
+            
+        });
+        return future;
+    }
     public ManagedLedger getManagedLedger() {
         return ledger;
     }
@@ -2169,6 +2197,36 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
 
     private boolean hasBacklogs() {
         return subscriptions.values().stream().anyMatch(sub -> sub.getNumberOfEntriesInBacklog(false) > 0);
+    }
+
+    @Override
+    public void checkClusterMigration() {
+    	if (isMigrated()) {
+    	    return;
+    	}
+        try {
+            PulsarService pulsar = brokerService.getPulsar();
+            Optional<ClusterData> clusterData = pulsar.getPulsarResources().getClusterResources()
+                    .getCluster(pulsar.getConfig().getClusterName());
+            if (!clusterData.isPresent()) {
+                return;
+            }
+            if (clusterData.get().isMigrated()) {
+                if (clusterData.get().getMigratedClusterUrl() == null) {
+                    log.warn("cluster can't be migrated without updating migration url");
+                    return;
+                }
+                ledger.asyncMigrate().thenAccept(position -> {
+                    log.info("{} topic is successfully terminated and migrated at {}", topic, position);
+                }).exceptionally(ex -> {
+                    log.info("{} topic migration failed ", topic, ex.getCause());
+                    return null;
+                });
+            }
+        } catch (Exception e) {
+    	    
+    	}
+    	
     }
 
     @Override
@@ -3113,6 +3171,11 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     @Override
     protected boolean isTerminated() {
         return ledger.isTerminated();
+    }
+
+    @Override
+    protected boolean isMigrated() {
+        return ledger.isMigrated();
     }
 
     public TransactionInPendingAckStats getTransactionInPendingAckStats(TxnID txnID, String subName) {

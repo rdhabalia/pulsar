@@ -69,6 +69,9 @@ message ManagedLedgerInfo {
     optional NestedPositionInfo terminatedPosition = 2;
 
     repeated KeyValue properties = 3;
+
+    // Flag to check if topic is terminated and migrated to different cluster
+    optional bool migrated = 4;
 }
 
 message PositionInfo {

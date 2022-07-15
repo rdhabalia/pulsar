@@ -500,6 +500,20 @@ public abstract class PulsarWebResource {
         }
     }
 
+    protected static CompletableFuture<Boolean> isClusterMigrated(PulsarService pulsar, String cluster) {
+        CompletableFuture<Boolean> clusterDataFuture = new CompletableFuture<>();
+        pulsar.getPulsarResources().getClusterResources().getClusterAsync(cluster)
+                .whenComplete((clusterDataResult, ex) -> {
+                    if (ex != null) {
+                        clusterDataFuture.completeExceptionally(FutureUtil.unwrapCompletionException(ex));
+                        return;
+                    }
+                    clusterDataFuture.complete(clusterDataResult.isPresent() && clusterDataResult.get().isMigrated()
+                            && clusterDataResult.get().getMigratedClusterUrl() != null);
+                });
+        return clusterDataFuture;
+    }
+
     protected static CompletableFuture<ClusterData> getClusterDataIfDifferentCluster(PulsarService pulsar,
                                                                                      String cluster,
                                                                                      String clientAppId) {

@@ -183,6 +183,8 @@ public interface Topic {
 
     void checkGC();
 
+    void checkClusterMigration();
+
     void checkInactiveSubscriptions();
 
     /**

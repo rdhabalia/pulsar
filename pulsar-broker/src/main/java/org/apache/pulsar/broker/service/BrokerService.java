@@ -1738,6 +1738,10 @@ public class BrokerService implements Closeable {
         forEachTopic(Topic::checkGC);
     }
 
+    public void checkClusterMigration() {
+    	forEachTopic(Topic::checkClusterMigration);
+    }
+
     public void checkMessageExpiry() {
         forEachTopic(Topic::checkMessageExpiry);
     }

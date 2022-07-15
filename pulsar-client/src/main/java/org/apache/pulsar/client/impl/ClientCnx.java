@@ -33,6 +33,7 @@ import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.util.concurrent.Promise;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.net.URISyntaxException;
 import java.nio.channels.ClosedChannelException;
 import java.util.Arrays;
 import java.util.List;
@@ -79,6 +80,7 @@ import org.apache.pulsar.common.api.proto.CommandGetSchemaResponse;
 import org.apache.pulsar.common.api.proto.CommandGetTopicsOfNamespaceResponse;
 import org.apache.pulsar.common.api.proto.CommandLookupTopicResponse;
 import org.apache.pulsar.common.api.proto.CommandMessage;
+import org.apache.pulsar.common.api.proto.CommandMigratedTopic;
 import org.apache.pulsar.common.api.proto.CommandNewTxnResponse;
 import org.apache.pulsar.common.api.proto.CommandPartitionedTopicMetadataResponse;
 import org.apache.pulsar.common.api.proto.CommandProducerSuccess;
@@ -641,6 +643,23 @@ public class ClientCnx extends PulsarHandler {
         ConsumerImpl<?> consumer = consumers.get(consumerId);
         if (consumer != null) {
             consumer.setTerminated();
+        }
+    }
+
+    @Override
+    protected void handleMigratedTopic(CommandMigratedTopic commandMigratedTopic) {
+        final long consumerId = commandMigratedTopic.getConsumerId();
+        final String serviceUrl = commandMigratedTopic.getBrokerServiceUrl();
+        final String serviceUrlTls = commandMigratedTopic.getBrokerServiceUrlTls();
+
+        ConsumerImpl<?> consumer = consumers.get(consumerId);
+        if (consumer != null) {
+            try {
+                consumer.setRedirectedClusterURI(serviceUrl, serviceUrlTls);
+            } catch (URISyntaxException e) {
+                log.info("[{}] Invalid redirect url {}/{} for {}", remoteAddress, serviceUrl, serviceUrlTls,
+                        consumerId);
+            }
         }
     }
 
