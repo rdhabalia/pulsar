@@ -18,7 +18,10 @@
  */
 package org.apache.pulsar.broker.web;
 
+import java.io.CharArrayWriter;
 import java.io.IOException;
+import java.io.PrintWriter;
+
 import javax.servlet.AsyncEvent;
 import javax.servlet.AsyncListener;
 import javax.servlet.Filter;
@@ -29,6 +32,7 @@ import javax.servlet.ServletRequest;
 import javax.servlet.ServletResponse;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpServletResponseWrapper;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response.Status;
 import org.apache.commons.lang3.StringUtils;
@@ -100,6 +104,38 @@ public class ResponseHandlerFilter implements Filter {
             });
         } else {
             handleInterceptor(request, response);
+        }
+    }
+
+    private void updateResponse(ServletResponse response) {
+        boolean alter = false;
+        if (alter) {
+            try {
+                PrintWriter responseWriter = response.getWriter();
+                String alteredContent = "test";
+                response.setContentLength(alteredContent.length());
+                responseWriter.write(alteredContent);
+            
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    static class CharResponseWrapper extends HttpServletResponseWrapper {
+        private CharArrayWriter writer;
+        
+        public CharResponseWrapper(HttpServletResponse response) {
+            super(response);
+            writer = new CharArrayWriter();
+        }
+          
+        public PrintWriter getWriter() {
+            return new PrintWriter(writer);
+        }
+          
+        public String toString() {
+            return writer.toString();
         }
     }
 

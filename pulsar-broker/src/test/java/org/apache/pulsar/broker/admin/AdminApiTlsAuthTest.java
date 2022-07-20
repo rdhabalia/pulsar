@@ -19,6 +19,7 @@
 package org.apache.pulsar.broker.admin;
 
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Sets;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -109,6 +110,19 @@ public class AdminApiTlsAuthTest extends MockedPulsarServiceBaseTest {
         super.internalCleanup();
     }
 
+    @Test(timeOut = 1000000)
+    public void testProxyNs() throws Exception {
+        try (PulsarAdmin admin = buildAdminClient("admin")) {
+            admin.tenants().createTenant("tenant1",
+                    new TenantInfoImpl(ImmutableSet.of("proxy"), ImmutableSet.of("test")));
+            admin.namespaces().createNamespace("tenant1/ns1");
+            admin.namespaces().setNamespaceReplicationClusters("tenant1/ns1", Sets.newHashSet("test"));
+            admin.namespaces().grantPermissionOnNamespace("tenant1/ns1", "localhost",
+                    Sets.newHashSet(AuthAction.produce));
+            System.out.println("complete");
+        }
+    }
+    
     WebTarget buildWebClient(String user) throws Exception {
         ClientConfig httpConfig = new ClientConfig();
         httpConfig.property(ClientProperties.FOLLOW_REDIRECTS, true);

@@ -738,6 +738,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                     OffloadPoliciesImpl.create(this.getConfiguration().getProperties()));
             this.brokerInterceptor = BrokerInterceptors.load(config);
             brokerService.setInterceptor(getBrokerInterceptor());
+            System.out.println("added interceptors " + getBrokerInterceptor());
             this.brokerInterceptor.initialize(this);
             brokerService.start();
 

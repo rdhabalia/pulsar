@@ -126,7 +126,7 @@ public abstract class MockedPulsarServiceBaseTest extends TestRetrySupport {
     private SameThreadOrderedSafeExecutor sameThreadOrderedSafeExecutor;
     private OrderedExecutor bkExecutor;
 
-    protected boolean enableBrokerInterceptor = false;
+    protected boolean enableBrokerInterceptor = true;
 
     public MockedPulsarServiceBaseTest() {
         resetConfig();
