@@ -505,6 +505,8 @@ public class SimpleProducerConsumerStatTest extends ProducerConsumerBase {
             assertTrue(consStatsMap.containsKey(topic));
         }
 
+        assertEquals(pStat.getPendingQueueSize(), 0);
+
         consumer.close();
         producer.close();
 

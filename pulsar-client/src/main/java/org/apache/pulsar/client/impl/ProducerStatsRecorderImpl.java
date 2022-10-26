@@ -339,7 +339,8 @@ public class ProducerStatsRecorderImpl implements ProducerStatsRecorder {
 
     @Override
     public int getPendingQueueSize() {
-        return producer.getPendingQueueSize();
+        return producer != null ? producer.getPendingQueueSize()
+                : partitionStats.values().stream().mapToInt((stat) -> stat.getPendingQueueSize()).sum();
     }
 
     @Override
