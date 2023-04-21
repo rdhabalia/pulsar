@@ -316,6 +316,8 @@ public interface PulsarClient extends Closeable {
      * @since 2.3.0
      */
     CompletableFuture<List<String>> getPartitionsForTopic(String topic);
+    
+    TopicStatsProvider getTopicStatsProvider(String topic);
 
     /**
      * Close the PulsarClient and release all the resources.
