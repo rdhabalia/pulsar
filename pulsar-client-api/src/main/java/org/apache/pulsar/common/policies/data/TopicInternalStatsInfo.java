@@ -16,27 +16,22 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.pulsar.client.api;
+package org.apache.pulsar.common.policies.data;
 
-import java.util.concurrent.CompletableFuture;
+import java.util.Map;
 
-import org.apache.pulsar.common.classification.InterfaceAudience;
-import org.apache.pulsar.common.policies.data.TopicInternalStatsInfo;
-import org.apache.pulsar.common.policies.data.TopicStatsInfo;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 
-/**
- * Stats provider provides API to fetch topic's stats and internal-stats.
- */
-@InterfaceAudience.Public
-public interface TopicStatsProvider {
+@NoArgsConstructor
+@Getter
+@Setter
+public class TopicInternalStatsInfo {
+    private String topicName;
+    private Map<String, PersistentTopicInternalStats> partitions;
 
-    /**
-     * @return the topic stats
-     */
-    CompletableFuture<TopicStatsInfo>  getStats();
-
-    /**
-     * @return the internal topic stats
-     */
-    CompletableFuture<TopicInternalStatsInfo>  getInternalStats();
+    public TopicInternalStatsInfo(String topicName) {
+        this.topicName = topicName;
+    }
 }

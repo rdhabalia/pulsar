@@ -277,7 +277,7 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
                 .create(),
             this);
 
-        this.statsProvider = new TopicStatsProviderImpl(client, connectionHandler, topic);
+        this.statsProvider = new PersistentTopicStatsProviderImpl(client, connectionHandler, topic);
         grabCnx();
     }
 
@@ -2346,6 +2346,11 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
         return producerName;
     }
 
+    @Override
+    public TopicStatsProvider getTopicStatsProvider(String topic) {
+        return statsProvider;
+    }
+
     // wrapper for connection methods
     ClientCnx cnx() {
         return this.connectionHandler.cnx();
@@ -2392,10 +2397,4 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
     }
 
     private static final Logger log = LoggerFactory.getLogger(ProducerImpl.class);
-
-    @Override
-    public TopicStatsProvider getTopicStatsProvider(String topic) {
-        // TODO Auto-generated method stub
-        return null;
-    }
 }
