@@ -47,6 +47,7 @@ import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.PulsarClientException.NotSupportedException;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.TopicMetadata;
+import org.apache.pulsar.client.api.TopicStatsProvider;
 import org.apache.pulsar.client.api.transaction.Transaction;
 import org.apache.pulsar.client.impl.conf.ProducerConfigurationData;
 import org.apache.pulsar.client.impl.transaction.TransactionImpl;
@@ -503,6 +504,12 @@ public class PartitionedProducerImpl<T> extends ProducerBase<T> {
     @Override
     public int getNumOfPartitions() {
         return topicMetadata.numPartitions();
+    }
+
+    @Override
+    public TopicStatsProvider getTopicStatsProvider(String topic) {
+        // TODO Auto-generated method stub
+        return null;
     }
 
 }

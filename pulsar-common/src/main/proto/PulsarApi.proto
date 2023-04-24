@@ -694,13 +694,13 @@ message CommandPong {
 }
 
 message CommandTopicStats {
-    enum Mode {
+    enum StatsType {
         STATS = 0;
         STATS_INTERNAL = 1;
     }
     required uint64 request_id    = 1;
     required string topic_name    = 2;
-    required Mode stats_type = 3;
+    required StatsType stats_type = 3;
 }
 
 message CommandTopicStatsResponse {
@@ -1061,6 +1061,9 @@ message BaseCommand {
         WATCH_TOPIC_LIST_CLOSE = 67;
 
         TOPIC_MIGRATED = 68;
+        
+        TOPIC_STATS = 69;
+        TOPIC_STATS_RESPONSE = 70;
     }
 
 

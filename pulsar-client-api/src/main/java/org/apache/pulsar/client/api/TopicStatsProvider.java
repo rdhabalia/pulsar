@@ -19,8 +19,10 @@
 package org.apache.pulsar.client.api;
 
 import java.util.concurrent.CompletableFuture;
-
 import org.apache.pulsar.common.classification.InterfaceAudience;
+import org.apache.pulsar.common.policies.data.PartitionedTopicInternalStats;
+import org.apache.pulsar.common.policies.data.PartitionedTopicStats;
+import org.apache.pulsar.common.policies.data.PersistentTopicInternalStats;
 import org.apache.pulsar.common.policies.data.TopicStats;
 
 /**
@@ -34,11 +36,11 @@ public interface TopicStatsProvider {
      */
     CompletableFuture<TopicStats>  getStats();
     
-    CompletableFuture<TopicStats>  getInternalStats();
+    CompletableFuture<PersistentTopicInternalStats>  getInternalStats();
     
-    CompletableFuture<TopicStats>  getPartitionTopicStats();
+    CompletableFuture<PartitionedTopicStats>  getPartitionTopicStats();
     
-    CompletableFuture<TopicStats>  getInternalPartitionTopicStats();
+    CompletableFuture<PartitionedTopicInternalStats>  getInternalPartitionTopicStats();
 
     
 }

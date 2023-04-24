@@ -163,6 +163,7 @@ public interface Producer<T> extends Closeable {
      */
     ProducerStats getStats();
 
+    TopicStatsProvider getTopicStatsProvider(String topic);
     /**
      * Close the producer and releases resources allocated.
      *
