@@ -437,7 +437,6 @@ public interface Consumer<T> extends Closeable, MessageAcknowledger {
     /**
      * Returns {@link TopicStatsProvider} using which client can fetch topic stats and internal-stats.
      *
-     * @param topic
      * @return {@link TopicStatsProvider}
      */
     TopicStatsProvider getTopicStatsProvider();

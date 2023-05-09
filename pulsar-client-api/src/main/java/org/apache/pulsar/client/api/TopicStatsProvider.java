@@ -19,7 +19,6 @@
 package org.apache.pulsar.client.api;
 
 import java.util.concurrent.CompletableFuture;
-
 import org.apache.pulsar.common.classification.InterfaceAudience;
 import org.apache.pulsar.common.policies.data.TopicInternalStatsInfo;
 import org.apache.pulsar.common.policies.data.TopicStatsInfo;

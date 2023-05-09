@@ -16,21 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.pulsar.common.policies.data;
-
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
-
 /**
- * Keeps internal-stats {@link TopicStatsInfo} of list of partitions.
- *
+ * Pulsar Client API.
  */
-@NoArgsConstructor
-@Getter
-@Setter
-public class TopicStatsInfo {
-    private Map<String, TopicStats> partitions = new ConcurrentHashMap<>();
-}
+package org.apache.pulsar.common.policies.data;
