@@ -635,12 +635,12 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
     @Override
     protected void handleTopicStats(CommandTopicStats commandTopicStats) {
         checkArgument(state == State.Connected);
-        if (log.isDebugEnabled()) {
-            log.debug("Received CommandTopicStats call from {}", remoteAddress);
-        }
         final long requestId = commandTopicStats.getRequestId();
         final String topicName = commandTopicStats.getTopicName();
         final StatsType type = commandTopicStats.getStatsType();
+        if (log.isDebugEnabled()) {
+            log.debug("{}-{} Received CommandTopicStats call for {}/{}", remoteAddress, requestId, topicName, type);
+        }
 
         final Semaphore lookupSemaphore = service.getLookupRequestSemaphore();
         if (lookupSemaphore.tryAcquire()) {

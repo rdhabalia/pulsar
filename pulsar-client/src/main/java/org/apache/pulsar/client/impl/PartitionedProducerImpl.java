@@ -413,10 +413,13 @@ public class PartitionedProducerImpl<T> extends ProducerBase<T> {
                                 .stream()
                                 .map(partitionName -> {
                                     int partitionIndex = TopicName.getPartitionIndex(partitionName);
-                                    return producers.computeIfAbsent(partitionIndex, (idx) -> new ProducerImpl<>(
-                                            client, partitionName, conf, new CompletableFuture<>(),
-                                            idx, schema, interceptors,
-                                            Optional.ofNullable(overrideProducerName))).producerCreatedFuture();
+                                    return producers.computeIfAbsent(partitionIndex, (idx) -> {
+                                        ProducerImpl<T> producer = new ProducerImpl<>(client, partitionName, conf,
+                                                new CompletableFuture<>(), idx, schema, interceptors,
+                                                Optional.ofNullable(overrideProducerName));
+                                        statsProvider.addStatsProvider(partitionName, producer.getTopicStatsProvider());
+                                        return producer;
+                                    }).producerCreatedFuture();
                                 }).collect(Collectors.toList());
 
                         FutureUtil.waitForAll(futureList)

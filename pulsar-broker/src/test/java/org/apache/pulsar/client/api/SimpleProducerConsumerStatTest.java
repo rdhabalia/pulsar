@@ -781,6 +781,25 @@ public class SimpleProducerConsumerStatTest extends ProducerConsumerBase {
         // Acknowledge the consumption of all messages at once
         consumer.acknowledgeCumulative(msg);
 
+        // increment partitions
+        int newNumPartitions = numPartitions + 5;
+        admin.topics().updatePartitionedTopic(topicName, newNumPartitions);
+
+        retryStrategically((test) -> {
+            try {
+                return producer.getTopicStatsProvider().getStats().get().getPartitions().size() == newNumPartitions;
+            } catch (Exception e) {
+                return false;
+            }
+        }, 5, 200);
+        retryStrategically((test) -> {
+            try {
+                return consumer.getTopicStatsProvider().getStats().get().getPartitions().size() == newNumPartitions;
+            } catch (Exception e) {
+                return false;
+            }
+        }, 5, 200);
+
         consumer.close();
         producer.close();
 
