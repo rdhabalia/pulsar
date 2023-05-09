@@ -25,6 +25,10 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/**
+ * Keeps internal-stats {@link TopicStatsInfo} of list of partitions.
+ *
+ */
 @NoArgsConstructor
 @Getter
 @Setter

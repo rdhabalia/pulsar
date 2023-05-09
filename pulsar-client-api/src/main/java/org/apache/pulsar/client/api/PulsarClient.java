@@ -21,7 +21,6 @@ package org.apache.pulsar.client.api;
 import java.io.Closeable;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-
 import org.apache.pulsar.client.api.transaction.TransactionBuilder;
 import org.apache.pulsar.client.internal.DefaultImplementation;
 import org.apache.pulsar.common.classification.InterfaceAudience;
@@ -317,7 +316,7 @@ public interface PulsarClient extends Closeable {
      * @since 2.3.0
      */
     CompletableFuture<List<String>> getPartitionsForTopic(String topic);
-    
+
     /**
      * Close the PulsarClient and release all the resources.
      *
