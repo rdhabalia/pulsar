@@ -247,7 +247,7 @@ public class ClientCnx extends PulsarHandler {
         super(conf.getKeepAliveIntervalSeconds(), TimeUnit.SECONDS);
         checkArgument(conf.getMaxLookupRequest() > conf.getConcurrentLookupRequest());
         this.pendingLookupRequestSemaphore = new Semaphore(conf.getConcurrentLookupRequest(), false);
-        this.pendingStatsRequestSemaphore = new Semaphore(100, false);//TODO: configurable
+        this.pendingStatsRequestSemaphore = new Semaphore(conf.getConcurrentLookupRequest(), false);
         this.maxLookupRequestSemaphore =
                 new Semaphore(conf.getMaxLookupRequest() - conf.getConcurrentLookupRequest(), false);
         this.waitingLookupRequests = Queues.newConcurrentLinkedQueue();

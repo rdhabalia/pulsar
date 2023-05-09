@@ -19,6 +19,7 @@
 package org.apache.pulsar.common.policies.data;
 
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -28,10 +29,5 @@ import lombok.Setter;
 @Getter
 @Setter
 public class TopicInternalStatsInfo {
-    private String topicName;
-    private Map<String, PersistentTopicInternalStats> partitions;
-
-    public TopicInternalStatsInfo(String topicName) {
-        this.topicName = topicName;
-    }
+    private Map<String, PersistentTopicInternalStats> partitions = new ConcurrentHashMap<>();
 }

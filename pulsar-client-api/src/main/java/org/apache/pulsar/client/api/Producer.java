@@ -163,7 +163,13 @@ public interface Producer<T> extends Closeable {
      */
     ProducerStats getStats();
 
-    TopicStatsProvider getTopicStatsProvider(String topic);
+    /**
+     * Returns {@link TopicStatsProvider} using which client can fetch topic stats and internal-stats.
+     *
+     * @param topic
+     * @return {@link TopicStatsProvider}
+     */
+    TopicStatsProvider getTopicStatsProvider();
     /**
      * Close the producer and releases resources allocated.
      *

@@ -480,12 +480,12 @@ public abstract class PulsarDecoder extends ChannelInboundHandlerAdapter {
                 break;
 
             case TOPIC_STATS:
-                checkArgument(cmd.hasLookupTopic());
+                checkArgument(cmd.hasTopicStats());
                 handleTopicStats(cmd.getTopicStats());
                 break;
 
             case TOPIC_STATS_RESPONSE:
-                checkArgument(cmd.hasLookupTopicResponse());
+                checkArgument(cmd.hasTopicStatsResponse());
                 handleTopicStatsResponse(cmd.getTopicStatsResponse());
                 break;
 
@@ -750,11 +750,11 @@ public abstract class PulsarDecoder extends ChannelInboundHandlerAdapter {
         throw new UnsupportedOperationException();
     }
 
-    protected void handleTopicStatsResponse(CommandTopicStatsResponse topicStatsResponse) {
+    protected void handleTopicStats(CommandTopicStats topicStats) {
         throw new UnsupportedOperationException();
     }
 
-    protected void handleTopicStats(CommandTopicStats topicStats) {
+    protected void handleTopicStatsResponse(CommandTopicStatsResponse topicStatsResponse) {
         throw new UnsupportedOperationException();
     }
 

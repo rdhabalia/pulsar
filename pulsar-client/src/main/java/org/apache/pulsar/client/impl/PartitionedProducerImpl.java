@@ -72,6 +72,7 @@ public class PartitionedProducerImpl<T> extends ProducerBase<T> {
     private volatile Timeout partitionsAutoUpdateTimeout = null;
     TopicsPartitionChangedListener topicsPartitionChangedListener;
     CompletableFuture<Void> partitionsAutoUpdateFuture = null;
+    private final PartitionedTopicStatsProviderImpl statsProvider;
 
     public PartitionedProducerImpl(PulsarClientImpl client, String topic, ProducerConfigurationData conf,
                                    int numPartitions, CompletableFuture<Producer<T>> producerCreatedFuture,
@@ -101,6 +102,7 @@ public class PartitionedProducerImpl<T> extends ProducerBase<T> {
             indexList = IntStream.range(0, topicMetadata.numPartitions()).boxed().collect(Collectors.toList());
         }
 
+        this.statsProvider = new PartitionedTopicStatsProviderImpl(topic);
         firstPartitionIndex = indexList.get(0);
         start(indexList);
 
@@ -213,8 +215,10 @@ public class PartitionedProducerImpl<T> extends ProducerBase<T> {
     private ProducerImpl<T> createProducer(final int partitionIndex, final Optional<String> overrideProducerName) {
         return producers.computeIfAbsent(partitionIndex, (idx) -> {
             String partitionName = TopicName.get(topic).getPartition(idx).toString();
-            return client.newProducerImpl(partitionName, idx,
+            ProducerImpl<T> producer = client.newProducerImpl(partitionName, idx,
                     conf, schema, interceptors, new CompletableFuture<>(), overrideProducerName);
+            statsProvider.addStatsProvider(partitionName, producer.getTopicStatsProvider());
+            return producer;
         });
     }
 
@@ -507,9 +511,8 @@ public class PartitionedProducerImpl<T> extends ProducerBase<T> {
     }
 
     @Override
-    public TopicStatsProvider getTopicStatsProvider(String topic) {
-        // TODO Auto-generated method stub
-        return null;
+    public TopicStatsProvider getTopicStatsProvider() {
+        return statsProvider;
     }
 
 }

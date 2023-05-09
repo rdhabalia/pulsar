@@ -277,7 +277,7 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
                 .create(),
             this);
 
-        this.statsProvider = new PersistentTopicStatsProviderImpl(client, connectionHandler, topic);
+        this.statsProvider = new TopicStatsProviderImpl(client, connectionHandler, topic);
         grabCnx();
     }
 
@@ -2347,7 +2347,7 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
     }
 
     @Override
-    public TopicStatsProvider getTopicStatsProvider(String topic) {
+    public TopicStatsProvider getTopicStatsProvider() {
         return statsProvider;
     }
 

@@ -925,6 +925,18 @@ public class Commands {
         return serializeWithSize(cmd);
     }
 
+    public static ByteBuf newStatsResponse(long requestId, String topic, String response) {
+        BaseCommand cmd = localCmd(Type.TOPIC_STATS_RESPONSE);
+        cmd.setTopicStatsResponse().setRequestId(requestId).setStatsJson(response);
+        return serializeWithSize(cmd);
+    }
+
+    public static ByteBuf newStatsResponse(long requestId, ServerError code, String errorMsg) {
+        BaseCommand cmd = localCmd(Type.TOPIC_STATS_RESPONSE);
+        cmd.setTopicStatsResponse().setRequestId(requestId).setErrorCode(code).setErrorMessage(errorMsg);
+        return serializeWithSize(cmd);
+    }
+
     public static BaseCommand newLookupResponseCommand(String brokerServiceUrl, String brokerServiceUrlTls,
         boolean authoritative, LookupType lookupType, long requestId, boolean proxyThroughServiceUrl) {
         BaseCommand cmd = localCmd(Type.LOOKUP_RESPONSE);

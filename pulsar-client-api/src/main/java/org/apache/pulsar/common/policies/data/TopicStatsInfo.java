@@ -18,8 +18,8 @@
  */
 package org.apache.pulsar.common.policies.data;
 
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -29,9 +29,5 @@ import lombok.Setter;
 @Getter
 @Setter
 public class TopicStatsInfo {
-    private String topicName;
-    private Map<String, TopicStats> partitions = new HashMap<>();
-    public TopicStatsInfo(String topicName) {
-        this.topicName = topicName;
-    }
+    private Map<String, TopicStats> partitions = new ConcurrentHashMap<>();
 }
