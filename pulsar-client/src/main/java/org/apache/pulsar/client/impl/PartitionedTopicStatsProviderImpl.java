@@ -22,7 +22,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
-
 import org.apache.pulsar.client.api.TopicStatsProvider;
 import org.apache.pulsar.common.policies.data.TopicInternalStatsInfo;
 import org.apache.pulsar.common.policies.data.TopicStatsInfo;
@@ -62,9 +61,9 @@ public class PartitionedTopicStatsProviderImpl implements TopicStatsProvider {
                 (stats) -> statsInfo.getPartitions().putAll(stats.getPartitions()));
     }
 
-    private <S> CompletableFuture<S> getTopicStats(S stats,
-            Function<TopicStatsProvider, CompletableFuture<S>> providerStats, Consumer<S> statsUpdater) {
-        CompletableFuture<S> statsResult = new CompletableFuture<>();
+    private <R> CompletableFuture<R> getTopicStats(R stats,
+            Function<TopicStatsProvider, CompletableFuture<R>> providerStats, Consumer<R> statsUpdater) {
+        CompletableFuture<R> statsResult = new CompletableFuture<>();
         AtomicInteger count = new AtomicInteger((int) statsProviders.size());
         statsProviders.forEach((partition, provider) -> {
             providerStats.apply(provider).thenAccept(s -> {

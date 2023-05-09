@@ -18,9 +18,9 @@
  */
 package org.apache.pulsar.client.impl;
 
+import io.netty.buffer.ByteBuf;
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
-
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.TopicStatsProvider;
 import org.apache.pulsar.common.api.proto.CommandTopicStats.StatsType;
@@ -34,8 +34,6 @@ import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import io.netty.buffer.ByteBuf;
 
 /**
  * TopicStatsProvider implementation that provides topic's stats and internal-stats.

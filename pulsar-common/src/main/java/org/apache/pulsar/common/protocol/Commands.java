@@ -87,7 +87,6 @@ import org.apache.pulsar.common.api.proto.CommandSubscribe.InitialPosition;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.SubType;
 import org.apache.pulsar.common.api.proto.CommandTcClientConnectResponse;
 import org.apache.pulsar.common.api.proto.CommandTopicMigrated.ResourceType;
-import org.apache.pulsar.common.api.proto.CommandTopicStats;
 import org.apache.pulsar.common.api.proto.CommandTopicStats.StatsType;
 import org.apache.pulsar.common.api.proto.FeatureFlags;
 import org.apache.pulsar.common.api.proto.IntRange;
