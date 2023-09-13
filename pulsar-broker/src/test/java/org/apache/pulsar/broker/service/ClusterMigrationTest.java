@@ -528,14 +528,17 @@ public class ClusterMigrationTest {
         retryStrategically((test) -> !topic1.isReplicationBacklogExist(), 10, 1000);
         assertFalse(topic1.isReplicationBacklogExist());
 
-        producer1.send("test".getBytes());
-        // verify that the producer1 is now connected to migrated cluster "r2" since backlog is cleared.
+        topic1.checkClusterMigration().get();
+
+        // verify that the producer1 is now is now connected to migrated cluster "r2" since backlog is cleared.
+        retryStrategically((test) -> topic2.getProducers().size()==2, 10, 500);
         assertEquals(topic2.getProducers().size(), 2);
-        
+
         client1.close();
         client2.close();
         client3.close();
     }
+
 
     /**
      * This test validates that blue cluster first creates list of subscriptions into green cluster so, green cluster
@@ -1061,6 +1064,9 @@ public class ClusterMigrationTest {
         assertFalse(blueTopicNs1.isReplicationBacklogExist());
         retryStrategically((test) -> !blueTopicNs2.isReplicationBacklogExist(), 10, 1000);
         assertFalse(blueTopicNs2.isReplicationBacklogExist());
+
+        blueTopicNs1.checkClusterMigration().get();
+        blueTopicNs2.checkClusterMigration().get();
 
         // verify that the producer1 is now is now connected to migrated cluster green since backlog is cleared.
         retryStrategically((test) -> greenTopicNs1.getProducers().size()==2, 10, 500);
