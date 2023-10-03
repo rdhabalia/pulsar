@@ -56,6 +56,10 @@ public class ManagedLedgerInternalStats {
     /** The ledgerid: entryid of the last message that is written successfully.
      * If the entryid is -1, then the ledger is open, yet no entries are written. */
     public String lastConfirmedEntry;
+    
+    /** Duration in ms when the last entry was confirmed to confirm how long
+     * entry was sitting in pending state. */
+    public long lastConfirmedEntryTimeMs;
 
     /** The state of this ledger for writing.
      * The state LedgerOpened means that a ledger is open for saving published messages. */

@@ -2361,6 +2361,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         stats.currentLedgerEntries = ml.getCurrentLedgerEntries();
         stats.currentLedgerSize = ml.getCurrentLedgerSize();
         stats.lastLedgerCreatedTimestamp = DateFormatter.format(ml.getLastLedgerCreatedTimestamp());
+        stats.lastConfirmedEntryTimeMs = ml.getDurationLastConfirmedEntryTimeMs();
         if (ml.getLastLedgerCreationFailureTimestamp() != 0) {
             stats.lastLedgerCreationFailureTimestamp = DateFormatter.format(ml.getLastLedgerCreationFailureTimestamp());
         }

@@ -236,6 +236,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     protected final Supplier<Boolean> mlOwnershipChecker;
 
     volatile PositionImpl lastConfirmedEntry;
+    volatile long lastConfirmedEntryTimeMs = -1L;
 
     protected ManagedLedgerInterceptor managedLedgerInterceptor;
 
@@ -4332,6 +4333,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         stats.pendingAddEntriesCount = this.getPendingAddEntriesCount();
 
         stats.lastConfirmedEntry = this.getLastConfirmedEntry().toString();
+        stats.lastConfirmedEntryTimeMs = this.getDurationLastConfirmedEntryTimeMs();
         stats.state = this.getState().toString();
 
         stats.cursors = new HashMap();
@@ -4411,6 +4413,14 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             lh.getLedgerMetadata().getAllEnsembles().values().forEach(ensembles::addAll);
             return CompletableFuture.completedFuture(ensembles);
         });
+    }
+
+    public long getDurationLastConfirmedEntryTimeMs() {
+        return lastConfirmedEntryTimeMs > 0 ? clock.millis() - lastConfirmedEntryTimeMs : -1;
+    }
+
+    protected void updateLastConfirmedEntryTimeMs() {
+        this.lastConfirmedEntryTimeMs = clock.millis();
     }
 
     protected void updateLastLedgerCreatedTimeAndScheduleRolloverTask() {
