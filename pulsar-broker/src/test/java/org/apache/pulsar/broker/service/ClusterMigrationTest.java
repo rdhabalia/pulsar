@@ -231,6 +231,10 @@ public class ClusterMigrationTest {
     @AfterMethod(alwaysRun = true, timeOut = 300000)
     protected void cleanup() throws Exception {
         log.info("--- Shutting down ---");
+        admin1.close();
+        admin2.close();
+        admin3.close();
+        admin4.close();
         broker1.cleanup();
         broker2.cleanup();
         broker3.cleanup();
@@ -423,6 +427,8 @@ public class ClusterMigrationTest {
             assertEquals(consumer3.receive(2, TimeUnit.SECONDS).getData(), "test3".getBytes());
         }
 
+        client1.close();
+        client2.close();
         log.info("Successfully consumed messages by migrated consumers");
     }
 
@@ -525,6 +531,10 @@ public class ClusterMigrationTest {
         producer1.send("test".getBytes());
         // verify that the producer1 is now connected to migrated cluster "r2" since backlog is cleared.
         assertEquals(topic2.getProducers().size(), 2);
+        
+        client1.close();
+        client2.close();
+        client3.close();
     }
 
     /**
@@ -637,6 +647,8 @@ public class ClusterMigrationTest {
             }
         }, 10, 500);
         assertFalse(pulsar2Topic.getSubscription("s1").getConsumers().isEmpty());
+        
+        client1.close();
     }
 
     @Test(dataProvider = "NamespaceMigrationTopicSubscriptionTypes")
@@ -901,6 +913,8 @@ public class ClusterMigrationTest {
         blueProducerNs2_1.close();
         greenProducerNs1_1.close();
         greenProducerNs2_1.close();
+        client1.close();
+        client2.close();
     }
 
     @Test(dataProvider = "NamespaceMigrationTopicSubscriptionTypes")
@@ -1065,6 +1079,9 @@ public class ClusterMigrationTest {
         blueConsumerNs2_1.close();
         greenProducerNs1_1.close();
         greenProducerNs2_1.close();
+        client1.close();
+        client2.close();
+        client3.close();
     }
 
     static class TestBroker extends MockedPulsarServiceBaseTest {
