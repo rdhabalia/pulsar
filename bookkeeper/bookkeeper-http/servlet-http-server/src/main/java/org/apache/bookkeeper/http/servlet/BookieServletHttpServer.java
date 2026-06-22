@@ -1,0 +1,97 @@
+/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */
+package org.apache.bookkeeper.http.servlet;
+
+import lombok.CustomLog;
+import org.apache.bookkeeper.http.HttpServer;
+import org.apache.bookkeeper.http.HttpServerConfiguration;
+import org.apache.bookkeeper.http.HttpServiceProvider;
+
+/**
+ * Only use for hold Http service provider,not a fully implement bookie http service server.
+ **/
+@CustomLog
+public class BookieServletHttpServer implements HttpServer {
+  private static HttpServiceProvider bookieHttpServiceProvider;
+  private static int listenPort = -1;
+  private static String listenHost = "0.0.0.0";
+
+
+  public static HttpServiceProvider getBookieHttpServiceProvider(){
+    return bookieHttpServiceProvider;
+  }
+  /**
+   * Listen  port.
+   **/
+  public static int getListenPort(){
+    return listenPort;
+  }
+
+  public static String getListenHost() {
+    return listenHost;
+  }
+
+  @Override
+  public void initialize(HttpServiceProvider httpServiceProvider) {
+     setHttpServiceProvider(httpServiceProvider);
+     log.info().attr("httpServiceProvider", httpServiceProvider).log("Bookie HTTP Server initialized");
+  }
+
+  public static synchronized void setHttpServiceProvider(HttpServiceProvider httpServiceProvider){
+    bookieHttpServiceProvider = httpServiceProvider;
+  }
+
+  public static synchronized void setPort(int port){
+    listenPort = port;
+  }
+
+  public static void setHost(String host) {
+    listenHost = host;
+  }
+
+  @Override
+  public boolean startServer(int port) {
+    setPort(port);
+    return true;
+  }
+
+  @Override
+  public boolean startServer(int port, String host) {
+    setPort(port);
+    setHost(host);
+    return true;
+  }
+
+  @Override
+  public boolean startServer(int port, String host, HttpServerConfiguration httpServerConfiguration) {
+    return startServer(port, host);
+  }
+
+  @Override
+  public void stopServer() {
+
+  }
+
+  @Override
+  public boolean isRunning() {
+    return true;
+  }
+}

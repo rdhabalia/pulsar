@@ -1,0 +1,176 @@
+/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */
+package org.apache.bookkeeper.proto;
+
+import io.netty.buffer.ByteBuf;
+import java.io.IOException;
+import java.util.concurrent.TimeUnit;
+import lombok.CustomLog;
+import org.apache.bookkeeper.bookie.BookieException;
+import org.apache.bookkeeper.common.util.MathUtils;
+import org.apache.bookkeeper.net.BookieId;
+
+
+@CustomLog
+class WriteLacProcessorV3 extends PacketProcessorBaseV3 implements Runnable {
+
+    public WriteLacProcessorV3(Request request, BookieRequestHandler requestHandler,
+                             BookieRequestProcessor requestProcessor) {
+        super(request, requestHandler, requestProcessor);
+    }
+
+    // Returns null if there is no exception thrown
+    private WriteLacResponse getWriteLacResponse() {
+        final long startTimeNanos = MathUtils.nowInNano();
+        WriteLacRequest writeLacRequest = request.getWriteLacRequest();
+        long lac = writeLacRequest.getLac();
+        long ledgerId = writeLacRequest.getLedgerId();
+
+        final WriteLacResponse writeLacResponse = new WriteLacResponse().setLedgerId(ledgerId);
+
+        if (!isVersionCompatible()) {
+            writeLacResponse.setStatus(StatusCode.EBADVERSION);
+            return writeLacResponse;
+        }
+
+        if (requestProcessor.bookie.isReadOnly()) {
+            log.warn("BookieServer is running as readonly mode, so rejecting the request from the client!");
+            writeLacResponse.setStatus(StatusCode.EREADONLY);
+            return writeLacResponse;
+        }
+
+        BookkeeperInternalCallbacks.WriteCallback writeCallback = new BookkeeperInternalCallbacks.WriteCallback() {
+            @Override
+            public void writeComplete(int rc, long ledgerId, long entryId, BookieId addr, Object ctx) {
+                if (BookieProtocol.EOK == rc) {
+                    requestProcessor.getRequestStats().getWriteLacStats()
+                        .registerSuccessfulEvent(MathUtils.elapsedNanos(startTimeNanos), TimeUnit.NANOSECONDS);
+                } else {
+                    requestProcessor.getRequestStats().getWriteLacStats()
+                        .registerFailedEvent(MathUtils.elapsedNanos(startTimeNanos), TimeUnit.NANOSECONDS);
+                }
+
+                StatusCode status;
+                switch (rc) {
+                case BookieProtocol.EOK:
+                    status = StatusCode.EOK;
+                    break;
+                case BookieProtocol.EIO:
+                    status = StatusCode.EIO;
+                    break;
+                default:
+                    status = StatusCode.EUA;
+                    break;
+                }
+                writeLacResponse.setStatus(status);
+                Response resp = new Response();
+                resp.setHeader().copyFrom(getHeader());
+                resp.setStatus(writeLacResponse.getStatus());
+                resp.setWriteLacResponse().copyFrom(writeLacResponse);
+                sendResponse(status, resp, requestProcessor.getRequestStats().getWriteLacRequestStats());
+            }
+        };
+
+        StatusCode status = null;
+        ByteBuf lacToAdd = writeLacRequest.getBodySlice();
+        byte[] masterKey = writeLacRequest.getMasterKey();
+
+        try {
+            requestProcessor.bookie.setExplicitLac(lacToAdd,
+                    writeCallback, requestHandler, masterKey);
+            status = StatusCode.EOK;
+        } catch (BookieException.LedgerFencedAndDeletedException e) {
+            log.error()
+                    .exception(e)
+                    .attr("lastAddConfirmed", lac)
+                    .attr("ledgerId", ledgerId)
+                    .log("Error saving lac for ledger, which has been deleted");
+            status = StatusCode.ENOLEDGER;
+        } catch (IOException e) {
+            log.error()
+                    .exception(e)
+                    .attr("lastAddConfirmed", lac)
+                    .attr("ledgerId", ledgerId)
+                    .log("Error saving lac for ledger");
+            status = StatusCode.EIO;
+        } catch (InterruptedException  e) {
+            Thread.currentThread().interrupt();
+            log.error()
+                    .exception(e)
+                    .attr("lastAddConfirmed", lac)
+                    .attr("ledgerId", ledgerId)
+                    .log("Interrupted while saving lac for ledger");
+            status = StatusCode.EIO;
+        } catch (BookieException e) {
+            log.error()
+                    .exception(e)
+                    .attr("ledgerId", ledgerId)
+                    .attr("lastAddConfirmed", lac)
+                    .log("Unauthorized access to ledger while adding lac");
+            status = StatusCode.EUA;
+        } catch (Throwable t) {
+            log.error()
+                    .exception(t)
+                    .attr("lastAddConfirmed", lac)
+                    .attr("ledgerId", ledgerId)
+                    .log("Unexpected exception while writing lac for ledger");
+            // some bad request which cause unexpected exception
+            status = StatusCode.EBADREQ;
+        }
+
+        // If everything is okay, we return null so that the calling function
+        // dosn't return a response back to the caller.
+        if (!status.equals(StatusCode.EOK)) {
+            requestProcessor.getRequestStats().getWriteLacStats()
+                .registerFailedEvent(MathUtils.elapsedNanos(startTimeNanos), TimeUnit.NANOSECONDS);
+            writeLacResponse.setStatus(status);
+            return writeLacResponse;
+        }
+        return null;
+    }
+
+    @Override
+    public void run() {
+        WriteLacResponse writeLacResponse = getWriteLacResponse();
+        if (null != writeLacResponse) {
+            Response resp = new Response();
+            resp.setHeader().copyFrom(getHeader());
+            resp.setStatus(writeLacResponse.getStatus());
+            resp.setWriteLacResponse().copyFrom(writeLacResponse);
+            sendResponse(
+                writeLacResponse.getStatus(),
+                resp,
+                requestProcessor.getRequestStats().getWriteLacRequestStats());
+        }
+    }
+
+    /**
+     * this toString method filters out body and masterKey from the output.
+     * masterKey contains the password of the ledger and body is customer data,
+     * so it is not appropriate to have these in logs or system output.
+     */
+    @Override
+    public String toString() {
+        return RequestUtils.toSafeString(request);
+    }
+}
+
+

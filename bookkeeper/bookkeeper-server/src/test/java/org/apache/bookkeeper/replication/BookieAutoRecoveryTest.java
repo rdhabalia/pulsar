@@ -1,0 +1,717 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */
+package org.apache.bookkeeper.replication;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+
+import java.io.IOException;
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.SortedMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import org.apache.bookkeeper.client.BKException;
+import org.apache.bookkeeper.client.BookKeeper.DigestType;
+import org.apache.bookkeeper.client.BookKeeperTestClient;
+import org.apache.bookkeeper.client.LedgerHandle;
+import org.apache.bookkeeper.common.util.OrderedScheduler;
+import org.apache.bookkeeper.conf.ServerConfiguration;
+import org.apache.bookkeeper.meta.LedgerManager;
+import org.apache.bookkeeper.meta.LedgerManagerFactory;
+import org.apache.bookkeeper.meta.LedgerUnderreplicationManager;
+import org.apache.bookkeeper.meta.MetadataClientDriver;
+import org.apache.bookkeeper.meta.MetadataDrivers;
+import org.apache.bookkeeper.meta.ZkLedgerUnderreplicationManager;
+import org.apache.bookkeeper.net.BookieId;
+import org.apache.bookkeeper.proto.BookieServer;
+import org.apache.bookkeeper.replication.ReplicationException.CompatibilityException;
+import org.apache.bookkeeper.replication.ReplicationException.UnavailableException;
+import org.apache.bookkeeper.stats.NullStatsLogger;
+import org.apache.bookkeeper.test.BookKeeperClusterTestCase;
+import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.Watcher;
+import org.apache.zookeeper.Watcher.Event.EventType;
+import org.apache.zookeeper.data.Stat;
+import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Integration tests verifies the complete functionality of the
+ * Auditor-rereplication process: Auditor will publish the bookie failures,
+ * consequently ReplicationWorker will get the notifications and act on it.
+ */
+public class BookieAutoRecoveryTest extends BookKeeperClusterTestCase {
+    private static final Logger LOG = LoggerFactory
+            .getLogger(BookieAutoRecoveryTest.class);
+    private static final byte[] PASSWD = "admin".getBytes();
+    private static final byte[] data = "TESTDATA".getBytes();
+    private static final String openLedgerRereplicationGracePeriod = "3000"; // milliseconds
+
+    private DigestType digestType;
+    private MetadataClientDriver metadataClientDriver;
+    private LedgerManagerFactory mFactory;
+    private LedgerUnderreplicationManager underReplicationManager;
+    private LedgerManager ledgerManager;
+    private OrderedScheduler scheduler;
+
+    private final String underreplicatedPath = "/ledgers/underreplication/ledgers";
+
+    public BookieAutoRecoveryTest() throws IOException, KeeperException,
+            InterruptedException, UnavailableException, CompatibilityException {
+        super(3);
+
+        baseConf.setLedgerManagerFactoryClassName(
+                "org.apache.bookkeeper.meta.HierarchicalLedgerManagerFactory");
+        baseConf.setOpenLedgerRereplicationGracePeriod(openLedgerRereplicationGracePeriod);
+        baseConf.setRwRereplicateBackoffMs(500);
+        // Reduce ZK session timeout so killed bookie's ephemeral node disappears faster,
+        // speeding up Auditor leader re-election when the killed bookie was the leader.
+        baseConf.setZkTimeout(4000);
+        baseClientConf.setLedgerManagerFactoryClassName(
+                "org.apache.bookkeeper.meta.HierarchicalLedgerManagerFactory");
+        this.digestType = DigestType.MAC;
+        setAutoRecoveryEnabled(true);
+    }
+
+    @Override
+    public void setUp() throws Exception {
+        LOG.info("Start setUp");
+        super.setUp();
+        baseConf.setMetadataServiceUri(zkUtil.getMetadataServiceUri());
+        baseClientConf.setMetadataServiceUri(zkUtil.getMetadataServiceUri());
+
+        scheduler = OrderedScheduler.newSchedulerBuilder()
+            .name("test-scheduler")
+            .numThreads(1)
+            .build();
+
+        metadataClientDriver = MetadataDrivers.getClientDriver(
+            URI.create(baseClientConf.getMetadataServiceUri()));
+        metadataClientDriver.initialize(
+            baseClientConf,
+            scheduler,
+            NullStatsLogger.INSTANCE,
+            Optional.empty());
+
+        // initialize urReplicationManager
+        mFactory = metadataClientDriver.getLedgerManagerFactory();
+        underReplicationManager = mFactory.newLedgerUnderreplicationManager();
+        ledgerManager = mFactory.newLedgerManager();
+        LOG.info("Finished setUp");
+    }
+
+    @Override
+    public void tearDown() throws Exception {
+        LOG.info("Start tearDown");
+        super.tearDown();
+
+        if (null != underReplicationManager) {
+            underReplicationManager.close();
+            underReplicationManager = null;
+        }
+        if (null != ledgerManager) {
+            ledgerManager.close();
+            ledgerManager = null;
+        }
+        if (null != metadataClientDriver) {
+            metadataClientDriver.close();
+            metadataClientDriver = null;
+        }
+        if (null != scheduler) {
+            scheduler.shutdown();
+        }
+        LOG.info("Finished tearDown");
+    }
+
+    /**
+     * Test verifies publish urLedger by Auditor and replication worker is
+     * picking up the entries and finishing the rereplication of open ledger.
+     */
+    @Test
+    public void testOpenLedgers() throws Exception {
+        LOG.info("Start testOpenLedgers");
+        List<LedgerHandle> listOfLedgerHandle = createLedgersAndAddEntries(1, 5);
+        LedgerHandle lh = listOfLedgerHandle.get(0);
+        int ledgerReplicaIndex = 0;
+        BookieId replicaToKillAddr = pickReplicaNotAuditor(lh);
+
+        final String urLedgerZNode = getUrLedgerZNode(lh);
+        ledgerReplicaIndex = getReplicaIndexInLedger(lh, replicaToKillAddr);
+
+        CountDownLatch latch = new CountDownLatch(1);
+        assertNull("UrLedger already exists!",
+                watchUrLedgerNode(urLedgerZNode, latch));
+
+        LOG.info("Killing Bookie :" + replicaToKillAddr);
+        killBookie(replicaToKillAddr);
+
+        // waiting to publish urLedger znode by Auditor
+        assertTrue("Ledger should be marked as underreplicated",
+                latch.await(90, TimeUnit.SECONDS));
+        latch = new CountDownLatch(1);
+        LOG.info("Watching on urLedgerPath:" + urLedgerZNode
+                + " to know the status of rereplication process");
+        assertNotNull("UrLedger doesn't exists!",
+                watchUrLedgerNode(urLedgerZNode, latch));
+
+        // starting the replication service, so that he will be able to act as
+        // target bookie
+        startNewBookie();
+        int newBookieIndex = lastBookieIndex();
+        BookieServer newBookieServer = serverByIndex(newBookieIndex);
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Waiting to finish the replication of failed bookie : "
+                    + replicaToKillAddr);
+        }
+        assertTrue("Replication should complete",
+                latch.await(90, TimeUnit.SECONDS));
+
+        // grace period to update the urledger metadata in zookeeper
+        LOG.info("Waiting to update the urledger metadata in zookeeper");
+
+        verifyLedgerEnsembleMetadataAfterReplication(newBookieServer,
+                listOfLedgerHandle.get(0), ledgerReplicaIndex);
+        LOG.info("Finished testOpenLedgers");
+    }
+
+    /**
+     * Test verifies publish urLedger by Auditor and replication worker is
+     * picking up the entries and finishing the rereplication of closed ledgers.
+     */
+    @Test
+    public void testClosedLedgers() throws Exception {
+        LOG.info("Start testClosedLedgers");
+        List<Integer> listOfReplicaIndex = new ArrayList<Integer>();
+        List<LedgerHandle> listOfLedgerHandle = createLedgersAndAddEntries(1, 5);
+        closeLedgers(listOfLedgerHandle);
+        LedgerHandle lhandle = listOfLedgerHandle.get(0);
+        int ledgerReplicaIndex = 0;
+        BookieId replicaToKillAddr = pickReplicaNotAuditor(lhandle);
+
+        CountDownLatch latch = new CountDownLatch(listOfLedgerHandle.size());
+        for (LedgerHandle lh : listOfLedgerHandle) {
+            ledgerReplicaIndex = getReplicaIndexInLedger(lh, replicaToKillAddr);
+            listOfReplicaIndex.add(ledgerReplicaIndex);
+            assertNull("UrLedger already exists!",
+                    watchUrLedgerNode(getUrLedgerZNode(lh), latch));
+        }
+
+        LOG.info("Killing Bookie :" + replicaToKillAddr);
+        killBookie(replicaToKillAddr);
+
+        // waiting to publish urLedger znode by Auditor
+        assertTrue("Ledgers should be marked as underreplicated",
+                latch.await(90, TimeUnit.SECONDS));
+
+        // Again watching the urLedger znode to know the replication status
+        latch = new CountDownLatch(listOfLedgerHandle.size());
+        for (LedgerHandle lh : listOfLedgerHandle) {
+            String urLedgerZNode = getUrLedgerZNode(lh);
+            LOG.info("Watching on urLedgerPath:" + urLedgerZNode
+                    + " to know the status of rereplication process");
+            assertNotNull("UrLedger doesn't exists!",
+                    watchUrLedgerNode(urLedgerZNode, latch));
+        }
+
+        // starting the replication service, so that he will be able to act as
+        // target bookie
+        startNewBookie();
+        int newBookieIndex = lastBookieIndex();
+        BookieServer newBookieServer = serverByIndex(newBookieIndex);
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Waiting to finish the replication of failed bookie : "
+                    + replicaToKillAddr);
+        }
+
+        // waiting to finish replication
+        assertTrue("Replication should complete",
+                latch.await(90, TimeUnit.SECONDS));
+
+        // grace period to update the urledger metadata in zookeeper
+        LOG.info("Waiting to update the urledger metadata in zookeeper");
+
+        for (int index = 0; index < listOfLedgerHandle.size(); index++) {
+            verifyLedgerEnsembleMetadataAfterReplication(newBookieServer,
+                    listOfLedgerHandle.get(index),
+                    listOfReplicaIndex.get(index));
+        }
+        LOG.info("Finished testClosedLedgers");
+    }
+
+    /**
+     * Test stopping replica service while replication in progress. Considering
+     * when there is an exception will shutdown Auditor and RW processes. After
+     * restarting should be able to finish the re-replication activities
+     */
+    @Test
+    public void testStopWhileReplicationInProgress() throws Exception {
+        LOG.info("Start testStopWhileReplicationInProgress");
+        int numberOfLedgers = 2;
+        List<Integer> listOfReplicaIndex = new ArrayList<Integer>();
+        List<LedgerHandle> listOfLedgerHandle = createLedgersAndAddEntries(
+                numberOfLedgers, 5);
+        closeLedgers(listOfLedgerHandle);
+        BookieId replicaToKillAddr = pickReplicaNotAuditor(listOfLedgerHandle.get(0));
+        LOG.info("Killing Bookie:" + replicaToKillAddr);
+
+        // Each ledger, there will be two events : create urLedger and after
+        // rereplication delete urLedger
+        CountDownLatch latch = new CountDownLatch(listOfLedgerHandle.size());
+        for (int i = 0; i < listOfLedgerHandle.size(); i++) {
+            final String urLedgerZNode = getUrLedgerZNode(listOfLedgerHandle
+                    .get(i));
+            assertNull("UrLedger already exists!",
+                    watchUrLedgerNode(urLedgerZNode, latch));
+            int replicaIndexInLedger = getReplicaIndexInLedger(
+                    listOfLedgerHandle.get(i), replicaToKillAddr);
+            listOfReplicaIndex.add(replicaIndexInLedger);
+        }
+
+        LOG.info("Killing Bookie :" + replicaToKillAddr);
+        killBookie(replicaToKillAddr);
+
+        // waiting to publish urLedger znode by Auditor
+        assertTrue("Ledgers should be marked as underreplicated",
+                latch.await(90, TimeUnit.SECONDS));
+
+        // Again watching the urLedger znode to know the replication status
+        latch = new CountDownLatch(listOfLedgerHandle.size());
+        for (LedgerHandle lh : listOfLedgerHandle) {
+            String urLedgerZNode = getUrLedgerZNode(lh);
+            LOG.info("Watching on urLedgerPath:" + urLedgerZNode
+                    + " to know the status of rereplication process");
+            assertNotNull("UrLedger doesn't exists!",
+                    watchUrLedgerNode(urLedgerZNode, latch));
+        }
+
+        // starting the replication service, so that he will be able to act as
+        // target bookie
+        startNewBookie();
+        int newBookieIndex = lastBookieIndex();
+        BookieServer newBookieServer = serverByIndex(newBookieIndex);
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Waiting to finish the replication of failed bookie : "
+                    + replicaToKillAddr);
+        }
+        while (true) {
+            if (latch.getCount() < numberOfLedgers || latch.getCount() <= 0) {
+                stopReplicationService();
+                LOG.info("Latch Count is:" + latch.getCount());
+                break;
+            }
+            // grace period to take breath
+            Thread.sleep(1000);
+        }
+
+        startReplicationService();
+
+        LOG.info("Waiting to finish rereplication processes");
+        assertTrue("Replication should complete after restart",
+                latch.await(90, TimeUnit.SECONDS));
+
+        // grace period to update the urledger metadata in zookeeper
+        LOG.info("Waiting to update the urledger metadata in zookeeper");
+
+        for (int index = 0; index < listOfLedgerHandle.size(); index++) {
+            verifyLedgerEnsembleMetadataAfterReplication(newBookieServer,
+                    listOfLedgerHandle.get(index),
+                    listOfReplicaIndex.get(index));
+        }
+        LOG.info("Finished testStopWhileReplicationInProgress");
+    }
+
+    /**
+     * Verify the published urledgers of deleted ledgers(those ledgers where
+     * deleted after publishing as urledgers by Auditor) should be cleared off
+     * by the newly selected replica bookie.
+     */
+    @Test
+    public void testNoSuchLedgerExists() throws Exception {
+        LOG.info("Start testNoSuchLedgerExists");
+        List<LedgerHandle> listOfLedgerHandle = createLedgersAndAddEntries(2, 5);
+        CountDownLatch latch = new CountDownLatch(listOfLedgerHandle.size());
+        for (LedgerHandle lh : listOfLedgerHandle) {
+            assertNull("UrLedger already exists!",
+                    watchUrLedgerNode(getUrLedgerZNode(lh), latch));
+        }
+        BookieId replicaToKillAddr = pickReplicaNotAuditor(listOfLedgerHandle.get(0));
+        killBookie(replicaToKillAddr);
+        // waiting to publish urLedger znode by Auditor
+        assertTrue("Ledgers should be marked as underreplicated",
+                latch.await(90, TimeUnit.SECONDS));
+
+        latch = new CountDownLatch(listOfLedgerHandle.size());
+        for (LedgerHandle lh : listOfLedgerHandle) {
+            assertNotNull("UrLedger doesn't exists!",
+                    watchUrLedgerNode(getUrLedgerZNode(lh), latch));
+        }
+
+        // delete ledgers
+        for (LedgerHandle lh : listOfLedgerHandle) {
+            bkc.deleteLedger(lh.getId());
+        }
+        startNewBookie();
+
+        // waiting to delete published urledgers, since it doesn't exists
+        assertTrue("UrLedgers should be cleaned up after deletion",
+                latch.await(90, TimeUnit.SECONDS));
+
+        for (LedgerHandle lh : listOfLedgerHandle) {
+            assertNull("UrLedger still exists after rereplication",
+                    watchUrLedgerNode(getUrLedgerZNode(lh), latch));
+        }
+        LOG.info("Finished testNoSuchLedgerExists");
+    }
+
+    /**
+     * Test that if an empty ledger loses the bookie not in the quorum for entry 0, it will
+     * still be openable when it loses enough bookies to lose a whole quorum.
+     */
+    @Test
+    public void testEmptyLedgerLosesQuorumEventually() throws Exception {
+        LOG.info("Start testEmptyLedgerLosesQuorumEventually");
+        LedgerHandle lh = bkc.createLedger(3, 2, 2, DigestType.CRC32, PASSWD);
+        List<BookieId> ensembleBookies = lh.getLedgerMetadata().getAllEnsembles().get(0L);
+
+        // Pin the Auditor onto ensemble[0] by stopping AutoRecovery on the bookies
+        // the test will kill (ensemble[1] and ensemble[2]). Otherwise the slow ZK
+        // leader-failover path blows past the 20s assertion timeouts in CI.
+        for (int i = 1; i <= 2; i++) {
+            BookieId killTarget = ensembleBookies.get(i);
+            for (ServerTester t : servers) {
+                if (t.getServer().getBookieId().equals(killTarget)) {
+                    t.stopAutoRecovery();
+                }
+            }
+        }
+        BookieId safeBookie = ensembleBookies.get(0);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (!safeBookie.equals(getAuditorBookieId())) {
+            if (System.nanoTime() > deadline) {
+                throw new IllegalStateException("Auditor did not settle on ensemble[0]: " + safeBookie);
+            }
+            Thread.sleep(200);
+        }
+
+        CountDownLatch latch = new CountDownLatch(1);
+        String urZNode = getUrLedgerZNode(lh);
+        watchUrLedgerNode(urZNode, latch);
+
+        BookieId replicaToKill = ensembleBookies.get(2);
+        LOG.info("Killing last bookie, {}, in ensemble {}", replicaToKill, ensembleBookies);
+        killBookie(replicaToKill);
+        startNewBookie();
+
+        getAuditor(10, TimeUnit.SECONDS).submitAuditTask().get(); // ensure auditor runs
+
+        assertTrue("Should be marked as underreplicated", latch.await(20, TimeUnit.SECONDS));
+        latch = new CountDownLatch(1);
+        Stat s = watchUrLedgerNode(urZNode, latch); // should be marked as replicated
+        if (s != null) {
+            assertTrue("Should be marked as replicated", latch.await(20, TimeUnit.SECONDS));
+        }
+
+        replicaToKill = lh.getLedgerMetadata().getAllEnsembles().get(0L).get(1);
+        LOG.info("Killing second bookie, {}, in ensemble {}", replicaToKill,
+                 lh.getLedgerMetadata().getAllEnsembles().get(0L));
+        killBookie(replicaToKill);
+
+        getAuditor(10, TimeUnit.SECONDS).submitAuditTask().get(); // ensure auditor runs
+
+        assertTrue("Should be marked as underreplicated", latch.await(20, TimeUnit.SECONDS));
+        latch = new CountDownLatch(1);
+        s = watchUrLedgerNode(urZNode, latch); // should be marked as replicated
+
+        startNewBookie();
+        getAuditor(10, TimeUnit.SECONDS).submitAuditTask().get(); // ensure auditor runs
+
+        if (s != null) {
+            assertTrue("Should be marked as replicated", latch.await(20, TimeUnit.SECONDS));
+        }
+
+        // should be able to open ledger without issue
+        bkc.openLedger(lh.getId(), DigestType.CRC32, PASSWD);
+        LOG.info("Finished testEmptyLedgerLosesQuorumEventually");
+    }
+
+    /**
+     * Test verifies bookie recovery, the host (recorded via ipaddress in
+     * ledgermetadata).
+     */
+    @Test
+    public void testLedgerMetadataContainsIpAddressAsBookieID()
+            throws Exception {
+        LOG.info("Start testLedgerMetadataContainsIpAddressAsBookieID");
+        stopBKCluster();
+        bkc = new BookKeeperTestClient(baseClientConf);
+        // start bookie with useHostNameAsBookieID=false, as old bookie
+        ServerConfiguration serverConf1 = newServerConfiguration();
+        // start 2 more bookies with useHostNameAsBookieID=true
+        ServerConfiguration serverConf2 = newServerConfiguration();
+        serverConf2.setUseHostNameAsBookieID(true);
+        ServerConfiguration serverConf3 = newServerConfiguration();
+        serverConf3.setUseHostNameAsBookieID(true);
+        startAndAddBookie(serverConf1);
+        startAndAddBookie(serverConf2);
+        startAndAddBookie(serverConf3);
+
+        List<LedgerHandle> listOfLedgerHandle = createLedgersAndAddEntries(1, 5);
+        LedgerHandle lh = listOfLedgerHandle.get(0);
+        int ledgerReplicaIndex = 0;
+        final SortedMap<Long, ? extends List<BookieId>> ensembles = lh.getLedgerMetadata().getAllEnsembles();
+        final List<BookieId> bkAddresses = ensembles.get(0L);
+        BookieId replicaToKillAddr = bkAddresses.get(0);
+        for (BookieId bookieSocketAddress : bkAddresses) {
+            if (!isCreatedFromIp(bookieSocketAddress)) {
+                replicaToKillAddr = bookieSocketAddress;
+                LOG.info("Kill bookie which has registered using hostname");
+                break;
+            }
+        }
+
+        final String urLedgerZNode = getUrLedgerZNode(lh);
+        ledgerReplicaIndex = getReplicaIndexInLedger(lh, replicaToKillAddr);
+
+        CountDownLatch latch = new CountDownLatch(1);
+        assertNull("UrLedger already exists!",
+                watchUrLedgerNode(urLedgerZNode, latch));
+
+        LOG.info("Killing Bookie :" + replicaToKillAddr);
+        killBookie(replicaToKillAddr);
+
+        // waiting to publish urLedger znode by Auditor
+        assertTrue("Ledger should be marked as underreplicated",
+                latch.await(90, TimeUnit.SECONDS));
+        latch = new CountDownLatch(1);
+        LOG.info("Watching on urLedgerPath:" + urLedgerZNode
+                + " to know the status of rereplication process");
+        assertNotNull("UrLedger doesn't exists!",
+                watchUrLedgerNode(urLedgerZNode, latch));
+
+        // starting the replication service, so that he will be able to act as
+        // target bookie
+        ServerConfiguration serverConf = newServerConfiguration();
+        serverConf.setUseHostNameAsBookieID(false);
+        startAndAddBookie(serverConf);
+
+        int newBookieIndex = lastBookieIndex();
+        BookieServer newBookieServer = serverByIndex(newBookieIndex);
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Waiting to finish the replication of failed bookie : "
+                    + replicaToKillAddr);
+        }
+        assertTrue("Replication should complete",
+                latch.await(90, TimeUnit.SECONDS));
+
+        // grace period to update the urledger metadata in zookeeper
+        LOG.info("Waiting to update the urledger metadata in zookeeper");
+
+        verifyLedgerEnsembleMetadataAfterReplication(newBookieServer,
+                listOfLedgerHandle.get(0), ledgerReplicaIndex);
+        LOG.info("Finished testLedgerMetadataContainsIpAddressAsBookieID");
+    }
+
+    /**
+     * Test verifies bookie recovery, the host (recorded via useHostName in
+     * ledgermetadata).
+     */
+    @Test
+    public void testLedgerMetadataContainsHostNameAsBookieID()
+            throws Exception {
+        LOG.info("Start testLedgerMetadataContainsHostNameAsBookieID");
+        stopBKCluster();
+
+        bkc = new BookKeeperTestClient(baseClientConf);
+        // start bookie with useHostNameAsBookieID=false, as old bookie
+        ServerConfiguration serverConf1 = newServerConfiguration();
+        // start 2 more bookies with useHostNameAsBookieID=true
+        ServerConfiguration serverConf2 = newServerConfiguration();
+        serverConf2.setUseHostNameAsBookieID(true);
+        ServerConfiguration serverConf3 = newServerConfiguration();
+        serverConf3.setUseHostNameAsBookieID(true);
+        startAndAddBookie(serverConf1);
+        startAndAddBookie(serverConf2);
+        startAndAddBookie(serverConf3);
+
+        List<LedgerHandle> listOfLedgerHandle = createLedgersAndAddEntries(1, 5);
+        LedgerHandle lh = listOfLedgerHandle.get(0);
+        int ledgerReplicaIndex = 0;
+        final SortedMap<Long, ? extends List<BookieId>> ensembles = lh.getLedgerMetadata().getAllEnsembles();
+        final List<BookieId> bkAddresses = ensembles.get(0L);
+        BookieId replicaToKillAddr = bkAddresses.get(0);
+        for (BookieId bookieSocketAddress : bkAddresses) {
+            if (isCreatedFromIp(bookieSocketAddress)) {
+                replicaToKillAddr = bookieSocketAddress;
+                LOG.info("Kill bookie which has registered using ipaddress");
+                break;
+            }
+        }
+
+        final String urLedgerZNode = getUrLedgerZNode(lh);
+        ledgerReplicaIndex = getReplicaIndexInLedger(lh, replicaToKillAddr);
+
+        CountDownLatch latch = new CountDownLatch(1);
+        assertNull("UrLedger already exists!",
+                watchUrLedgerNode(urLedgerZNode, latch));
+
+        LOG.info("Killing Bookie :" + replicaToKillAddr);
+        killBookie(replicaToKillAddr);
+
+        // waiting to publish urLedger znode by Auditor
+        assertTrue("Ledger should be marked as underreplicated",
+                latch.await(90, TimeUnit.SECONDS));
+        latch = new CountDownLatch(1);
+        LOG.info("Watching on urLedgerPath:" + urLedgerZNode
+                + " to know the status of rereplication process");
+        assertNotNull("UrLedger doesn't exists!",
+                watchUrLedgerNode(urLedgerZNode, latch));
+
+        // creates new bkclient
+        bkc = new BookKeeperTestClient(baseClientConf);
+        // starting the replication service, so that he will be able to act as
+        // target bookie
+        ServerConfiguration serverConf = newServerConfiguration();
+        serverConf.setUseHostNameAsBookieID(true);
+        startAndAddBookie(serverConf);
+
+        int newBookieIndex = lastBookieIndex();
+        BookieServer newBookieServer = serverByIndex(newBookieIndex);
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Waiting to finish the replication of failed bookie : "
+                    + replicaToKillAddr);
+        }
+        assertTrue("Replication should complete",
+                latch.await(90, TimeUnit.SECONDS));
+
+        // grace period to update the urledger metadata in zookeeper
+        LOG.info("Waiting to update the urledger metadata in zookeeper");
+
+        verifyLedgerEnsembleMetadataAfterReplication(newBookieServer,
+                listOfLedgerHandle.get(0), ledgerReplicaIndex);
+        LOG.info("Finished testLedgerMetadataContainsHostNameAsBookieID");
+    }
+
+    private int getReplicaIndexInLedger(LedgerHandle lh, BookieId replicaToKill) {
+        SortedMap<Long, ? extends List<BookieId>> ensembles = lh.getLedgerMetadata().getAllEnsembles();
+        int ledgerReplicaIndex = -1;
+        for (BookieId addr : ensembles.get(0L)) {
+            ++ledgerReplicaIndex;
+            if (addr.equals(replicaToKill)) {
+                break;
+            }
+        }
+        return ledgerReplicaIndex;
+    }
+
+    private BookieId getAuditorBookieId() throws Exception {
+        Auditor auditor = getAuditor(10, TimeUnit.SECONDS);
+        for (ServerTester t : servers) {
+            if (t.getAuditor() == auditor) {
+                return t.getServer().getBookieId();
+            }
+        }
+        throw new IllegalStateException("Auditor not found in cluster");
+    }
+
+    // Killing the Auditor leader triggers a slow ZK leader-failover path that
+    // routinely exceeds these tests' latch timeouts in CI; pick a non-Auditor
+    // bookie from the ensemble instead.
+    private BookieId pickReplicaNotAuditor(LedgerHandle lh) throws Exception {
+        BookieId auditorId = getAuditorBookieId();
+        for (BookieId addr : lh.getLedgerMetadata().getAllEnsembles().get(0L)) {
+            if (!addr.equals(auditorId)) {
+                return addr;
+            }
+        }
+        throw new IllegalStateException("All ensemble bookies are the Auditor");
+    }
+
+    private void verifyLedgerEnsembleMetadataAfterReplication(
+            BookieServer newBookieServer, LedgerHandle lh,
+            int ledgerReplicaIndex) throws Exception {
+        LedgerHandle openLedger = bkc
+                .openLedger(lh.getId(), digestType, PASSWD);
+
+        BookieId inetSocketAddress = openLedger.getLedgerMetadata().getAllEnsembles().get(0L)
+                .get(ledgerReplicaIndex);
+        assertEquals("Rereplication has been failed and ledgerReplicaIndex :"
+                + ledgerReplicaIndex, newBookieServer.getBookieId(),
+                inetSocketAddress);
+        openLedger.close();
+    }
+
+    private void closeLedgers(List<LedgerHandle> listOfLedgerHandle)
+            throws InterruptedException, BKException {
+        for (LedgerHandle lh : listOfLedgerHandle) {
+            lh.close();
+        }
+    }
+
+    private List<LedgerHandle> createLedgersAndAddEntries(int numberOfLedgers,
+            int numberOfEntries) throws InterruptedException, BKException {
+        List<LedgerHandle> listOfLedgerHandle = new ArrayList<LedgerHandle>(
+                numberOfLedgers);
+        for (int index = 0; index < numberOfLedgers; index++) {
+            LedgerHandle lh = bkc.createLedger(3, 3, digestType, PASSWD);
+            listOfLedgerHandle.add(lh);
+            for (int i = 0; i < numberOfEntries; i++) {
+                lh.addEntry(data);
+            }
+        }
+        return listOfLedgerHandle;
+    }
+
+    private String getUrLedgerZNode(LedgerHandle lh) {
+        return ZkLedgerUnderreplicationManager.getUrLedgerZnode(
+                underreplicatedPath, lh.getId());
+    }
+
+    private Stat watchUrLedgerNode(final String znode,
+            final CountDownLatch latch) throws KeeperException,
+            InterruptedException {
+        return zkc.exists(znode, new Watcher() {
+            @Override
+            public void process(WatchedEvent event) {
+                if (event.getType() == EventType.NodeDeleted) {
+                    LOG.info("Received Ledger replication completion. event : {}, path: {}, latchCount: {}",
+                            event.getType(), event.getPath(), latch.getCount());
+                    latch.countDown();
+                }
+                if (event.getType() == EventType.NodeCreated) {
+                    LOG.info("Received urLedger publishing event: {}, path: {}, latchCount: {}",
+                            event.getType(), event.getPath(), latch.getCount());
+                    latch.countDown();
+                }
+            }
+        });
+    }
+}

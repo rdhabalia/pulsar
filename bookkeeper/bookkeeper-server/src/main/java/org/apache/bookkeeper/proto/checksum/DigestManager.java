@@ -1,0 +1,401 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.bookkeeper.proto.checksum;
+
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.buffer.ByteBufUtil;
+import io.netty.buffer.PooledByteBufAllocator;
+import io.netty.buffer.Unpooled;
+import io.netty.util.ReferenceCounted;
+import io.netty.util.concurrent.FastThreadLocal;
+import java.security.GeneralSecurityException;
+import java.security.NoSuchAlgorithmException;
+import lombok.CustomLog;
+import org.apache.bookkeeper.client.BKException.BKDigestMatchException;
+import org.apache.bookkeeper.client.LedgerHandle;
+import org.apache.bookkeeper.proto.BookieProtoEncoding;
+import org.apache.bookkeeper.proto.BookieProtocol;
+import org.apache.bookkeeper.proto.LedgerMetadataFormat.DigestType;
+import org.apache.bookkeeper.util.ByteBufList;
+import org.apache.bookkeeper.util.ByteBufVisitor;
+
+/**
+ * This class takes an entry, attaches a digest to it and packages it with relevant
+ * data so that it can be shipped to the bookie. On the return side, it also
+ * gets a packet, checks that the digest matches, and extracts the original entry
+ * for the packet. Currently 3 types of digests are supported: MAC (based on SHA-1) and CRC32 and CRC32C.
+ */
+
+@CustomLog
+public abstract class DigestManager {
+
+    public static final int METADATA_LENGTH = 32;
+    public static final int LAC_METADATA_LENGTH = 16;
+
+    final long ledgerId;
+    final boolean useV2Protocol;
+    private final ByteBufAllocator allocator;
+    private final DigestUpdaterByteBufVisitorCallback byteBufVisitorCallback;
+
+    abstract int getMacCodeLength();
+
+    abstract int internalUpdate(int digest, ByteBuf buffer, int offset, int len);
+
+    abstract int internalUpdate(int digest, byte[] buffer, int offset, int len);
+
+    final int update(int digest, ByteBuf buffer, int offset, int len) {
+        if (buffer.hasMemoryAddress() && acceptsMemoryAddressBuffer()) {
+            return internalUpdate(digest, buffer, offset, len);
+        } else if (buffer.hasArray()) {
+            return internalUpdate(digest, buffer.array(), buffer.arrayOffset() + offset, len);
+        } else {
+            UpdateContext updateContext = new UpdateContext(digest);
+            ByteBufVisitor.visitBuffers(buffer, offset, len, byteBufVisitorCallback, updateContext);
+            return updateContext.digest;
+        }
+    }
+
+    abstract void populateValueAndReset(int digest, ByteBuf buffer);
+
+    abstract boolean isInt32Digest();
+
+    final int macCodeLength;
+
+    public DigestManager(long ledgerId, boolean useV2Protocol, ByteBufAllocator allocator) {
+        this.ledgerId = ledgerId;
+        this.useV2Protocol = useV2Protocol;
+        this.macCodeLength = getMacCodeLength();
+        this.allocator = allocator;
+        this.byteBufVisitorCallback = new DigestUpdaterByteBufVisitorCallback();
+    }
+
+    public static DigestManager instantiate(long ledgerId, byte[] passwd, DigestType digestType,
+            ByteBufAllocator allocator, boolean useV2Protocol) throws GeneralSecurityException {
+        switch(digestType) {
+        case HMAC:
+            return new MacDigestManager(ledgerId, passwd, useV2Protocol, allocator);
+        case CRC32:
+            return new CRC32DigestManager(ledgerId, useV2Protocol, allocator);
+        case CRC32C:
+            return new CRC32CDigestManager(ledgerId, useV2Protocol, allocator);
+        case DUMMY:
+            return new DummyDigestManager(ledgerId, useV2Protocol, allocator);
+        default:
+            throw new GeneralSecurityException("Unknown checksum type: " + digestType);
+        }
+    }
+
+    public static byte[] generateMasterKey(byte[] password) throws NoSuchAlgorithmException {
+        return password.length > 0 ? MacDigestManager.genDigest("ledger", password) : MacDigestManager.EMPTY_LEDGER_KEY;
+    }
+
+    /**
+     * Computes the digest for an entry and put bytes together for sending.
+     *
+     * @param entryId
+     * @param lastAddConfirmed
+     * @param length
+     * @param data
+     * @return
+     */
+    public ReferenceCounted computeDigestAndPackageForSending(long entryId, long lastAddConfirmed, long length,
+                                                              ByteBuf data, byte[] masterKey, int flags) {
+        if (this.useV2Protocol) {
+            return computeDigestAndPackageForSendingV2(entryId, lastAddConfirmed, length, data, masterKey, flags);
+        } else {
+            return computeDigestAndPackageForSendingV3(entryId, lastAddConfirmed, length, data);
+        }
+    }
+
+    private ReferenceCounted computeDigestAndPackageForSendingV2(long entryId, long lastAddConfirmed, long length,
+                                                                 ByteBuf data, byte[] masterKey, int flags) {
+        boolean isSmallEntry = data.readableBytes() < BookieProtoEncoding.SMALL_ENTRY_SIZE_THRESHOLD;
+
+        int headersSize = 4 // Request header
+                        + BookieProtocol.MASTER_KEY_LENGTH // for the master key
+                        + METADATA_LENGTH  //
+                        + macCodeLength;
+        int payloadSize = data.readableBytes();
+        int bufferSize = 4 + headersSize + (isSmallEntry ? payloadSize : 0);
+
+        ByteBuf buf = allocator.buffer(bufferSize, bufferSize);
+        buf.writeInt(headersSize + payloadSize);
+        buf.writeInt(
+                BookieProtocol.PacketHeader.toInt(
+                        BookieProtocol.CURRENT_PROTOCOL_VERSION, BookieProtocol.ADDENTRY, (short) flags));
+        buf.writeBytes(masterKey, 0, BookieProtocol.MASTER_KEY_LENGTH);
+
+        // The checksum is computed on the next part of the buffer only
+        buf.readerIndex(buf.writerIndex());
+        buf.writeLong(ledgerId);
+        buf.writeLong(entryId);
+        buf.writeLong(lastAddConfirmed);
+        buf.writeLong(length);
+
+        // Compute checksum over the headers
+        int digest = update(0, buf, buf.readerIndex(), buf.readableBytes());
+        digest = update(digest, data, data.readerIndex(), data.readableBytes());
+
+        populateValueAndReset(digest, buf);
+
+        // Reset the reader index to the beginning
+        buf.readerIndex(0);
+
+        if (isSmallEntry) {
+            buf.writeBytes(data, data.readerIndex(), data.readableBytes());
+            data.release();
+            return buf;
+        } else {
+            return ByteBufList.get(buf, data);
+        }
+    }
+
+    private ByteBufList computeDigestAndPackageForSendingV3(long entryId, long lastAddConfirmed, long length,
+                                                            ByteBuf data) {
+        ByteBuf headersBuffer = Unpooled.buffer(METADATA_LENGTH + macCodeLength);
+        headersBuffer.writeLong(ledgerId);
+        headersBuffer.writeLong(entryId);
+        headersBuffer.writeLong(lastAddConfirmed);
+        headersBuffer.writeLong(length);
+
+        int digest = update(0, headersBuffer, 0, METADATA_LENGTH);
+        digest = update(digest, data, data.readerIndex(), data.readableBytes());
+        populateValueAndReset(digest, headersBuffer);
+        return ByteBufList.get(headersBuffer, data);
+    }
+
+    /**
+     * Computes the digest for writeLac for sending.
+     *
+     * @param lac
+     * @return
+     */
+
+    public ByteBufList computeDigestAndPackageForSendingLac(long lac) {
+        ByteBuf headersBuffer;
+        if (this.useV2Protocol) {
+            headersBuffer = allocator.buffer(LAC_METADATA_LENGTH + macCodeLength);
+        } else {
+            headersBuffer = Unpooled.buffer(LAC_METADATA_LENGTH + macCodeLength);
+        }
+        headersBuffer.writeLong(ledgerId);
+        headersBuffer.writeLong(lac);
+
+        int digest = update(0, headersBuffer, 0, LAC_METADATA_LENGTH);
+        populateValueAndReset(digest, headersBuffer);
+
+        return ByteBufList.get(headersBuffer);
+    }
+
+    private void verifyDigest(ByteBuf dataReceived) throws BKDigestMatchException {
+        verifyDigest(LedgerHandle.INVALID_ENTRY_ID, dataReceived, true);
+    }
+
+    private void verifyDigest(long entryId, ByteBuf dataReceived) throws BKDigestMatchException {
+        verifyDigest(entryId, dataReceived, false);
+    }
+
+    private static final FastThreadLocal<ByteBuf> DIGEST_BUFFER = new FastThreadLocal<ByteBuf>() {
+        @Override
+        protected ByteBuf initialValue() throws Exception {
+            return PooledByteBufAllocator.DEFAULT.directBuffer(1024);
+        }
+
+        @Override
+        protected void onRemoval(ByteBuf value) throws Exception {
+            value.release();
+        }
+    };
+
+    private void verifyDigest(long entryId, ByteBuf dataReceived, boolean skipEntryIdCheck)
+            throws BKDigestMatchException {
+
+        if ((METADATA_LENGTH + macCodeLength) > dataReceived.readableBytes()) {
+            log.error().attr("digestType", this.getClass().getName())
+                    .attr("packetLength", dataReceived.readableBytes())
+                    .log("Data received is smaller than the minimum for this digest type."
+                    + " Either the packet is corrupt, or the wrong digest is configured");
+            throw new BKDigestMatchException();
+        }
+        int digest = update(0, dataReceived, 0, METADATA_LENGTH);
+
+        int offset = METADATA_LENGTH + macCodeLength;
+        digest = update(digest, dataReceived, offset, dataReceived.readableBytes() - offset);
+
+        if (isInt32Digest()) {
+            int receivedDigest = dataReceived.getInt(METADATA_LENGTH);
+            if (receivedDigest != digest) {
+                log.error()
+                        .attr("ledgerId", ledgerId)
+                        .attr("entryId", entryId)
+                        .log("Digest mismatch");
+                throw new BKDigestMatchException();
+            }
+        } else {
+            ByteBuf digestBuf = DIGEST_BUFFER.get();
+            digestBuf.clear();
+            populateValueAndReset(digest, digestBuf);
+
+            if (!ByteBufUtil.equals(digestBuf, 0, dataReceived, METADATA_LENGTH, macCodeLength)) {
+                log.error()
+                        .attr("ledgerId", ledgerId)
+                        .attr("entryId", entryId)
+                        .log("Mac mismatch");
+                throw new BKDigestMatchException();
+            }
+        }
+
+        long actualLedgerId = dataReceived.readLong();
+        long actualEntryId = dataReceived.readLong();
+
+        if (actualLedgerId != ledgerId) {
+            log.error()
+                    .attr("expectedLedgerId", ledgerId)
+                    .attr("actualLedgerId", actualLedgerId)
+                    .log("Ledger-id mismatch in authenticated message");
+            throw new BKDigestMatchException();
+        }
+
+        if (!skipEntryIdCheck && actualEntryId != entryId) {
+            log.error()
+                    .attr("expectedEntryId", entryId)
+                    .attr("actualEntryId", actualEntryId)
+                    .log("Entry-id mismatch in authenticated message");
+            throw new BKDigestMatchException();
+        }
+
+    }
+
+    public long verifyDigestAndReturnLac(ByteBuf dataReceived) throws BKDigestMatchException{
+        if ((LAC_METADATA_LENGTH + macCodeLength) > dataReceived.readableBytes()) {
+            log.error().attr("digestType", this.getClass().getName())
+                    .attr("packetLength", dataReceived.readableBytes())
+                    .log("Data received is smaller than the minimum for this digest type."
+                    + " Either the packet is corrupt, or the wrong digest is configured");
+            throw new BKDigestMatchException();
+        }
+
+        int digest = update(0, dataReceived, 0, LAC_METADATA_LENGTH);
+
+        if (isInt32Digest()) {
+            int receivedDigest = dataReceived.getInt(LAC_METADATA_LENGTH);
+            if (receivedDigest != digest) {
+                log.error().attr("ledgerId", ledgerId).log("Digest mismatch for LAC");
+                throw new BKDigestMatchException();
+            }
+        } else {
+            ByteBuf digestBuf = DIGEST_BUFFER.get();
+            digestBuf.clear();
+            populateValueAndReset(digest, digestBuf);
+
+            if (!ByteBufUtil.equals(digestBuf, 0, dataReceived, LAC_METADATA_LENGTH, macCodeLength)) {
+                log.error().attr("ledgerId", ledgerId).log("Mac mismatch for LAC");
+                throw new BKDigestMatchException();
+            }
+        }
+
+        long actualLedgerId = dataReceived.readLong();
+        long lac = dataReceived.readLong();
+        if (actualLedgerId != ledgerId) {
+            log.error()
+                    .attr("expectedLedgerId", ledgerId)
+                    .attr("actualLedgerId", actualLedgerId)
+                    .log("Ledger-id mismatch in authenticated message");
+            throw new BKDigestMatchException();
+        }
+        return lac;
+    }
+
+    /**
+     * Verify that the digest matches and returns the data in the entry.
+     *
+     * @param entryId
+     * @param dataReceived
+     * @return
+     * @throws BKDigestMatchException
+     */
+    public ByteBuf verifyDigestAndReturnData(long entryId, ByteBuf dataReceived)
+            throws BKDigestMatchException {
+        verifyDigest(entryId, dataReceived);
+        dataReceived.readerIndex(METADATA_LENGTH + macCodeLength);
+        return dataReceived;
+    }
+
+    /**
+     * A representation of RecoveryData.
+     */
+    public static final class RecoveryData {
+        final long lastAddConfirmed;
+        final long length;
+
+        public RecoveryData(long lastAddConfirmed, long length) {
+            this.lastAddConfirmed = lastAddConfirmed;
+            this.length = length;
+        }
+
+        public long getLastAddConfirmed() {
+            return lastAddConfirmed;
+        }
+
+        public long getLength() {
+            return length;
+        }
+
+    }
+
+    public RecoveryData verifyDigestAndReturnLastConfirmed(ByteBuf dataReceived) throws BKDigestMatchException {
+        verifyDigest(dataReceived);
+        dataReceived.readerIndex(8);
+
+        dataReceived.readLong(); // skip unused entryId
+        long lastAddConfirmed = dataReceived.readLong();
+        long length = dataReceived.readLong();
+        return new RecoveryData(lastAddConfirmed, length);
+    }
+
+    private static class UpdateContext {
+        int digest;
+
+        UpdateContext(int digest) {
+            this.digest = digest;
+        }
+    }
+
+    private class DigestUpdaterByteBufVisitorCallback implements ByteBufVisitor.ByteBufVisitorCallback<UpdateContext> {
+
+        @Override
+        public void visitBuffer(UpdateContext context, ByteBuf visitBuffer, int visitIndex, int visitLength) {
+            // recursively visit the sub buffer and update the digest
+            context.digest = internalUpdate(context.digest, visitBuffer, visitIndex, visitLength);
+        }
+
+        @Override
+        public void visitArray(UpdateContext context, byte[] visitArray, int visitIndex, int visitLength) {
+            // update the digest with the array
+            context.digest = internalUpdate(context.digest, visitArray, visitIndex, visitLength);
+        }
+
+        @Override
+        public boolean acceptsMemoryAddress(UpdateContext context) {
+            return DigestManager.this.acceptsMemoryAddressBuffer();
+        }
+    }
+
+    abstract boolean acceptsMemoryAddressBuffer();
+}

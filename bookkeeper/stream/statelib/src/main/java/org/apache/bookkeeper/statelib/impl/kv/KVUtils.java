@@ -1,0 +1,84 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+package org.apache.bookkeeper.statelib.impl.kv;
+
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.PooledByteBufAllocator;
+import io.netty.util.ReferenceCountUtil;
+import lombok.AccessLevel;
+import lombok.CustomLog;
+import lombok.NoArgsConstructor;
+import org.apache.bookkeeper.common.coder.Coder;
+import org.apache.bookkeeper.proto.statestore.kv.Command;
+
+/**
+ * Utils for kv stores.
+ */
+@CustomLog
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
+final class KVUtils {
+
+    static final Command NOP_CMD = newNopCommand();
+
+    private static Command newNopCommand() {
+        Command cmd = new Command();
+        cmd.setNopReq();
+        return cmd;
+    }
+
+    static ByteBuf serialize(ByteBuf valBuf, long revision) {
+        int serializedSize = valBuf.readableBytes() + Long.BYTES;
+        ByteBuf buffer = PooledByteBufAllocator.DEFAULT.heapBuffer(serializedSize);
+        buffer.writeLong(revision);
+        buffer.writeBytes(valBuf);
+        return buffer;
+    }
+
+    static ByteBuf serialize(byte[] value, long revision) {
+        int serializedSize = value.length + Long.BYTES;
+        ByteBuf buffer = PooledByteBufAllocator.DEFAULT.heapBuffer(serializedSize);
+        buffer.writeLong(revision);
+        buffer.writeBytes(value);
+        return buffer;
+    }
+
+    static <V> V deserialize(Coder<V> valCoder,
+                             ByteBuf valBuf) {
+        valBuf.skipBytes(Long.BYTES);
+        return valCoder.decode(valBuf);
+    }
+
+    static Command newCommand(ByteBuf cmdBuf) {
+        Command cmd = new Command();
+        cmd.parseFrom(cmdBuf, cmdBuf.readableBytes());
+        return cmd;
+    }
+
+    static ByteBuf newCommandBuf(Command cmd) {
+        ByteBuf buf = PooledByteBufAllocator.DEFAULT.buffer(cmd.getSerializedSize());
+        try {
+            cmd.writeTo(buf);
+        } catch (RuntimeException e) {
+            ReferenceCountUtil.release(buf);
+            throw e;
+        }
+        return buf;
+    }
+
+}

@@ -1,0 +1,157 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+package org.apache.bookkeeper.proto;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.apache.bookkeeper.proto.BookieProtocol.FLAG_NONE;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import com.google.common.collect.Lists;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.UnpooledByteBufAllocator;
+import io.netty.channel.ChannelHandlerContext;
+import java.util.List;
+import org.apache.bookkeeper.proto.BookieProtoEncoding.RequestEnDeCoderPreV3;
+import org.apache.bookkeeper.proto.BookieProtoEncoding.RequestEnDecoderV3;
+import org.apache.bookkeeper.proto.BookieProtoEncoding.ResponseDecoder;
+import org.apache.bookkeeper.proto.BookieProtoEncoding.ResponseEnDeCoderPreV3;
+import org.apache.bookkeeper.proto.BookieProtoEncoding.ResponseEnDecoderV3;
+import org.apache.bookkeeper.proto.BookieProtocol.AddResponse;
+import org.apache.bookkeeper.util.ByteBufList;
+import org.junit.Test;
+
+/**
+ * Unit test {@link BookieProtoEncoding}.
+ */
+public class BookieProtoEncodingTest {
+
+    @Test
+    public void testV3ResponseDecoderNoFallback() throws Exception {
+        AddResponse v2Resp = AddResponse.create(
+            BookieProtocol.CURRENT_PROTOCOL_VERSION,
+            BookieProtocol.EOK,
+            1L,
+            2L);
+
+        Response v3Resp = new Response();
+        v3Resp.setHeader()
+                .setVersion(ProtocolVersion.VERSION_THREE)
+                .setTxnId(1L)
+                .setOperation(OperationType.ADD_ENTRY);
+        v3Resp.setStatus(StatusCode.EOK);
+        v3Resp.setAddResponse()
+                .setStatus(StatusCode.EOK)
+                .setLedgerId(1L)
+                .setEntryId(2L);
+
+        List<Object> outList = Lists.newArrayList();
+        ChannelHandlerContext ctx = mock(ChannelHandlerContext.class);
+        when(ctx.fireChannelRead(any())).thenAnswer((iom) -> {
+                outList.add(iom.getArgument(0));
+                return null;
+        });
+
+        ResponseEnDeCoderPreV3 v2Encoder = new ResponseEnDeCoderPreV3();
+        ResponseEnDecoderV3 v3Encoder = new ResponseEnDecoderV3();
+
+        ResponseDecoder v3Decoder = new ResponseDecoder(false, false);
+        try {
+            v3Decoder.channelRead(ctx,
+                v2Encoder.encode(v2Resp, UnpooledByteBufAllocator.DEFAULT)
+            );
+            fail("V3 response decoder should fail on decoding v2 response");
+        } catch (RuntimeException e) {
+            // expected
+        }
+        assertEquals(0, outList.size());
+
+        ByteBuf serWithFrameSize = (ByteBuf) v3Encoder.encode(v3Resp, UnpooledByteBufAllocator.DEFAULT);
+        ByteBuf ser = serWithFrameSize.slice(4, serWithFrameSize.readableBytes() - 4);
+        v3Decoder.channelRead(ctx, ser);
+        assertEquals(1, outList.size());
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void testV2RequestDecoderThrowExceptionOnUnknownRequests() throws Exception {
+        RequestEnDeCoderPreV3 v2ReqEncoder = new RequestEnDeCoderPreV3();
+        RequestEnDecoderV3 v3ReqEncoder = new RequestEnDecoderV3();
+
+        Request v3Req = new Request();
+        v3Req.setHeader()
+                .setVersion(ProtocolVersion.VERSION_THREE)
+                .setTxnId(1L)
+                .setOperation(OperationType.ADD_ENTRY);
+        v3Req.setAddRequest()
+                .setLedgerId(1L)
+                .setEntryId(2L)
+                .setMasterKey("".getBytes(UTF_8))
+                .setFlag(AddRequest.Flag.RECOVERY_ADD)
+                .setBody("test".getBytes(UTF_8));
+
+
+        v2ReqEncoder.decode((ByteBuf) v3ReqEncoder.encode(v3Req, UnpooledByteBufAllocator.DEFAULT));
+    }
+
+    @Test
+    public void testV2BatchReadRequest() throws Exception {
+        RequestEnDeCoderPreV3 v2ReqEncoder = new RequestEnDeCoderPreV3();
+        BookieProtocol.BatchedReadRequest req = BookieProtocol.BatchedReadRequest.create(
+                BookieProtocol.CURRENT_PROTOCOL_VERSION, 1L, 1L, FLAG_NONE, null, 1L, 10, 1024L);
+        // Capture expected values before encode() recycles the request.
+        long expectedLedgerId = req.ledgerId;
+        long expectedEntryId = req.entryId;
+        long expectedMaxSize = req.maxSize;
+        int expectedMaxCount = req.maxCount;
+        ByteBuf buf = (ByteBuf) v2ReqEncoder.encode(req, UnpooledByteBufAllocator.DEFAULT);
+        buf.readInt(); // Skip the frame size.
+        BookieProtocol.BatchedReadRequest reqDecoded = (BookieProtocol.BatchedReadRequest) v2ReqEncoder.decode(buf);
+        assertEquals(expectedLedgerId, reqDecoded.ledgerId);
+        assertEquals(expectedEntryId, reqDecoded.entryId);
+        assertEquals(expectedMaxSize, reqDecoded.maxSize);
+        assertEquals(expectedMaxCount, reqDecoded.maxCount);
+        reqDecoded.recycle();
+    }
+
+    @Test
+    public void testV2BatchReadResponse() throws Exception {
+        ResponseEnDeCoderPreV3 v2ReqEncoder = new ResponseEnDeCoderPreV3();
+        ByteBuf first = UnpooledByteBufAllocator.DEFAULT.buffer(4).writeInt(10);
+        ByteBuf second = UnpooledByteBufAllocator.DEFAULT.buffer(8).writeLong(10L);
+        ByteBufList data = ByteBufList.get(first, second);
+        BookieProtocol.BatchedReadResponse res = new BookieProtocol.BatchedReadResponse(
+                BookieProtocol.CURRENT_PROTOCOL_VERSION, 1, 1L, 1L, 1L, data);
+        // Capture expected values before encode() releases the underlying data.
+        long expectedLedgerId = res.ledgerId;
+        long expectedEntryId = res.entryId;
+        int expectedDataSize = res.getData().size();
+        int expectedReadableBytes = res.getData().readableBytes();
+        ByteBuf buf = (ByteBuf) v2ReqEncoder.encode(res, UnpooledByteBufAllocator.DEFAULT);
+        buf.readInt(); // Skip the frame size.
+        BookieProtocol.BatchedReadResponse resDecoded = (BookieProtocol.BatchedReadResponse) v2ReqEncoder.decode(buf);
+        assertEquals(expectedLedgerId, resDecoded.ledgerId);
+        assertEquals(expectedEntryId, resDecoded.entryId);
+        assertEquals(expectedDataSize, resDecoded.getData().size());
+        assertEquals(expectedReadableBytes, resDecoded.getData().readableBytes());
+    }
+
+}

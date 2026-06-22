@@ -28,6 +28,9 @@ pluginManagement {
 dependencyResolutionManagement {
     @Suppress("UnstableApiUsage")
     repositories {
+        // Resolve the locally-built Apache BookKeeper (built from ./bookkeeper via build-all.sh)
+        // from the local Maven repository before falling back to remote repositories.
+        mavenLocal()
         mavenCentral()
         maven {
             url = uri("https://packages.confluent.io/maven/")

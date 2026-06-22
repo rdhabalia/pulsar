@@ -1,0 +1,167 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.bookkeeper.client;
+
+import com.google.common.annotations.VisibleForTesting;
+import io.netty.buffer.ByteBuf;
+import java.util.List;
+import lombok.CustomLog;
+import org.apache.bookkeeper.client.BKException.BKDigestMatchException;
+import org.apache.bookkeeper.net.BookieId;
+import org.apache.bookkeeper.proto.BookieClient;
+import org.apache.bookkeeper.proto.BookieProtocol;
+import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.ReadEntryCallback;
+import org.apache.bookkeeper.proto.checksum.DigestManager;
+import org.apache.bookkeeper.proto.checksum.DigestManager.RecoveryData;
+
+/**
+ * This class encapsulated the read last confirmed operation.
+ *
+ */
+@CustomLog
+class ReadLastConfirmedOp implements ReadEntryCallback {
+    private final long ledgerId;
+    private final byte[] ledgerKey;
+    private final BookieClient bookieClient;
+    private final DigestManager digestManager;
+    private int numResponsesPending;
+    private RecoveryData maxRecoveredData;
+    private volatile boolean completed = false;
+    private int lastSeenError = BKException.Code.ReadException;
+
+    private final LastConfirmedDataCallback cb;
+    private final DistributionSchedule.QuorumCoverageSet coverageSet;
+    private final List<BookieId> currentEnsemble;
+
+    /**
+     * Wrapper to get all recovered data from the request.
+     */
+    interface LastConfirmedDataCallback {
+        void readLastConfirmedDataComplete(int rc, RecoveryData data);
+    }
+
+    public ReadLastConfirmedOp(BookieClient bookieClient,
+                               DistributionSchedule schedule,
+                               DigestManager digestManager,
+                               long ledgerId,
+                               List<BookieId> ensemble,
+                               byte[] ledgerKey,
+                               LastConfirmedDataCallback cb) {
+        this.cb = cb;
+        this.bookieClient = bookieClient;
+        this.maxRecoveredData = new RecoveryData(LedgerHandle.INVALID_ENTRY_ID, 0);
+        this.numResponsesPending = ensemble.size();
+        this.coverageSet = schedule.getCoverageSet();
+        this.currentEnsemble = ensemble;
+        this.ledgerId = ledgerId;
+        this.ledgerKey = ledgerKey;
+        this.digestManager = digestManager;
+    }
+
+    public void initiate() {
+        for (int i = 0; i < currentEnsemble.size(); i++) {
+            bookieClient.readEntry(currentEnsemble.get(i),
+                                   ledgerId,
+                                   BookieProtocol.LAST_ADD_CONFIRMED,
+                                   this, i, BookieProtocol.FLAG_NONE);
+        }
+    }
+
+    public void initiateWithFencing() {
+        for (int i = 0; i < currentEnsemble.size(); i++) {
+            bookieClient.readEntry(currentEnsemble.get(i),
+                                   ledgerId,
+                                   BookieProtocol.LAST_ADD_CONFIRMED,
+                                   this, i, BookieProtocol.FLAG_DO_FENCING,
+                                   ledgerKey);
+        }
+    }
+
+    @Override
+    public synchronized void readEntryComplete(final int rc, final long ledgerId, final long entryId,
+            final ByteBuf buffer, final Object ctx) {
+        int bookieIndex = (Integer) ctx;
+
+        // add the response to coverage set
+        coverageSet.addBookie(bookieIndex, rc);
+
+        numResponsesPending--;
+        boolean heardValidResponse = false;
+        if (rc == BKException.Code.OK) {
+            try {
+                RecoveryData recoveryData = digestManager.verifyDigestAndReturnLastConfirmed(buffer);
+                if (recoveryData.getLastAddConfirmed() > maxRecoveredData.getLastAddConfirmed()) {
+                    maxRecoveredData = recoveryData;
+                }
+                heardValidResponse = true;
+            } catch (BKDigestMatchException e) {
+                // Too bad, this bookie didn't give us a valid answer, we
+                // still might be able to recover though so continue
+                log.error()
+                        .attr("ledgerId", ledgerId)
+                        .attr("entryId", entryId)
+                        .attr("bookieAddr", currentEnsemble.get(bookieIndex))
+                        .log("Mac mismatch while reading last entry from bookie");
+            }
+        }
+
+        if (rc == BKException.Code.NoSuchLedgerExistsException || rc == BKException.Code.NoSuchEntryException) {
+            // this still counts as a valid response, e.g., if the client crashed without writing any entry
+            heardValidResponse = true;
+        }
+
+        if (rc == BKException.Code.UnauthorizedAccessException  && !completed) {
+            cb.readLastConfirmedDataComplete(rc, maxRecoveredData);
+            completed = true;
+        }
+
+        if (!heardValidResponse && BKException.Code.OK != rc) {
+            lastSeenError = rc;
+        }
+
+        // other return codes dont count as valid responses
+        if (heardValidResponse
+            && coverageSet.checkCovered()
+            && !completed) {
+            completed = true;
+
+            log.debug()
+            .attr("ledgerId", ledgerId)
+            .attr("entryId", entryId)
+            .log("Read complete with enough valid responses");
+
+
+            cb.readLastConfirmedDataComplete(BKException.Code.OK, maxRecoveredData);
+            return;
+        }
+
+        if (numResponsesPending == 0 && !completed) {
+            log.error()
+                    .attr("ledgerId", ledgerId)
+                    .attr("coverageSet", coverageSet)
+                    .log("While readLastConfirmed did not hear success responses from all quorums");
+            cb.readLastConfirmedDataComplete(lastSeenError, maxRecoveredData);
+        }
+
+    }
+
+    @VisibleForTesting
+    synchronized int getNumResponsesPending() {
+        return numResponsesPending;
+    }
+}

@@ -1,0 +1,199 @@
+/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */
+package org.apache.bookkeeper.proto;
+
+import io.netty.buffer.ByteBuf;
+import java.io.IOException;
+import java.util.EnumSet;
+import java.util.concurrent.TimeUnit;
+import lombok.CustomLog;
+import org.apache.bookkeeper.bookie.BookieException;
+import org.apache.bookkeeper.bookie.BookieException.OperationRejectedException;
+import org.apache.bookkeeper.client.api.WriteFlag;
+import org.apache.bookkeeper.common.util.MathUtils;
+import org.apache.bookkeeper.net.BookieId;
+import org.apache.bookkeeper.stats.OpStatsLogger;
+
+@CustomLog
+class WriteEntryProcessorV3 extends PacketProcessorBaseV3 {
+
+    public WriteEntryProcessorV3(Request request, BookieRequestHandler requestHandler,
+                                 BookieRequestProcessor requestProcessor) {
+        super(request, requestHandler, requestProcessor);
+        requestProcessor.onAddRequestStart(requestHandler.ctx().channel());
+    }
+
+    // Returns null if there is no exception thrown
+    private AddResponse getAddResponse() {
+        final long startTimeNanos = MathUtils.nowInNano();
+        AddRequest addRequest = request.getAddRequest();
+        long ledgerId = addRequest.getLedgerId();
+        long entryId = addRequest.getEntryId();
+
+        final AddResponse addResponse = new AddResponse()
+                .setLedgerId(ledgerId)
+                .setEntryId(entryId);
+
+        if (!isVersionCompatible()) {
+            addResponse.setStatus(StatusCode.EBADVERSION);
+            return addResponse;
+        }
+
+        if (requestProcessor.getBookie().isReadOnly()
+            && !(RequestUtils.isHighPriority(request)
+                    && requestProcessor.getBookie().isAvailableForHighPriorityWrites())) {
+            log.warn("BookieServer is running as readonly mode, so rejecting the request from the client!");
+            addResponse.setStatus(StatusCode.EREADONLY);
+            return addResponse;
+        }
+
+        BookkeeperInternalCallbacks.WriteCallback wcb = new BookkeeperInternalCallbacks.WriteCallback() {
+            @Override
+            public void writeComplete(int rc, long ledgerId, long entryId,
+                                      BookieId addr, Object ctx) {
+                if (BookieProtocol.EOK == rc) {
+                    requestProcessor.getRequestStats().getAddEntryStats()
+                        .registerSuccessfulEvent(MathUtils.elapsedNanos(startTimeNanos), TimeUnit.NANOSECONDS);
+                } else {
+                    requestProcessor.getRequestStats().getAddEntryStats()
+                        .registerFailedEvent(MathUtils.elapsedNanos(startTimeNanos), TimeUnit.NANOSECONDS);
+                }
+
+                StatusCode status;
+                switch (rc) {
+                    case BookieProtocol.EOK:
+                        status = StatusCode.EOK;
+                        break;
+                    case BookieProtocol.EIO:
+                        status = StatusCode.EIO;
+                        break;
+                    default:
+                        status = StatusCode.EUA;
+                        break;
+                }
+                addResponse.setStatus(status);
+                Response resp = new Response();
+                resp.setHeader().copyFrom(getHeader());
+                resp.setStatus(addResponse.getStatus());
+                resp.setAddResponse().copyFrom(addResponse);
+                sendResponse(status, resp, requestProcessor.getRequestStats().getAddRequestStats());
+            }
+        };
+        final EnumSet<WriteFlag> writeFlags;
+        if (addRequest.hasWriteFlags()) {
+            writeFlags = WriteFlag.getWriteFlags(addRequest.getWriteFlags());
+        } else {
+            writeFlags = WriteFlag.NONE;
+        }
+        final boolean ackBeforeSync = writeFlags.contains(WriteFlag.DEFERRED_SYNC);
+        StatusCode status = null;
+        byte[] masterKey = addRequest.getMasterKey();
+        ByteBuf entryToAdd = addRequest.getBodySlice();
+        try {
+            if (RequestUtils.hasFlag(addRequest, AddRequest.Flag.RECOVERY_ADD)) {
+                requestProcessor.getBookie().recoveryAddEntry(entryToAdd, wcb,
+                        requestHandler.ctx().channel(), masterKey);
+            } else {
+                requestProcessor.getBookie().addEntry(entryToAdd, ackBeforeSync, wcb,
+                        requestHandler.ctx().channel(), masterKey);
+            }
+            status = StatusCode.EOK;
+        } catch (OperationRejectedException e) {
+            requestProcessor.getRequestStats().getAddEntryRejectedCounter().inc();
+            // Avoid to log each occurrence of this exception as this can happen when the ledger storage is
+            // unable to keep up with the write rate.
+            log.debug()
+                    .exception(e)
+                    .attr("request", request)
+                    .log("Operation rejected while writing");
+            status = StatusCode.ETOOMANYREQUESTS;
+        } catch (IOException e) {
+            log.error()
+                    .exception(e)
+                    .attr("entryId", entryId)
+                    .attr("ledgerId", ledgerId)
+                    .log("Error writing entry to ledger");
+            status = StatusCode.EIO;
+        } catch (BookieException.LedgerFencedException | BookieException.LedgerFencedAndDeletedException e) {
+            log.error()
+                    .exception(e)
+                    .attr("entryId", entryId)
+                    .attr("ledgerId", ledgerId)
+                    .log("Ledger fenced/deleted while writing entry to ledger");
+            status = StatusCode.EFENCED;
+        } catch (BookieException e) {
+            log.error()
+                    .exception(e)
+                    .attr("ledgerId", ledgerId)
+                    .attr("entryId", entryId)
+                    .log("Unauthorized access to ledger while writing entry");
+            status = StatusCode.EUA;
+        } catch (Throwable t) {
+            log.error()
+                    .exception(t)
+                    .attr("entryId", entryId)
+                    .attr("ledgerId", ledgerId)
+                    .log("Unexpected exception while writing");
+            // some bad request which cause unexpected exception
+            status = StatusCode.EBADREQ;
+        }
+
+        // If everything is okay, we return null so that the calling function
+        // doesn't return a response back to the caller.
+        if (!status.equals(StatusCode.EOK)) {
+            addResponse.setStatus(status);
+            return addResponse;
+        }
+        return null;
+    }
+
+    @Override
+    public void run() {
+        requestProcessor.getRequestStats().getWriteThreadQueuedLatency()
+                .registerSuccessfulEvent(MathUtils.elapsedNanos(enqueueNanos), TimeUnit.NANOSECONDS);
+        AddResponse addResponse = getAddResponse();
+        if (null != addResponse) {
+            // This means there was an error and we should send this back.
+            Response resp = new Response();
+            resp.setHeader().copyFrom(getHeader());
+            resp.setStatus(addResponse.getStatus());
+            resp.setAddResponse().copyFrom(addResponse);
+            sendResponse(addResponse.getStatus(), resp,
+                         requestProcessor.getRequestStats().getAddRequestStats());
+        }
+    }
+
+    @Override
+    protected void sendResponse(StatusCode code, Object response, OpStatsLogger statsLogger) {
+        super.sendResponse(code, response, statsLogger);
+        requestProcessor.onAddRequestFinish();
+    }
+
+    /**
+     * this toString method filters out body and masterKey from the output.
+     * masterKey contains the password of the ledger and body is customer data,
+     * so it is not appropriate to have these in logs or system output.
+     */
+    @Override
+    public String toString() {
+        return RequestUtils.toSafeString(request);
+    }
+}
