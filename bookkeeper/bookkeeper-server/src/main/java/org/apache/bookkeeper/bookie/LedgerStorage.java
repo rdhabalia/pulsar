@@ -223,6 +223,25 @@ public interface LedgerStorage {
     }
 
     /**
+     * Streaming Lake: record a sealed page's opaque, order-preserving column-range blob
+     * under (ledgerId, entryId). No-op by default (only supported by storages that
+     * maintain a page-range index).
+     */
+    default void recordPageRanges(long ledgerId, long entryId, byte[] rangeBlob) throws IOException {
+        return;
+    }
+
+    /**
+     * Streaming Lake page-prune API: return the entryIds in [startEntryId, endEntryId] of
+     * the ledger whose page ranges could satisfy the predicate blob (schema-agnostic byte
+     * comparison). Empty by default (pruning not supported).
+     */
+    default java.util.List<Long> giveIndexPages(long ledgerId, long startEntryId, long endEntryId,
+            byte[] predicateBlob) throws IOException {
+        return java.util.Collections.emptyList();
+    }
+
+    /**
      * Force trigger Garbage Collection.
      */
     default void forceGC() {

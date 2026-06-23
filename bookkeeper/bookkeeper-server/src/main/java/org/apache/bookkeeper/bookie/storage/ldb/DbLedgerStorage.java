@@ -362,6 +362,17 @@ public class DbLedgerStorage implements LedgerStorage {
     }
 
     @Override
+    public void recordPageRanges(long ledgerId, long entryId, byte[] rangeBlob) throws IOException {
+        getLedgerStorage(ledgerId).recordPageRanges(ledgerId, entryId, rangeBlob);
+    }
+
+    @Override
+    public java.util.List<Long> giveIndexPages(long ledgerId, long startEntryId, long endEntryId,
+            byte[] predicateBlob) throws IOException {
+        return getLedgerStorage(ledgerId).giveIndexPages(ledgerId, startEntryId, endEntryId, predicateBlob);
+    }
+
+    @Override
     public long getLastAddConfirmed(long ledgerId) throws IOException, BookieException {
         return getLedgerStorage(ledgerId).getLastAddConfirmed(ledgerId);
     }
