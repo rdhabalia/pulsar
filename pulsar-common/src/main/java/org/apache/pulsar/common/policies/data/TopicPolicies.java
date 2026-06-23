@@ -55,6 +55,7 @@ public class TopicPolicies implements Cloneable {
     private Boolean isGlobal = false;
     private PersistencePolicies persistence;
     private RetentionPolicies retentionPolicies;
+    private StreamingLakeConfig streamingLake;
     private Boolean deduplicationEnabled;
     private Integer messageTTLInSeconds;
     private Integer subscriptionExpirationTimeInMinutes;
