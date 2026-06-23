@@ -72,6 +72,19 @@ class WriteEntryProcessorV3 extends PacketProcessorBaseV3 {
                 if (BookieProtocol.EOK == rc) {
                     requestProcessor.getRequestStats().getAddEntryStats()
                         .registerSuccessfulEvent(MathUtils.elapsedNanos(startTimeNanos), TimeUnit.NANOSECONDS);
+                    // Streaming Lake: index this entry's opaque column-range blob, if provided.
+                    if (addRequest.hasPageRanges()) {
+                        try {
+                            requestProcessor.getBookie().getLedgerStorage()
+                                .recordPageRanges(ledgerId, entryId, addRequest.getPageRanges());
+                        } catch (IOException e) {
+                            log.error()
+                                    .exception(e)
+                                    .attr("ledgerId", ledgerId)
+                                    .attr("entryId", entryId)
+                                    .log("Failed to record Streaming Lake page ranges");
+                        }
+                    }
                 } else {
                     requestProcessor.getRequestStats().getAddEntryStats()
                         .registerFailedEvent(MathUtils.elapsedNanos(startTimeNanos), TimeUnit.NANOSECONDS);

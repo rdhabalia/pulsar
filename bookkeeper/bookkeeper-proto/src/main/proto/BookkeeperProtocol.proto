@@ -130,6 +130,9 @@ message AddRequest {
     required bytes masterKey = 3;
     required bytes body = 4;
     optional int32 writeFlags = 5;
+    // Streaming Lake: opaque column-range blob for this entry/page, indexed by the
+    // bookie for later page pruning (see PageRangeCodec). Ignored for normal topics.
+    optional bytes pageRanges = 6;
 }
 
 message StartTLSRequest {
