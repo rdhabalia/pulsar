@@ -93,6 +93,7 @@ public class SingleDirectoryDbLedgerStorage implements CompactableLedgerStorage 
 
     private final LedgerMetadataIndex ledgerIndex;
     private final EntryLocationIndex entryLocationIndex;
+    private final PageRangeIndex pageRangeIndex;
 
     private final ConcurrentLongHashMap<TransientLedgerInfo> transientLedgerInfoCache;
 
@@ -199,6 +200,8 @@ public class SingleDirectoryDbLedgerStorage implements CompactableLedgerStorage 
         ledgerIndex = new LedgerMetadataIndex(conf,
                 KeyValueStorageRocksDB.factory, indexBaseDir, ledgerIndexDirStatsLogger);
         entryLocationIndex = new EntryLocationIndex(conf,
+                KeyValueStorageRocksDB.factory, indexBaseDir, ledgerIndexDirStatsLogger);
+        pageRangeIndex = new PageRangeIndex(conf,
                 KeyValueStorageRocksDB.factory, indexBaseDir, ledgerIndexDirStatsLogger);
 
         transientLedgerInfoCache = ConcurrentLongHashMap.<TransientLedgerInfo>newBuilder()
@@ -353,6 +356,7 @@ public class SingleDirectoryDbLedgerStorage implements CompactableLedgerStorage 
 
             ledgerIndex.close();
             entryLocationIndex.close();
+            pageRangeIndex.close();
 
             writeCache.close();
             writeCacheBeingFlushed.close();
@@ -929,6 +933,7 @@ public class SingleDirectoryDbLedgerStorage implements CompactableLedgerStorage 
 
         entryLocationIndex.delete(ledgerId);
         ledgerIndex.delete(ledgerId);
+        pageRangeIndex.delete(ledgerId);
 
         for (int i = 0, size = ledgerDeletionListeners.size(); i < size; i++) {
             LedgerDeletionListener listener = ledgerDeletionListeners.get(i);
@@ -1301,5 +1306,25 @@ public class SingleDirectoryDbLedgerStorage implements CompactableLedgerStorage 
     @VisibleForTesting
     public String getIndexBaseDir() {
         return indexBaseDir;
+    }
+
+    // ===== Streaming Lake: page-range index integration =====
+
+    /**
+     * Record a sealed page's opaque column-range blob under (ledgerId, entryId).
+     * Called from the write path for Streaming-Lake topics. The blob is produced by
+     * the broker and is never interpreted here beyond byte comparison.
+     */
+    public void recordPageRanges(long ledgerId, long entryId, byte[] rangeBlob) throws IOException {
+        pageRangeIndex.addPageRanges(ledgerId, entryId, rangeBlob);
+    }
+
+    /**
+     * Page-prune API: return entryIds in [startEntryId, endEntryId] of the ledger whose
+     * page ranges could satisfy the predicate blob. Schema-agnostic byte comparison.
+     */
+    public List<Long> giveIndexPages(long ledgerId, long startEntryId, long endEntryId, byte[] predicateBlob)
+            throws IOException {
+        return pageRangeIndex.giveIndexPages(ledgerId, startEntryId, endEntryId, predicateBlob);
     }
 }
