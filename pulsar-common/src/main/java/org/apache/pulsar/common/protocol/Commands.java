@@ -59,6 +59,8 @@ import org.apache.pulsar.common.api.proto.CommandAck;
 import org.apache.pulsar.common.api.proto.CommandAck.AckType;
 import org.apache.pulsar.common.api.proto.CommandAck.ValidationError;
 import org.apache.pulsar.common.api.proto.CommandAckResponse;
+import org.apache.pulsar.common.api.proto.CommandScan;
+import org.apache.pulsar.common.api.proto.CommandScanResponse;
 import org.apache.pulsar.common.api.proto.CommandAddPartitionToTxn;
 import org.apache.pulsar.common.api.proto.CommandAddPartitionToTxnResponse;
 import org.apache.pulsar.common.api.proto.CommandAddSubscriptionToTxn;
@@ -390,6 +392,46 @@ public class Commands {
         BaseCommand cmd = localCmd(Type.SUCCESS);
         cmd.setSuccess()
                 .setRequestId(requestId);
+        return cmd;
+    }
+
+    // ===== Streaming Lake =====
+
+    public static BaseCommand newScan(long requestId, long consumerId, String topic,
+                                      long startTime, long endTime, byte[] predicate) {
+        BaseCommand cmd = localCmd(Type.SCAN);
+        CommandScan scan = cmd.setScan()
+                .setRequestId(requestId)
+                .setConsumerId(consumerId)
+                .setTopic(topic);
+        if (startTime > 0) {
+            scan.setStartTime(startTime);
+        }
+        if (endTime > 0) {
+            scan.setEndTime(endTime);
+        }
+        if (predicate != null) {
+            scan.setPredicate(predicate);
+        }
+        return cmd;
+    }
+
+    public static BaseCommand newScanResponse(long requestId, long consumerId, byte[] records,
+                                              boolean isLast, ServerError error, String message) {
+        BaseCommand cmd = localCmd(Type.SCAN_RESPONSE);
+        CommandScanResponse response = cmd.setScanResponse()
+                .setRequestId(requestId)
+                .setConsumerId(consumerId)
+                .setIsLast(isLast);
+        if (records != null) {
+            response.setRecords(records);
+        }
+        if (error != null) {
+            response.setError(error);
+        }
+        if (message != null) {
+            response.setMessage(message);
+        }
         return cmd;
     }
 
