@@ -3404,10 +3404,8 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         final long requestId = commandScan.getRequestId();
         final long consumerId = commandScan.getConsumerId();
         final String topic = commandScan.getTopic();
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Streaming Lake scan request for topic {} (req {}, consumer {})",
-                    remoteAddress, topic, requestId, consumerId);
-        }
+        log.debug().attr("topic", topic).attr("requestId", requestId).attr("consumerId", consumerId)
+                .log("Received Streaming Lake scan request");
         // Protocol handler is in place. Full execution -- date pruning via the
         // DateIndexLedger, per-ledger bookie PAGE_PRUNE, candidate-page reads, columnar
         // decode + exact row filter, and streamed CommandScanResponse batches -- runs
