@@ -1159,6 +1159,14 @@ public class ClientCnx extends PulsarHandler {
         return sendRequestAndHandleTimeout(cmd, requestId, RequestType.Command, true);
     }
 
+    /**
+     * Streaming Lake: send a CommandScan and complete with the response records bytes
+     * (completed by {@link #handleScanResponse}).
+     */
+    public CompletableFuture<byte[]> sendScan(ByteBuf cmd, long requestId) {
+        return sendRequestAndHandleTimeout(cmd, requestId, RequestType.Command, true);
+    }
+
     private <T> void sendRequestAndHandleTimeout(ByteBuf requestMessage, long requestId,
                                                  RequestType requestType, boolean flush,
                                                  TimedCompletableFuture<T> future) {
