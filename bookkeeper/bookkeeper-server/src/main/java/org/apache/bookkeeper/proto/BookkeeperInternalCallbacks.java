@@ -114,6 +114,13 @@ public class BookkeeperInternalCallbacks {
     }
 
     /**
+     * A callback interface for the Streaming Lake PAGE_PRUNE command.
+     */
+    public interface PagePruneCallback {
+        void pagePruneComplete(int rc, long ledgerId, java.util.List<Long> entryIds);
+    }
+
+    /**
      * Handle the Response Code and transform it to a BKException.
      *
      * @param <T>
@@ -151,6 +158,27 @@ public class BookkeeperInternalCallbacks {
                 rc = BKException.Code.ReadException;
             }
             finish(rc, availabilityOfEntriesOfLedger, this);
+        }
+    }
+
+    /**
+     * Future wrapper for the Streaming Lake PAGE_PRUNE command.
+     */
+    public static class FuturePagePrune extends CompletableFuture<java.util.List<Long>>
+            implements PagePruneCallback {
+        private final long ledgerIdOfTheRequest;
+
+        FuturePagePrune(long ledgerId) {
+            this.ledgerIdOfTheRequest = ledgerId;
+        }
+
+        @Override
+        public void pagePruneComplete(int rc, long ledgerId, java.util.List<Long> entryIds) {
+            if (rc == BKException.Code.OK) {
+                complete(entryIds);
+            } else {
+                completeExceptionally(BKException.create(rc));
+            }
         }
     }
 

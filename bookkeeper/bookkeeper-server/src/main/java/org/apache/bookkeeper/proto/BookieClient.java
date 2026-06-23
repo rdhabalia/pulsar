@@ -273,6 +273,13 @@ public interface BookieClient {
             long ledgerId);
 
     /**
+     * Streaming Lake: ask a bookie which pages (entryIds) of a ledger could match the
+     * predicate (opaque order-preserving range blob). Returns the candidate entryIds.
+     */
+    CompletableFuture<java.util.List<Long>> pagePrune(BookieId address, long ledgerId,
+            long startEntryId, long endEntryId, byte[] predicate);
+
+    /**
      * @return whether bookie client object has been closed
      */
     boolean isClosed();

@@ -339,6 +339,34 @@ public class BookieClientImpl implements BookieClient, PerChannelBookieClientFac
         return futureResult;
     }
 
+    @Override
+    public CompletableFuture<java.util.List<Long>> pagePrune(BookieId address, long ledgerId,
+            long startEntryId, long endEntryId, byte[] predicate) {
+        BookkeeperInternalCallbacks.FuturePagePrune futureResult =
+                new BookkeeperInternalCallbacks.FuturePagePrune(ledgerId);
+        final PerChannelBookieClientPool client = lookupClient(address);
+        if (client == null) {
+            futureResult.pagePruneComplete(getRc(BKException.Code.BookieHandleNotAvailableException),
+                    ledgerId, null);
+            return futureResult;
+        }
+        client.obtain((rc, pcbc) -> {
+            if (rc != BKException.Code.OK) {
+                try {
+                    executor.executeOrdered(ledgerId, () ->
+                            futureResult.pagePruneComplete(rc, ledgerId, null)
+                    );
+                } catch (RejectedExecutionException re) {
+                    futureResult.pagePruneComplete(getRc(BKException.Code.InterruptedException),
+                            ledgerId, null);
+                }
+            } else {
+                pcbc.pagePrune(ledgerId, startEntryId, endEntryId, predicate, futureResult);
+            }
+        }, ledgerId);
+        return futureResult;
+    }
+
     private void completeRead(final int rc,
                               final long ledgerId,
                               final long entryId,

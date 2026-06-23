@@ -870,6 +870,32 @@ public class PerChannelBookieClient extends ChannelInboundHandlerAdapter {
     }
 
     /**
+     * Streaming Lake: ask this bookie which pages (entryIds) of a ledger could match
+     * the predicate. The predicate is an opaque order-preserving range blob.
+     */
+    public void pagePrune(final long ledgerId, long startEntryId, long endEntryId, byte[] predicate,
+                          BookkeeperInternalCallbacks.PagePruneCallback cb) {
+        final long txnId = getTxnId();
+        final CompletionKey completionKey = new TxnCompletionKey(txnId, OperationType.PAGE_PRUNE);
+        completionObjects.put(completionKey, new PagePruneCompletion(completionKey, cb, ledgerId, this));
+
+        Request pagePruneRequest = new Request();
+        pagePruneRequest.setHeader()
+                .setVersion(ProtocolVersion.VERSION_THREE)
+                .setOperation(OperationType.PAGE_PRUNE)
+                .setTxnId(txnId);
+        PagePruneRequest req = pagePruneRequest.setPagePruneRequest()
+                .setLedgerId(ledgerId)
+                .setStartEntryId(startEntryId)
+                .setEndEntryId(endEntryId);
+        if (predicate != null) {
+            req.setPredicate(predicate);
+        }
+
+        writeAndFlush(channel, completionKey, pagePruneRequest);
+    }
+
+    /**
      * Long Poll Reads.
      */
     public void readEntryWaitForLACUpdate(final long ledgerId,
