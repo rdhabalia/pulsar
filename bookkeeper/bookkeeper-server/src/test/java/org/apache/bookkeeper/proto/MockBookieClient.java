@@ -302,6 +302,17 @@ public class MockBookieClient implements BookieClient {
     }
 
     @Override
+    public CompletableFuture<List<Long>> pagePrune(BookieId address, long ledgerId,
+            long startEntryId, long endEntryId, byte[] predicate) {
+        CompletableFuture<List<Long>> future = new CompletableFuture<>();
+        executor.executeOrdered(address, () ->
+                future.completeExceptionally(
+                        BKException.create(BKException.Code.IllegalOpException).fillInStackTrace())
+        );
+        return future;
+    }
+
+    @Override
     public boolean isClosed() {
         return false;
     }
