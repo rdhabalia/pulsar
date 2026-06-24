@@ -757,7 +757,8 @@ public class PerChannelBookieClient extends ChannelInboundHandlerAdapter {
      *          WriteFlags
      */
     void addEntry(final long ledgerId, byte[] masterKey, final long entryId, ReferenceCounted toSend, WriteCallback cb,
-                  Object ctx, final int options, boolean allowFastFail, final EnumSet<WriteFlag> writeFlags) {
+                  Object ctx, final int options, boolean allowFastFail, final EnumSet<WriteFlag> writeFlags,
+                  final byte[] pageRanges) {
         Object request = null;
         CompletionKey completionKey = null;
         Runnable cleanupActionFailedBeforeWrite = null;
@@ -811,6 +812,11 @@ public class PerChannelBookieClient extends ChannelInboundHandlerAdapter {
             if (!writeFlags.isEmpty()) {
                 // add flags only if needed, in order to be able to talk with old bookies
                 addRequestMsg.setWriteFlags(WriteFlag.getWriteFlagsValue(writeFlags));
+            }
+
+            // Streaming Lake: attach the opaque column-range blob so the bookie can index it.
+            if (pageRanges != null && pageRanges.length > 0) {
+                addRequestMsg.setPageRanges(pageRanges);
             }
 
             withRequestContext(addEntryRequest);

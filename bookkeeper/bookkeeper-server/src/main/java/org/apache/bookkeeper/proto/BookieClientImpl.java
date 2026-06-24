@@ -294,7 +294,8 @@ public class BookieClientImpl implements BookieClient, PerChannelBookieClientFac
                          final Object ctx,
                          final int options,
                          final boolean allowFastFail,
-                         final EnumSet<WriteFlag> writeFlags) {
+                         final EnumSet<WriteFlag> writeFlags,
+                         final byte[] pageRanges) {
         final PerChannelBookieClientPool client = lookupClient(addr);
         if (client == null) {
             completeAdd(getRc(BKException.Code.BookieHandleNotAvailableException),
@@ -308,7 +309,7 @@ public class BookieClientImpl implements BookieClient, PerChannelBookieClientFac
 
         client.obtain(ChannelReadyForAddEntryCallback.create(
                               this, toSend, ledgerId, entryId, addr,
-                                  ctx, cb, options, masterKey, allowFastFail, writeFlags),
+                                  ctx, cb, options, masterKey, allowFastFail, writeFlags, pageRanges),
                       ledgerId);
     }
 
@@ -414,12 +415,13 @@ public class BookieClientImpl implements BookieClient, PerChannelBookieClientFac
         private byte[] masterKey;
         private boolean allowFastFail;
         private EnumSet<WriteFlag> writeFlags;
+        private byte[] pageRanges;
 
         static ChannelReadyForAddEntryCallback create(
                 BookieClientImpl bookieClient, ReferenceCounted toSend, long ledgerId,
                 long entryId, BookieId addr, Object ctx,
                 WriteCallback cb, int options, byte[] masterKey, boolean allowFastFail,
-                EnumSet<WriteFlag> writeFlags) {
+                EnumSet<WriteFlag> writeFlags, byte[] pageRanges) {
             ChannelReadyForAddEntryCallback callback = RECYCLER.get();
             callback.bookieClient = bookieClient;
             callback.toSend = toSend;
@@ -432,6 +434,7 @@ public class BookieClientImpl implements BookieClient, PerChannelBookieClientFac
             callback.masterKey = masterKey;
             callback.allowFastFail = allowFastFail;
             callback.writeFlags = writeFlags;
+            callback.pageRanges = pageRanges;
             return callback;
         }
 
@@ -450,7 +453,7 @@ public class BookieClientImpl implements BookieClient, PerChannelBookieClientFac
             } else {
                 try {
                     pcbc.addEntry(ledgerId, masterKey, entryId,
-                            toSend, cb, ctx, options, allowFastFail, writeFlags);
+                            toSend, cb, ctx, options, allowFastFail, writeFlags, pageRanges);
                 } finally {
                     ReferenceCountUtil.release(toSend);
                 }
@@ -484,6 +487,7 @@ public class BookieClientImpl implements BookieClient, PerChannelBookieClientFac
             masterKey = null;
             allowFastFail = false;
             writeFlags = null;
+            pageRanges = null;
             recyclerHandle.recycle(this);
         }
     }

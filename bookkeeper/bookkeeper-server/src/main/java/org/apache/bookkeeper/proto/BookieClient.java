@@ -140,9 +140,21 @@ public interface BookieClient {
      * @param writeFlags a set of write flags
      *                   {@link org.apache.bookkeeper.client.api.WriteFlag}
      */
+    default void addEntry(BookieId address, long ledgerId, byte[] masterKey,
+                  long entryId, ReferenceCounted toSend, WriteCallback cb, Object ctx,
+                  int options, boolean allowFastFail, EnumSet<WriteFlag> writeFlags) {
+        addEntry(address, ledgerId, masterKey, entryId, toSend, cb, ctx, options, allowFastFail,
+                writeFlags, null);
+    }
+
+    /**
+     * Streaming Lake: add an entry carrying an opaque, order-preserving column-range blob
+     * ({@code pageRanges}) that the bookie indexes for later PAGE_PRUNE. {@code pageRanges}
+     * may be null for normal writes.
+     */
     void addEntry(BookieId address, long ledgerId, byte[] masterKey,
                   long entryId, ReferenceCounted toSend, WriteCallback cb, Object ctx,
-                  int options, boolean allowFastFail, EnumSet<WriteFlag> writeFlags);
+                  int options, boolean allowFastFail, EnumSet<WriteFlag> writeFlags, byte[] pageRanges);
 
     /**
      * Read entry with a null masterkey, disallowing failfast.

@@ -162,7 +162,7 @@ public class MockBookieClient implements BookieClient {
     @Override
     public void addEntry(BookieId addr, long ledgerId, byte[] masterKey,
                          long entryId, ReferenceCounted toSend, WriteCallback cb, Object ctx,
-                         int options, boolean allowFastFail, EnumSet<WriteFlag> writeFlags) {
+                         int options, boolean allowFastFail, EnumSet<WriteFlag> writeFlags, byte[] pageRanges) {
         toSend.retain();
         preWriteHook.runHook(addr, ledgerId, entryId)
                 .thenComposeAsync(
