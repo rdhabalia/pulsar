@@ -38,7 +38,9 @@ public final class StreamingLakeClusterDemo {
         int deptX = args.length > 1 ? Integer.parseInt(args[1]) : 5;
         int deptY = args.length > 2 ? Integer.parseInt(args[2]) : 15;
         int salaryZ = args.length > 3 ? Integer.parseInt(args[3]) : 100;
-        Path outDir = Paths.get(args.length > 4 ? args[4] : "demo-output");
+        int startDay = args.length > 4 ? Integer.parseInt(args[4]) : 0;   // date-partition range start (day offset)
+        int endDay = args.length > 5 ? Integer.parseInt(args[5]) : 1;     // date-partition range end (day offset)
+        Path outDir = Paths.get(args.length > 6 ? args[6] : "demo-output");
         Files.createDirectories(outDir);
 
         // ---- 1. start engine (bookie + broker) + create topic ----
@@ -57,7 +59,9 @@ public final class StreamingLakeClusterDemo {
 
         System.out.println("Streaming Lake engine started (bookie + broker). Topic: persons "
                 + "[indexed: departmentId, salary]");
-        System.out.println("Config: numRecords=" + numRecords + ", filter: departmentId > " + deptX
+        System.out.println("Config: numRecords=" + numRecords
+                + ", filter: date_partition in [day+" + startDay + ", day+" + endDay + "]"
+                + " AND departmentId > " + deptX
                 + " AND departmentId < " + deptY + " AND salary > " + salaryZ + "\n");
 
         // ---- 2 + 3. PRODUCER publishes numRecords across several days ----
@@ -102,13 +106,16 @@ public final class StreamingLakeClusterDemo {
         System.out.println("PUB-SUB CONSUMER: consumed " + consumed.size()
                 + " messages (decoded from columnar pages). e.g. " + consumed.get(0));
 
-        LocalDate from = StreamingLakeBroker.dateOf(day0);
-        LocalDate to = StreamingLakeBroker.dateOf(day0 + (days - 1) * DAY);
+        LocalDate fullFrom = StreamingLakeBroker.dateOf(day0);
+        LocalDate fullTo = StreamingLakeBroker.dateOf(day0 + (days - 1) * DAY);
+        // configurable date-partition range for the filtered query
+        LocalDate queryFrom = StreamingLakeBroker.dateOf(day0 + (long) startDay * DAY);
+        LocalDate queryTo = StreamingLakeBroker.dateOf(day0 + (long) endDay * DAY);
 
-        // ---- 5. FULL-SCAN query consumer: SELECT * FROM persons ----
+        // ---- 5. FULL-SCAN query consumer: SELECT * FROM persons (all dates) ----
         Predicate matchAll = Predicate.ge(DEPT, ColumnType.INT, Integer.MIN_VALUE);
         ScanMetrics fullMetrics = new ScanMetrics();
-        List<Record> fullScan = consumer.scan(from, to, matchAll, fullMetrics);
+        List<Record> fullScan = consumer.scan(fullFrom, fullTo, matchAll, fullMetrics);
         Path fullFile = outDir.resolve("full_scan.txt");
         writeRecords(fullFile, schema, fullScan,
                 "SELECT * FROM persons", fullMetrics);
@@ -121,10 +128,11 @@ public final class StreamingLakeClusterDemo {
                 Predicate.lt(DEPT, ColumnType.INT, deptY),
                 Predicate.gt(SALARY, ColumnType.INT, salaryZ));
         ScanMetrics filterMetrics = new ScanMetrics();
-        List<Record> filtered = consumer.scan(from, to, filter, filterMetrics);
+        List<Record> filtered = consumer.scan(queryFrom, queryTo, filter, filterMetrics);
         Path filterFile = outDir.resolve("filtered.txt");
         writeRecords(filterFile, schema, filtered,
-                "SELECT * FROM persons WHERE departmentId > " + deptX + " AND departmentId < " + deptY
+                "SELECT * FROM persons WHERE date_partition BETWEEN " + queryFrom + " AND " + queryTo
+                        + " AND departmentId > " + deptX + " AND departmentId < " + deptY
                         + " AND salary > " + salaryZ, filterMetrics);
         System.out.println("FILTERED CONSUMER: wrote " + filtered.size()
                 + " records to " + filterFile);
@@ -134,7 +142,10 @@ public final class StreamingLakeClusterDemo {
 
         // ---- sanity check the filtered output ----
         for (Record r : filtered) {
-            if (!(r.getInt(DEPT) > deptX && r.getInt(DEPT) < deptY && r.getInt(SALARY) > salaryZ)) {
+            LocalDate d = StreamingLakeBroker.dateOf(r.eventTime);
+            boolean inDateRange = !d.isBefore(queryFrom) && !d.isAfter(queryTo);
+            if (!(inDateRange && r.getInt(DEPT) > deptX && r.getInt(DEPT) < deptY
+                    && r.getInt(SALARY) > salaryZ)) {
                 throw new AssertionError("filtered output contains a non-matching row: " + r);
             }
         }
