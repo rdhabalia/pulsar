@@ -1446,6 +1446,17 @@ public class LedgerHandle implements WriteHandle {
     }
 
     /**
+     * Streaming Lake: add an entry carrying an opaque column-range blob ({@code pageRanges})
+     * that the bookie indexes into its ledger-page-index for later PAGE_PRUNE. The blob may
+     * be null for normal writes.
+     */
+    public void asyncAddEntry(ByteBuf data, byte[] pageRanges, final AddCallback cb, final Object ctx) {
+        PendingAddOp op = PendingAddOp.create(this, clientCtx, getCurrentEnsemble(), data, writeFlags, cb, ctx)
+                .setPageRanges(pageRanges);
+        doAsyncAddEntry(op);
+    }
+
+    /**
      * Add entry asynchronously to an open ledger, using an offset and range.
      * This can be used only with {@link LedgerHandleAdv} returned through
      * ledgers created with
