@@ -70,20 +70,25 @@ public class StreamingLakeScanIntegrationTest extends ProducerConsumerBase {
                 .enableBatching(false)
                 .create();
 
+        // day-clustered: all day-0 records, then day-1, ... so pages have narrow date ranges
+        final int perDay = numRecords / days;
         List<long[]> produced = new ArrayList<>(); // {eventTime, dept, salary}
-        for (int i = 0; i < numRecords; i++) {
-            int dayOffset = i % days;
-            int dept = (i % 20) + 1;                 // 1..20
-            int salary = 10 + (i % 30) * 10;         // 10..300
-            long eventTime = day0 + dayOffset * DAY + i * 1000L; // stays within its day
-            producer.newMessage()
-                    .eventTime(eventTime)
-                    .property("name", "person-" + i)
-                    .property("departmentId", String.valueOf(dept))
-                    .property("salary", String.valueOf(salary))
-                    .value(("person-" + i).getBytes(StandardCharsets.UTF_8))
-                    .send();
-            produced.add(new long[]{eventTime, dept, salary});
+        int g = 0;
+        for (int d = 0; d < days; d++) {
+            for (int j = 0; j < perDay; j++) {
+                int dept = (g % 20) + 1;                 // 1..20
+                int salary = 10 + (g % 30) * 10;         // 10..300
+                long eventTime = day0 + d * DAY + j * 1000L; // within day d
+                producer.newMessage()
+                        .eventTime(eventTime)
+                        .property("name", "person-" + g)
+                        .property("departmentId", String.valueOf(dept))
+                        .property("salary", String.valueOf(salary))
+                        .value(("person-" + g).getBytes(StandardCharsets.UTF_8))
+                        .send();
+                produced.add(new long[]{eventTime, dept, salary});
+                g++;
+            }
         }
         producer.flush();
 
@@ -126,6 +131,30 @@ public class StreamingLakeScanIntegrationTest extends ProducerConsumerBase {
                 ledger, Long.MIN_VALUE, Long.MAX_VALUE,
                 Integer.MIN_VALUE, Integer.MAX_VALUE, Integer.MIN_VALUE);
         assertEquals(full.size(), numRecords, "full scan returns all produced records");
+
+        // ---- PRUNED scan: build the page-range index, read only candidate pages ----
+        List<StreamingLakeScanService.PageMeta> pageIndex =
+                StreamingLakeScanService.buildPageIndex(ledger, 50); // ~20 pages (perDay/50 per day)
+        int[] entriesRead = new int[1];
+        List<StreamingLakeScanService.Row> pruned = StreamingLakeScanService.prunedScan(
+                ledger, pageIndex, from, to, deptX, deptY, salaryZ, entriesRead);
+
+        assertEquals(pruned.size(), expected, "pruned scan matches the oracle");
+        assertTrue(entriesRead[0] < numRecords,
+                "page pruning read fewer than all entries: read " + entriesRead[0] + " of " + numRecords);
+        for (StreamingLakeScanService.Row r : pruned) {
+            assertTrue(r.eventTime >= from && r.eventTime <= to
+                            && r.departmentId > deptX && r.departmentId < deptY && r.salary > salaryZ,
+                    "every pruned-scan row satisfies the predicate: " + r);
+        }
+
+        // a pruned full scan reads everything (no page can be pruned)
+        int[] fullRead = new int[1];
+        List<StreamingLakeScanService.Row> prunedFull = StreamingLakeScanService.prunedScan(
+                ledger, pageIndex, Long.MIN_VALUE, Long.MAX_VALUE,
+                Integer.MIN_VALUE, Integer.MAX_VALUE, Integer.MIN_VALUE, fullRead);
+        assertEquals(prunedFull.size(), numRecords, "pruned full scan returns all records");
+        assertEquals(fullRead[0], numRecords, "pruned full scan reads every entry");
 
         producer.close();
     }
