@@ -54,20 +54,20 @@ public class StreamLakeBatcher {
     private final List<PublishContext> contexts = new ArrayList<>();
     private int bufferedBytes;
     private ScheduledFuture<?> flushTask;
-    // point 7: per-ledger min/max event time, for ledger-level date-partition pruning.
-    private final java.util.concurrent.ConcurrentMap<Long, long[]> ledgerDateRanges =
-            new java.util.concurrent.ConcurrentHashMap<>();
+    // point 7: durable per-ledger date-partition index for ledger-level pruning.
+    private final StreamLakeDateIndex dateIndex;
 
-    /** Per-ledger {minEventTime, maxEventTime} accumulated as pages are sealed. */
+    /** Per-ledger {minEventTime, maxEventTime} (durable, replayed from the date-partition ledger). */
     public java.util.Map<Long, long[]> getLedgerDateRanges() {
-        return ledgerDateRanges;
+        return dateIndex.ranges();
     }
 
     public StreamLakeBatcher(ManagedLedger ledger, StreamingLakeConfig config,
-                             ScheduledExecutorService scheduler) {
+                             ScheduledExecutorService scheduler, StreamLakeDateIndex dateIndex) {
         this.ledger = ledger;
         this.config = config;
         this.scheduler = scheduler;
+        this.dateIndex = dateIndex;
         this.maxBytes = config.getPageSizeBytes() > 0 ? config.getPageSizeBytes() : 2 * 1024 * 1024;
         this.maxMessages = config.getMaxPageMessages() > 0 ? config.getMaxPageMessages() : 1000;
         this.maxDelayMs = config.getPageGroupingDelayMs() > 0 ? config.getPageGroupingDelayMs() : 10;
@@ -115,9 +115,8 @@ public class StreamLakeBatcher {
         ledger.asyncAddEntry(page, batch.size(), ranges, new AddEntryCallback() {
             @Override
             public void addComplete(Position position, ByteBuf entryData, Object ctx) {
-                // point 7: maintain a per-ledger date range so the scan can prune whole ledgers.
-                ledgerDateRanges.merge(position.getLedgerId(), new long[]{dateRange[0], dateRange[1]},
-                        (a, b) -> new long[]{Math.min(a[0], b[0]), Math.max(a[1], b[1])});
+                // point 7: durably record the ledger's date range for ledger-level pruning.
+                dateIndex.record(position.getLedgerId(), dateRange[0], dateRange[1]);
                 for (PublishContext pc : ctxs) {
                     pc.completed(null, position.getLedgerId(), position.getEntryId());
                 }

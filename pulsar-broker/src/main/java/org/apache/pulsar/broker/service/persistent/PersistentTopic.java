@@ -144,6 +144,7 @@ import org.apache.pulsar.broker.service.schema.BookkeeperSchemaStorage;
 import org.apache.pulsar.broker.service.schema.exceptions.IncompatibleSchemaException;
 import org.apache.pulsar.broker.service.schema.exceptions.NotExistSchemaException;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeBatcher;
+import org.apache.pulsar.broker.service.streaminglake.StreamLakeDateIndex;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeRangeBuilder;
 import org.apache.pulsar.broker.stats.ClusterReplicationMetrics;
 import org.apache.pulsar.broker.stats.NamespaceStats;
@@ -746,7 +747,9 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             synchronized (this) {
                 b = streamLakeBatcher;
                 if (b == null) {
-                    b = new StreamLakeBatcher(ledger, cfg, brokerService.getPulsar().getExecutor());
+                    StreamLakeDateIndex dateIndex = StreamLakeDateIndex.open(
+                            brokerService.getPulsar().getBookKeeperClient(), ledger);
+                    b = new StreamLakeBatcher(ledger, cfg, brokerService.getPulsar().getExecutor(), dateIndex);
                     streamLakeBatcher = b;
                 }
             }
