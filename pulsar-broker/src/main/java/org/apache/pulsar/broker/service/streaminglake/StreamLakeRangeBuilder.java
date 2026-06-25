@@ -21,6 +21,7 @@ package org.apache.pulsar.broker.service.streaminglake;
 import io.netty.buffer.ByteBuf;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import org.apache.bookkeeper.bookie.storage.ldb.PageRangeCodec;
 import org.apache.pulsar.common.api.proto.KeyValue;
@@ -65,6 +66,61 @@ public final class StreamLakeRangeBuilder {
             }
         }
         return ranges.isEmpty() ? null : PageRangeCodec.encodePage(ranges);
+    }
+
+    /**
+     * Aggregate per-column min/max ranges across a whole page of messages (the bookie indexes
+     * one range per column for the page). Returns {@code null} if nothing indexable was found.
+     */
+    public static byte[] buildForBatch(StreamingLakeConfig config, List<ByteBuf> messages) {
+        if (config == null || config.getIndexedColumns() == null || config.getIndexedColumns().isEmpty()) {
+            return null;
+        }
+        Map<Short, byte[]> mins = new HashMap<>();
+        Map<Short, byte[]> maxs = new HashMap<>();
+        for (ByteBuf m : messages) {
+            Map<String, String> props = readProperties(m);
+            if (props.isEmpty()) {
+                continue;
+            }
+            for (StreamingLakeConfig.IndexedColumn col : config.getIndexedColumns()) {
+                String raw = props.get(col.getName());
+                if (raw == null) {
+                    continue;
+                }
+                byte[] enc = encode(col.getType(), raw);
+                if (enc == null) {
+                    continue;
+                }
+                short key = (short) col.getColumnId();
+                if (!mins.containsKey(key) || compareUnsigned(enc, mins.get(key)) < 0) {
+                    mins.put(key, enc);
+                }
+                if (!maxs.containsKey(key) || compareUnsigned(enc, maxs.get(key)) > 0) {
+                    maxs.put(key, enc);
+                }
+            }
+        }
+        if (mins.isEmpty()) {
+            return null;
+        }
+        Map<Short, PageRangeCodec.Range> ranges = new HashMap<>();
+        for (Map.Entry<Short, byte[]> e : mins.entrySet()) {
+            ranges.put(e.getKey(), new PageRangeCodec.Range(e.getValue(), maxs.get(e.getKey()), false, false));
+        }
+        return PageRangeCodec.encodePage(ranges);
+    }
+
+    private static int compareUnsigned(byte[] a, byte[] b) {
+        int n = Math.min(a.length, b.length);
+        for (int i = 0; i < n; i++) {
+            int x = a[i] & 0xFF;
+            int y = b[i] & 0xFF;
+            if (x != y) {
+                return x - y;
+            }
+        }
+        return a.length - b.length;
     }
 
     private static Map<String, String> readProperties(ByteBuf headersAndPayload) {

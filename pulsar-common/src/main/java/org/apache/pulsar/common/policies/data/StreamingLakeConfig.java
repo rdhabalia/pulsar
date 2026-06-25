@@ -42,9 +42,25 @@ public class StreamingLakeConfig {
     @Builder.Default
     private boolean enabled = false;
 
+    /**
+     * When true, the broker packs messages into columnar page entries (batched column-major
+     * storage) and transcodes them back on read. When false, each entry stays a normal message
+     * tagged with its own range (per-entry pruning).
+     */
+    @Builder.Default
+    private boolean batchingEnabled = false;
+
     /** Target sealed-page size in bytes (default 2 MB). */
     @Builder.Default
     private int pageSizeBytes = 2 * 1024 * 1024;
+
+    /** Max messages packed into one page before it is sealed (default 1000). */
+    @Builder.Default
+    private int maxPageMessages = 1000;
+
+    /** Grouping window: a partial page is sealed after this many ms (default 10). */
+    @Builder.Default
+    private long pageGroupingDelayMs = 10;
 
     /** Columns for which the broker emits min/max ranges into the page-range index. */
     @Builder.Default

@@ -143,6 +143,7 @@ import org.apache.pulsar.broker.service.TransportCnx;
 import org.apache.pulsar.broker.service.schema.BookkeeperSchemaStorage;
 import org.apache.pulsar.broker.service.schema.exceptions.IncompatibleSchemaException;
 import org.apache.pulsar.broker.service.schema.exceptions.NotExistSchemaException;
+import org.apache.pulsar.broker.service.streaminglake.StreamLakeBatcher;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeRangeBuilder;
 import org.apache.pulsar.broker.stats.ClusterReplicationMetrics;
 import org.apache.pulsar.broker.stats.NamespaceStats;
@@ -181,6 +182,7 @@ import org.apache.pulsar.common.policies.data.ManagedLedgerInternalStats.LedgerI
 import org.apache.pulsar.common.policies.data.PersistentTopicInternalStats;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
+import org.apache.pulsar.common.policies.data.StreamingLakeConfig;
 import org.apache.pulsar.common.policies.data.SubscribeRate;
 import org.apache.pulsar.common.policies.data.TopicPolicies;
 import org.apache.pulsar.common.policies.data.TransactionBufferStats;
@@ -221,6 +223,10 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
 
     // Managed ledger associated with the topic
     protected final ManagedLedger ledger;
+
+    // StreamLake batched column-major storage (created lazily when the topic is a batched
+    // StreamLake topic).
+    private volatile StreamLakeBatcher streamLakeBatcher;
 
     // Subscriptions to this topic
     private final Map<String, PersistentSubscription> subscriptions = new ConcurrentHashMap<>();
@@ -711,14 +717,35 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     }
 
     private void asyncAddEntry(ByteBuf headersAndPayload, PublishContext publishContext) {
-        byte[] pageRanges = null;
         if (isStreamLakeEnabled()) {
-            // StreamLake: derive the column-range blob from the message and ship it to the
-            // bookie's page index so PAGE_PRUNE can later skip this entry.
-            pageRanges = StreamLakeRangeBuilder.build(getStreamingLakeConfig(), headersAndPayload);
+            StreamingLakeConfig cfg = getStreamingLakeConfig();
+            if (cfg.isBatchingEnabled()) {
+                // StreamLake batched column-major storage: pack messages into a page entry.
+                getOrCreateStreamLakeBatcher(cfg).add(headersAndPayload, publishContext);
+                return;
+            }
+            // Per-entry mode: tag each entry with its own column-range blob for the bookie.
+            byte[] pageRanges = StreamLakeRangeBuilder.build(cfg, headersAndPayload);
+            ledger.asyncAddEntry(headersAndPayload,
+                (int) publishContext.getNumberOfMessages(), pageRanges, this, publishContext);
+            return;
         }
         ledger.asyncAddEntry(headersAndPayload,
-            (int) publishContext.getNumberOfMessages(), pageRanges, this, publishContext);
+            (int) publishContext.getNumberOfMessages(), this, publishContext);
+    }
+
+    private StreamLakeBatcher getOrCreateStreamLakeBatcher(StreamingLakeConfig cfg) {
+        StreamLakeBatcher b = streamLakeBatcher;
+        if (b == null) {
+            synchronized (this) {
+                b = streamLakeBatcher;
+                if (b == null) {
+                    b = new StreamLakeBatcher(ledger, cfg, brokerService.getPulsar().getExecutor());
+                    streamLakeBatcher = b;
+                }
+            }
+        }
+        return b;
     }
 
     public void asyncReadEntry(Position position, AsyncCallbacks.ReadEntryCallback callback, Object ctx) {
