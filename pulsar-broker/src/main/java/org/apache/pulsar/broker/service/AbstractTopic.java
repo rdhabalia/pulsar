@@ -81,6 +81,7 @@ import org.apache.pulsar.common.policies.data.BacklogQuota;
 import org.apache.pulsar.common.policies.data.ClusterPolicies.ClusterUrl;
 import org.apache.pulsar.common.policies.data.DelayedDeliveryPolicies;
 import org.apache.pulsar.common.policies.data.EntryFilters;
+import org.apache.pulsar.common.policies.data.StreamingLakeConfig;
 import org.apache.pulsar.common.policies.data.HierarchyTopicPolicies;
 import org.apache.pulsar.common.policies.data.InactiveTopicPolicies;
 import org.apache.pulsar.common.policies.data.Policies;
@@ -250,6 +251,17 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
         return this.entryFilters.getRight();
     }
 
+    /** Resolved StreamLake config for this topic, or {@code null} if not set. */
+    public StreamingLakeConfig getStreamingLakeConfig() {
+        return this.topicPolicies.getStreamingLake().get();
+    }
+
+    /** Whether this topic is marked as a StreamLake (columnar) topic. */
+    public boolean isStreamLakeEnabled() {
+        StreamingLakeConfig cfg = getStreamingLakeConfig();
+        return cfg != null && cfg.isEnabled();
+    }
+
     public DispatchRateImpl getReplicatorDispatchRate() {
         return this.topicPolicies.getReplicatorDispatchRate().get();
     }
@@ -317,6 +329,7 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
         topicPolicies.getSchemaValidationEnforced().updateTopicValue(data.getSchemaValidationEnforced(),
                 isGlobalPolicies);
         topicPolicies.getEntryFilters().updateTopicValue(data.getEntryFilters(), isGlobalPolicies);
+        topicPolicies.getStreamingLake().updateTopicValue(data.getStreamingLake(), isGlobalPolicies);
         topicPolicies.getDispatcherPauseOnAckStatePersistentEnabled()
                 .updateTopicValue(data.getDispatcherPauseOnAckStatePersistentEnabled(), isGlobalPolicies);
         this.subscriptionPolicies = data.getSubscriptionPolicies();
