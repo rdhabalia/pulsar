@@ -20,6 +20,7 @@ package org.apache.pulsar.broker.service.streaminglake;
 
 import io.netty.buffer.ByteBuf;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -109,6 +110,57 @@ public final class StreamLakeRangeBuilder {
             ranges.put(e.getKey(), new PageRangeCodec.Range(e.getValue(), maxs.get(e.getKey()), false, false));
         }
         return PageRangeCodec.encodePage(ranges);
+    }
+
+    /** Column-major values for the INT/LONG indexed columns, for {@link StreamLakeBatchPage}. */
+    public static final class ColumnData {
+        public final int[] columnIds;
+        public final byte[] columnTypes;
+        public final long[][] values; // [column][row]
+
+        ColumnData(int[] columnIds, byte[] columnTypes, long[][] values) {
+            this.columnIds = columnIds;
+            this.columnTypes = columnTypes;
+            this.values = values;
+        }
+    }
+
+    /** Extract the INT/LONG indexed columns column-major from a page's messages. */
+    public static ColumnData extractColumns(StreamingLakeConfig config, List<ByteBuf> messages) {
+        List<StreamingLakeConfig.IndexedColumn> cols = new ArrayList<>();
+        for (StreamingLakeConfig.IndexedColumn col : config.getIndexedColumns()) {
+            String t = col.getType() == null ? "" : col.getType().toUpperCase();
+            if (t.equals("INT") || t.equals("LONG")) {
+                cols.add(col);
+            }
+        }
+        int numCols = cols.size();
+        int n = messages.size();
+        int[] ids = new int[numCols];
+        byte[] types = new byte[numCols];
+        long[][] values = new long[numCols][n];
+        for (int c = 0; c < numCols; c++) {
+            StreamingLakeConfig.IndexedColumn col = cols.get(c);
+            ids[c] = col.getColumnId();
+            types[c] = col.getType().equalsIgnoreCase("LONG")
+                    ? StreamLakeBatchPage.TYPE_LONG : StreamLakeBatchPage.TYPE_INT;
+        }
+        for (int i = 0; i < n; i++) {
+            Map<String, String> props = readProperties(messages.get(i));
+            for (int c = 0; c < numCols; c++) {
+                String raw = props.get(cols.get(c).getName());
+                long v = 0;
+                if (raw != null) {
+                    try {
+                        v = Long.parseLong(raw.trim());
+                    } catch (NumberFormatException ignore) {
+                        v = 0;
+                    }
+                }
+                values[c][i] = v;
+            }
+        }
+        return new ColumnData(ids, types, values);
     }
 
     private static int compareUnsigned(byte[] a, byte[] b) {

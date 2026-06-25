@@ -38,7 +38,6 @@ import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo.LedgerInfo;
 import org.apache.bookkeeper.net.BookieId;
 import org.apache.bookkeeper.proto.BookieClient;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
-import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.protocol.Commands;
 
 /**
@@ -93,15 +92,31 @@ public final class StreamLakePageScan {
                     .pagePrune(bookie, ledgerId, 0, lastEntry, predicate)
                     .get(30, TimeUnit.SECONDS);
             for (long entryId : pages) {
-                // point 12/13: read only surviving pages, decode, keep matching rows
+                // point 12/13: read only surviving pages, evaluate the predicate on the columns,
+                // then decode ONLY the matching rows' payloads (selective decode).
                 ByteBuf pageData = readEntry(topic, ledgerId, entryId);
                 try {
-                    for (ByteBuf msg : StreamLakeBatchPage.decode(pageData)) {
-                        try {
-                            byte[] match = matchRow(msg, bounds);
-                            if (match != null) {
-                                result.add(match);
+                    int n = StreamLakeBatchPage.messageCount(pageData);
+                    boolean[] keep = new boolean[n];
+                    java.util.Arrays.fill(keep, true);
+                    for (Bound b : bounds) {
+                        long[] values = StreamLakeBatchPage.readColumn(pageData, b.columnId);
+                        for (int i = 0; i < n; i++) {
+                            if (b.gt != null && !(values[i] > b.gt)) {
+                                keep[i] = false;
                             }
+                            if (b.lt != null && !(values[i] < b.lt)) {
+                                keep[i] = false;
+                            }
+                        }
+                    }
+                    for (int i = 0; i < n; i++) {
+                        if (!keep[i]) {
+                            continue;
+                        }
+                        ByteBuf msg = StreamLakeBatchPage.messageAt(pageData, i);
+                        try {
+                            result.add(extractPayload(msg));
                         } finally {
                             msg.release();
                         }
@@ -114,30 +129,8 @@ public final class StreamLakePageScan {
         return result;
     }
 
-    private static byte[] matchRow(ByteBuf msg, List<Bound> bounds) {
-        MessageMetadata md = Commands.parseMessageMetadata(msg); // advances msg to payload
-        Map<String, String> props = new HashMap<>();
-        for (int i = 0; i < md.getPropertiesCount(); i++) {
-            props.put(md.getPropertyAt(i).getKey(), md.getPropertyAt(i).getValue());
-        }
-        for (Bound b : bounds) {
-            String raw = props.get(b.columnName);
-            if (raw == null) {
-                return null;
-            }
-            int v;
-            try {
-                v = Integer.parseInt(raw.trim());
-            } catch (NumberFormatException ex) {
-                return null;
-            }
-            if (b.gt != null && !(v > b.gt)) {
-                return null;
-            }
-            if (b.lt != null && !(v < b.lt)) {
-                return null;
-            }
-        }
+    private static byte[] extractPayload(ByteBuf msg) {
+        Commands.parseMessageMetadata(msg); // advances msg past magic/checksum/metadata to the payload
         byte[] payload = new byte[msg.readableBytes()];
         msg.getBytes(msg.readerIndex(), payload);
         return payload;

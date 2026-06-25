@@ -95,7 +95,8 @@ public class StreamLakeBatcher {
         contexts.clear();
         bufferedBytes = 0;
 
-        final ByteBuf page = StreamLakeBatchPage.encode(batch);
+        final StreamLakeRangeBuilder.ColumnData cols = StreamLakeRangeBuilder.extractColumns(config, batch);
+        final ByteBuf page = StreamLakeBatchPage.encode(batch, cols.columnIds, cols.columnTypes, cols.values);
         final byte[] ranges = StreamLakeRangeBuilder.buildForBatch(config, batch);
         for (ByteBuf b : batch) {
             b.release();
