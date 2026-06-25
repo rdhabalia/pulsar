@@ -734,6 +734,12 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             (int) publishContext.getNumberOfMessages(), this, publishContext);
     }
 
+    /** Per-ledger {minEventTime, maxEventTime} for StreamLake date-partition pruning. */
+    public java.util.Map<Long, long[]> getStreamLakeDateIndex() {
+        StreamLakeBatcher b = streamLakeBatcher;
+        return b != null ? b.getLedgerDateRanges() : java.util.Collections.emptyMap();
+    }
+
     private StreamLakeBatcher getOrCreateStreamLakeBatcher(StreamingLakeConfig cfg) {
         StreamLakeBatcher b = streamLakeBatcher;
         if (b == null) {

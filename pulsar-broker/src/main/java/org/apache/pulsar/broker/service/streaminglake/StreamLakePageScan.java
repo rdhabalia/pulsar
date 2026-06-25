@@ -68,16 +68,42 @@ public final class StreamLakePageScan {
         }
     }
 
+    /** Scan result: matching row payloads plus how many ledgers were scanned vs date-pruned. */
+    public static final class ScanResult {
+        public final List<byte[]> rows;
+        public final int ledgersScanned;
+        public final int ledgersPrunedByDate;
+
+        ScanResult(List<byte[]> rows, int ledgersScanned, int ledgersPrunedByDate) {
+            this.rows = rows;
+            this.ledgersScanned = ledgersScanned;
+            this.ledgersPrunedByDate = ledgersPrunedByDate;
+        }
+    }
+
     /** @return the value payloads of every row across the topic matching all bounds. */
     public static List<byte[]> scan(PersistentTopic topic, BookKeeper bk, List<Bound> bounds)
             throws Exception {
+        return scan(topic, bk, bounds, Long.MIN_VALUE, Long.MAX_VALUE).rows;
+    }
+
+    /**
+     * Three-level prune: (9) skip ledgers whose date range is outside [{@code fromDate},
+     * {@code toDate}], (10) bookie PAGE_PRUNE on column ranges, (12) selective row decode.
+     */
+    public static ScanResult scan(PersistentTopic topic, BookKeeper bk, List<Bound> bounds,
+                                  long fromDate, long toDate) throws Exception {
         ManagedLedger ml = topic.getManagedLedger();
         byte[] predicate = buildPredicate(bounds);
         BookieClient bookieClient = bk.getClientCtx().getBookieClient();
         // The current (still-open) ledger reports 0 entries in its LedgerInfo; use the LAC for it.
         Position lac = ml.getLastConfirmedEntry();
+        Map<Long, long[]> dateIndex = topic.getStreamLakeDateIndex();
+        boolean dateFilter = fromDate != Long.MIN_VALUE || toDate != Long.MAX_VALUE;
 
         List<byte[]> result = new ArrayList<>();
+        int scanned = 0;
+        int prunedByDate = 0;
         for (Map.Entry<Long, LedgerInfo> e : ml.getLedgersInfo().entrySet()) {
             long ledgerId = e.getKey();
             long lastEntry = (lac != null && lac.getLedgerId() == ledgerId)
@@ -85,6 +111,15 @@ public final class StreamLakePageScan {
             if (lastEntry < 0) {
                 continue;
             }
+            // point 9: date-partition prune -- skip ledgers entirely outside the query window
+            if (dateFilter) {
+                long[] dr = dateIndex.get(ledgerId);
+                if (dr != null && (dr[1] < fromDate || dr[0] > toDate)) {
+                    prunedByDate++;
+                    continue;
+                }
+            }
+            scanned++;
             BookieId bookie = bk.getLedgerManager().readLedgerMetadata(ledgerId)
                     .get(30, TimeUnit.SECONDS).getValue().getAllEnsembles().firstEntry().getValue().get(0);
             // point 10/11: bookie prunes pages by column range
@@ -126,7 +161,7 @@ public final class StreamLakePageScan {
                 }
             }
         }
-        return result;
+        return new ScanResult(result, scanned, prunedByDate);
     }
 
     private static byte[] extractPayload(ByteBuf msg) {

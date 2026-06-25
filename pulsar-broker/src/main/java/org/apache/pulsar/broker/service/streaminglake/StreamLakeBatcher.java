@@ -54,6 +54,14 @@ public class StreamLakeBatcher {
     private final List<PublishContext> contexts = new ArrayList<>();
     private int bufferedBytes;
     private ScheduledFuture<?> flushTask;
+    // point 7: per-ledger min/max event time, for ledger-level date-partition pruning.
+    private final java.util.concurrent.ConcurrentMap<Long, long[]> ledgerDateRanges =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Per-ledger {minEventTime, maxEventTime} accumulated as pages are sealed. */
+    public java.util.Map<Long, long[]> getLedgerDateRanges() {
+        return ledgerDateRanges;
+    }
 
     public StreamLakeBatcher(ManagedLedger ledger, StreamingLakeConfig config,
                              ScheduledExecutorService scheduler) {
@@ -96,7 +104,9 @@ public class StreamLakeBatcher {
         bufferedBytes = 0;
 
         final StreamLakeRangeBuilder.ColumnData cols = StreamLakeRangeBuilder.extractColumns(config, batch);
-        final ByteBuf page = StreamLakeBatchPage.encode(batch, cols.columnIds, cols.columnTypes, cols.values);
+        final long[] dateRange = StreamLakeRangeBuilder.dateRange(batch);
+        final ByteBuf page = StreamLakeBatchPage.encode(batch, cols.columnIds, cols.columnTypes, cols.values,
+                dateRange[0], dateRange[1]);
         final byte[] ranges = StreamLakeRangeBuilder.buildForBatch(config, batch);
         for (ByteBuf b : batch) {
             b.release();
@@ -105,6 +115,9 @@ public class StreamLakeBatcher {
         ledger.asyncAddEntry(page, batch.size(), ranges, new AddEntryCallback() {
             @Override
             public void addComplete(Position position, ByteBuf entryData, Object ctx) {
+                // point 7: maintain a per-ledger date range so the scan can prune whole ledgers.
+                ledgerDateRanges.merge(position.getLedgerId(), new long[]{dateRange[0], dateRange[1]},
+                        (a, b) -> new long[]{Math.min(a[0], b[0]), Math.max(a[1], b[1])});
                 for (PublishContext pc : ctxs) {
                     pc.completed(null, position.getLedgerId(), position.getEntryId());
                 }

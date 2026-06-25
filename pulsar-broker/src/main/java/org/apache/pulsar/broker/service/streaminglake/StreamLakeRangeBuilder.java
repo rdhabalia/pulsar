@@ -175,6 +175,38 @@ public final class StreamLakeRangeBuilder {
         return a.length - b.length;
     }
 
+    /** Min/max event time across a page's messages (eventTime, falling back to publishTime). */
+    public static long[] dateRange(List<ByteBuf> messages) {
+        long min = Long.MAX_VALUE;
+        long max = Long.MIN_VALUE;
+        for (ByteBuf m : messages) {
+            long t = eventTime(m);
+            min = Math.min(min, t);
+            max = Math.max(max, t);
+        }
+        if (min > max) {
+            return new long[]{0L, 0L};
+        }
+        return new long[]{min, max};
+    }
+
+    private static long eventTime(ByteBuf headersAndPayload) {
+        try {
+            MessageMetadata md = Commands.peekMessageMetadata(headersAndPayload, "streamlake-date", -1);
+            if (md != null) {
+                if (md.hasEventTime() && md.getEventTime() > 0) {
+                    return md.getEventTime();
+                }
+                if (md.hasPublishTime()) {
+                    return md.getPublishTime();
+                }
+            }
+        } catch (Throwable t) {
+            return 0L;
+        }
+        return 0L;
+    }
+
     private static Map<String, String> readProperties(ByteBuf headersAndPayload) {
         Map<String, String> props = new HashMap<>();
         try {

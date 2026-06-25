@@ -71,6 +71,7 @@ public abstract class StreamLakeRealBookieTestBase {
         config.setLoadBalancerEnabled(false);
         config.setSystemTopicEnabled(true);
         config.setTopicLevelPoliciesEnabled(true);
+        customizeConfig(config);
 
         pulsar = new PulsarService(config);
         pulsar.start();
@@ -83,6 +84,10 @@ public abstract class StreamLakeRealBookieTestBase {
         admin.namespaces().createNamespace(NAMESPACE, Collections.singleton(CLUSTER));
 
         pulsarClient = PulsarClient.builder().serviceUrl(pulsar.getBrokerServiceUrl()).build();
+    }
+
+    /** Hook for subclasses to tweak broker config before start (default no-op). */
+    protected void customizeConfig(ServiceConfiguration config) {
     }
 
     @AfterMethod(alwaysRun = true)

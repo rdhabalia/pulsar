@@ -34,7 +34,7 @@ import java.util.List;
  * pruning are computed separately ({@link StreamLakeRangeBuilder}) and shipped to the bookie.
  *
  * <pre>
- *   magic(4)='SLB2' version(1)=2 flags(1) numMessages(4) numCols(2)
+ *   magic(4)='SLB2' version(1)=2 flags(1) numMessages(4) numCols(2) minDate(8) maxDate(8)
  *   column directory: numCols x [ columnId(2) type(1) dataOffset(4) ]
  *   payloadIndexOffset(4)
  *   ... per column: numMessages values (INT=4, LONG=8) at its dataOffset ...
@@ -54,7 +54,8 @@ public final class StreamLakeBatchPage {
     public static final byte TYPE_INT = 0;
     public static final byte TYPE_LONG = 1;
 
-    private static final int HEADER = 12; // magic+version+flags+numMessages+numCols
+    // magic(4)+version(1)+flags(1)+numMessages(4)+numCols(2)+minDate(8)+maxDate(8)
+    private static final int HEADER = 28;
     private static final int DIR_ENTRY = 7; // columnId(2)+type(1)+dataOffset(4)
 
     private StreamLakeBatchPage() {
@@ -74,7 +75,7 @@ public final class StreamLakeBatchPage {
      * @param columnValues columnValues[c][i] = column c's value for message i (INT stored low 32 bits)
      */
     public static ByteBuf encode(List<ByteBuf> messages, int[] columnIds, byte[] columnTypes,
-                                 long[][] columnValues) {
+                                 long[][] columnValues, long minDate, long maxDate) {
         int n = messages.size();
         int numCols = columnIds.length;
 
@@ -108,6 +109,8 @@ public final class StreamLakeBatchPage {
         out.writeByte(FLAG_COLUMNAR);
         out.writeInt(n);
         out.writeShort(numCols);
+        out.writeLong(minDate);
+        out.writeLong(maxDate);
         for (int c = 0; c < numCols; c++) {
             out.writeShort(columnIds[c]);
             out.writeByte(columnTypes[c]);
@@ -136,6 +139,14 @@ public final class StreamLakeBatchPage {
 
     public static int messageCount(ByteBuf page) {
         return page.getInt(page.readerIndex() + 6);
+    }
+
+    public static long minDate(ByteBuf page) {
+        return page.getLong(page.readerIndex() + 12);
+    }
+
+    public static long maxDate(ByteBuf page) {
+        return page.getLong(page.readerIndex() + 20);
     }
 
     /** Read column {@code columnId}'s values for all rows (INT widened to long). */
