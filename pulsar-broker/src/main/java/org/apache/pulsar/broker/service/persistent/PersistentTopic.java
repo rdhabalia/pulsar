@@ -143,6 +143,7 @@ import org.apache.pulsar.broker.service.TransportCnx;
 import org.apache.pulsar.broker.service.schema.BookkeeperSchemaStorage;
 import org.apache.pulsar.broker.service.schema.exceptions.IncompatibleSchemaException;
 import org.apache.pulsar.broker.service.schema.exceptions.NotExistSchemaException;
+import org.apache.pulsar.broker.service.streaminglake.StreamLakeRangeBuilder;
 import org.apache.pulsar.broker.stats.ClusterReplicationMetrics;
 import org.apache.pulsar.broker.stats.NamespaceStats;
 import org.apache.pulsar.broker.stats.ReplicationMetrics;
@@ -710,8 +711,14 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     }
 
     private void asyncAddEntry(ByteBuf headersAndPayload, PublishContext publishContext) {
+        byte[] pageRanges = null;
+        if (isStreamLakeEnabled()) {
+            // StreamLake: derive the column-range blob from the message and ship it to the
+            // bookie's page index so PAGE_PRUNE can later skip this entry.
+            pageRanges = StreamLakeRangeBuilder.build(getStreamingLakeConfig(), headersAndPayload);
+        }
         ledger.asyncAddEntry(headersAndPayload,
-            (int) publishContext.getNumberOfMessages(), this, publishContext);
+            (int) publishContext.getNumberOfMessages(), pageRanges, this, publishContext);
     }
 
     public void asyncReadEntry(Position position, AsyncCallbacks.ReadEntryCallback callback, Object ctx) {
