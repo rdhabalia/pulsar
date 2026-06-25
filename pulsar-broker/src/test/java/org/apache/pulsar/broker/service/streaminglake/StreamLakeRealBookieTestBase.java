@@ -65,6 +65,8 @@ public abstract class StreamLakeRealBookieTestBase {
         config.setManagedLedgerDefaultEnsembleSize(1);
         config.setManagedLedgerDefaultWriteQuorum(1);
         config.setManagedLedgerDefaultAckQuorum(1);
+        // StreamLake column ranges ride in the V3 addEntry request; V2 has no such field.
+        config.setBookkeeperUseV2WireProtocol(false);
         config.setLoadManagerClassName(SimpleLoadManagerImpl.class.getName());
         config.setLoadBalancerEnabled(false);
         config.setSystemTopicEnabled(true);
