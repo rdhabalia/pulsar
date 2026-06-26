@@ -43,9 +43,11 @@ echo ">> Output dir: $STREAMLAKE_OUT_DIR"
 
 ./gradlew :pulsar-broker:test \
   --tests "org.apache.pulsar.broker.service.streaminglake.StreamLakeClusterDemo" \
+  --tests "org.apache.pulsar.broker.service.streaminglake.StreamLakeJoinDemo" \
   --console=plain
 
 echo
 echo ">> Done. Cluster stopped. Output files:"
 echo "   $STREAMLAKE_OUT_DIR/all-persons.txt       (every Person, full consumer)"
 echo "   $STREAMLAKE_OUT_DIR/filtered-persons.txt  (predicate query result)"
+echo "   $STREAMLAKE_OUT_DIR/join-result.txt       (Orders JOIN Customers, semi-join pruned)"

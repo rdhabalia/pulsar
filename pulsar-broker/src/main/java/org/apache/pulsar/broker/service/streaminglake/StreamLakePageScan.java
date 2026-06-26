@@ -38,6 +38,7 @@ import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo.LedgerInfo;
 import org.apache.bookkeeper.net.BookieId;
 import org.apache.bookkeeper.proto.BookieClient;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
+import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.protocol.Commands;
 
 /**
@@ -93,17 +94,66 @@ public final class StreamLakePageScan {
      */
     public static ScanResult scan(PersistentTopic topic, BookKeeper bk, List<Bound> bounds,
                                   long fromDate, long toDate) throws Exception {
+        return scan(topic, bk, bounds, java.util.Collections.emptyMap(), fromDate, toDate);
+    }
+
+    /**
+     * As {@link #scan(PersistentTopic, BookKeeper, List, long, long)} but also pushes a per-column
+     * key-set (semi-join probe keys) to the bookie, which tests them against each page's value bloom.
+     */
+    public static ScanResult scan(PersistentTopic topic, BookKeeper bk, List<Bound> bounds,
+                                  Map<Short, List<byte[]>> keySets, long fromDate, long toDate)
+            throws Exception {
+        RowResult r = scanRows(topic, bk, bounds, keySets, fromDate, toDate);
+        List<byte[]> values = new ArrayList<>(r.rows.size());
+        for (Row row : r.rows) {
+            values.add(row.value);
+        }
+        return new ScanResult(values, r.ledgersScanned, r.ledgersPrunedByDate);
+    }
+
+    /** A matched row: its message properties (indexed/extracted fields) and its value payload. */
+    public static final class Row {
+        public final Map<String, String> properties;
+        public final byte[] value;
+
+        Row(Map<String, String> properties, byte[] value) {
+            this.properties = properties;
+            this.value = value;
+        }
+    }
+
+    /** Scan result carrying full rows (properties + value) plus prune stats. */
+    public static final class RowResult {
+        public final List<Row> rows;
+        public final int ledgersScanned;
+        public final int ledgersPrunedByDate;
+        public final int pagesRead; // candidate pages surviving date + bookie prune (i.e. actually read)
+
+        RowResult(List<Row> rows, int ledgersScanned, int ledgersPrunedByDate, int pagesRead) {
+            this.rows = rows;
+            this.ledgersScanned = ledgersScanned;
+            this.ledgersPrunedByDate = ledgersPrunedByDate;
+            this.pagesRead = pagesRead;
+        }
+    }
+
+    /** Core scan returning full rows; the {@code byte[]}-row variants wrap this. */
+    public static RowResult scanRows(PersistentTopic topic, BookKeeper bk, List<Bound> bounds,
+                                     Map<Short, List<byte[]>> keySets, long fromDate, long toDate)
+            throws Exception {
         ManagedLedger ml = topic.getManagedLedger();
-        byte[] predicate = buildPredicate(bounds);
+        byte[] predicate = buildPredicate(bounds, keySets);
         BookieClient bookieClient = bk.getClientCtx().getBookieClient();
         // The current (still-open) ledger reports 0 entries in its LedgerInfo; use the LAC for it.
         Position lac = ml.getLastConfirmedEntry();
         Map<Long, long[]> dateIndex = topic.getStreamLakeDateIndex();
         boolean dateFilter = fromDate != Long.MIN_VALUE || toDate != Long.MAX_VALUE;
 
-        List<byte[]> result = new ArrayList<>();
+        List<Row> result = new ArrayList<>();
         int scanned = 0;
         int prunedByDate = 0;
+        int pagesRead = 0;
         for (Map.Entry<Long, LedgerInfo> e : ml.getLedgersInfo().entrySet()) {
             long ledgerId = e.getKey();
             long lastEntry = (lac != null && lac.getLedgerId() == ledgerId)
@@ -122,13 +172,14 @@ public final class StreamLakePageScan {
             scanned++;
             BookieId bookie = bk.getLedgerManager().readLedgerMetadata(ledgerId)
                     .get(30, TimeUnit.SECONDS).getValue().getAllEnsembles().firstEntry().getValue().get(0);
-            // point 10/11: bookie prunes pages by column range
+            // point 10/11: bookie prunes pages by column range AND key-set bloom
             List<Long> pages = bookieClient
                     .pagePrune(bookie, ledgerId, 0, lastEntry, predicate)
                     .get(30, TimeUnit.SECONDS);
+            pagesRead += pages.size();
             for (long entryId : pages) {
                 // point 12/13: read only surviving pages, evaluate the predicate on the columns,
-                // then decode ONLY the matching rows' payloads (selective decode).
+                // then decode ONLY the matching rows (selective decode).
                 ByteBuf pageData = readEntry(topic, ledgerId, entryId);
                 try {
                     int n = StreamLakeBatchPage.messageCount(pageData);
@@ -151,7 +202,7 @@ public final class StreamLakePageScan {
                         }
                         ByteBuf msg = StreamLakeBatchPage.messageAt(pageData, i);
                         try {
-                            result.add(extractPayload(msg));
+                            result.add(extractRow(msg));
                         } finally {
                             msg.release();
                         }
@@ -161,17 +212,21 @@ public final class StreamLakePageScan {
                 }
             }
         }
-        return new ScanResult(result, scanned, prunedByDate);
+        return new RowResult(result, scanned, prunedByDate, pagesRead);
     }
 
-    private static byte[] extractPayload(ByteBuf msg) {
-        Commands.parseMessageMetadata(msg); // advances msg past magic/checksum/metadata to the payload
-        byte[] payload = new byte[msg.readableBytes()];
-        msg.getBytes(msg.readerIndex(), payload);
-        return payload;
+    private static Row extractRow(ByteBuf msg) {
+        MessageMetadata md = Commands.parseMessageMetadata(msg); // advances msg to the payload
+        Map<String, String> props = new HashMap<>();
+        for (int i = 0; i < md.getPropertiesCount(); i++) {
+            props.put(md.getPropertyAt(i).getKey(), md.getPropertyAt(i).getValue());
+        }
+        byte[] value = new byte[msg.readableBytes()];
+        msg.getBytes(msg.readerIndex(), value);
+        return new Row(props, value);
     }
 
-    private static byte[] buildPredicate(List<Bound> bounds) {
+    private static byte[] buildPredicate(List<Bound> bounds, Map<Short, List<byte[]>> keySets) {
         Map<Short, List<PageRangeCodec.Range>> pred = new HashMap<>();
         for (Bound b : bounds) {
             byte[] min = b.gt != null ? encInt(b.gt) : null;
@@ -179,7 +234,12 @@ public final class StreamLakePageScan {
             pred.computeIfAbsent(b.columnId, k -> new ArrayList<>())
                     .add(new PageRangeCodec.Range(min, max, b.gt != null, b.lt != null));
         }
-        return PageRangeCodec.encode(pred);
+        return PageRangeCodec.encodePredicate(pred, keySets == null ? new HashMap<>() : keySets);
+    }
+
+    /** Order-preserving encoding for an int key (matches the page-side column encoding). */
+    public static byte[] encodeKey(int v) {
+        return encInt(v);
     }
 
     private static byte[] encInt(int v) {

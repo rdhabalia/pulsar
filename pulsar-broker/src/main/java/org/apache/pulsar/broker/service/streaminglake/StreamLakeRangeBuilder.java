@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.apache.bookkeeper.bookie.storage.ldb.BloomFilter;
 import org.apache.bookkeeper.bookie.storage.ldb.PageRangeCodec;
 import org.apache.pulsar.common.api.proto.KeyValue;
 import org.apache.pulsar.common.api.proto.MessageMetadata;
@@ -79,6 +80,7 @@ public final class StreamLakeRangeBuilder {
         }
         Map<Short, byte[]> mins = new HashMap<>();
         Map<Short, byte[]> maxs = new HashMap<>();
+        Map<Short, List<byte[]>> values = new HashMap<>(); // per-column encoded values, for the bloom
         for (ByteBuf m : messages) {
             Map<String, String> props = readProperties(m);
             if (props.isEmpty()) {
@@ -100,16 +102,20 @@ public final class StreamLakeRangeBuilder {
                 if (!maxs.containsKey(key) || compareUnsigned(enc, maxs.get(key)) > 0) {
                     maxs.put(key, enc);
                 }
+                values.computeIfAbsent(key, k -> new ArrayList<>()).add(enc);
             }
         }
         if (mins.isEmpty()) {
             return null;
         }
         Map<Short, PageRangeCodec.Range> ranges = new HashMap<>();
+        Map<Short, byte[]> blooms = new HashMap<>();
         for (Map.Entry<Short, byte[]> e : mins.entrySet()) {
             ranges.put(e.getKey(), new PageRangeCodec.Range(e.getValue(), maxs.get(e.getKey()), false, false));
+            // per-column bloom of the page's values, so the bookie can answer key-set (semi-join) probes
+            blooms.put(e.getKey(), BloomFilter.build(values.get(e.getKey()), 10));
         }
-        return PageRangeCodec.encodePage(ranges);
+        return PageRangeCodec.encodePage(ranges, blooms);
     }
 
     /** Column-major values for the INT/LONG indexed columns, for {@link StreamLakeBatchPage}. */

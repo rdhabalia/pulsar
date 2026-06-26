@@ -214,7 +214,8 @@ Read top‑to‑bottom; this is the write path then the read path.
 ### BookKeeper — bookie side (schema‑agnostic page index)
 | File | What changed |
 |---|---|
-| `bookkeeper-server/.../bookie/storage/ldb/PageRangeCodec.java` | Order‑preserving encode/decode of per‑column ranges; `encodePage`, `encode` (predicate), `pageCouldMatch`, `Range.overlaps`. |
+| `bookkeeper-server/.../bookie/storage/ldb/PageRangeCodec.java` | Order‑preserving encode/decode of per‑column ranges; `encodePage`, `encode` (predicate), `pageCouldMatch`, `Range.overlaps`. **Bloom/key‑set extension:** `encodePage(ranges, blooms)`, `encodePredicate(ranges, keySets)`, `decodeAll`, and key‑set membership in `pageCouldMatch`. |
+| `bookkeeper-server/.../bookie/storage/ldb/BloomFilter.java` | Self‑describing, deterministic bloom over opaque `byte[]` values — built by the broker per page column, tested by the bookie for semi‑join key‑sets. |
 | `bookkeeper-server/.../bookie/storage/ldb/PageRangeIndex.java` | RocksDB `page-ranges` CF; `addPageRanges(ledgerId,entryId,blob)` and `giveIndexPages(ledgerId,start,end,predicate)`. |
 | `bookkeeper-server/.../bookie/storage/ldb/SingleDirectoryDbLedgerStorage.java`, `DbLedgerStorage.java` | `recordPageRanges(...)` and `giveIndexPages(...)` wired into ledger storage. |
 | `bookkeeper-server/.../proto/WriteEntryProcessorV3.java` | After persisting an entry, if `AddRequest.hasPageRanges()`, call `recordPageRanges(...)`. |
@@ -246,7 +247,9 @@ Read top‑to‑bottom; this is the write path then the read path.
 | `pulsar-broker/.../service/persistent/PersistentTopic.java` | `asyncAddEntry` routes StreamLake topics to the batcher; `getStreamLakeDateIndex()`. |
 | `streaminglake/StreamLakeTranscoder.java` + `PersistentDispatcherMultipleConsumers.java` | **(step 6)** transcode page → standard batch on read. |
 | `streaminglake/StreamLakeDateIndex.java` | **(step 7)** durable append‑only date‑partition‑list ledger. |
-| `streaminglake/StreamLakePageScan.java` | **(steps 9‑13)** date prune → bookie `PAGE_PRUNE` → selective row decode. |
+| `streaminglake/StreamLakePageScan.java` | **(steps 9‑13)** date prune → bookie `PAGE_PRUNE` → selective row decode; `scanRows(..., keySets, ...)` pushes semi‑join key‑sets; returns rows + `pagesRead`. |
+| `streaminglake/StreamLakeRangeBuilder.java` (write) | builds a per‑column **bloom** at page write (`BloomFilter`) alongside min/max. |
+| `streaminglake/StreamLakeJoin.java` | broadcast hash **inner join** with runtime semi‑join push‑down (min/max range + key‑set bloom). |
 
 ### Tests (all on a real broker + real bookie unless noted)
 `StreamLakeRealBookieTestBase` (real `PulsarService` + `LocalBookkeeperEnsemble`),
@@ -254,7 +257,8 @@ Read top‑to‑bottom; this is the write path then the read path.
 `StreamLakePublishRangesTest` (per‑entry ranges), `StreamLakeBatchedPublishTest` (3A),
 `StreamLakeTranscodingConsumerTest` (3B), `StreamLakePageScanTest` (3C),
 `StreamLakeDatePruneTest` (3E), `StreamLakeDateIndexDurabilityTest` (durable index),
-`StreamingLakePagePruneIntegrationTest` (bookie‑side, BookKeeper module).
+`StreamLakeJoinTest` (Orders⋈Customers, oracle‑checked + bloom prunes beyond range),
+`PageRangeBloomTest` / `StreamingLakePagePruneIntegrationTest` (bookie‑side, BookKeeper module).
 
 ---
 
@@ -278,6 +282,7 @@ What it does: creates a StreamLake (columnar, batched) topic with a **Person** s
 |---|---|
 | `<out>/all-persons.txt` | all 1000 Person records, drained by a **normal consumer** (decoded from columnar pages by the transcoding dispatcher) |
 | `<out>/filtered-persons.txt` | the **predicate query** result: `date_partition in [day3,day6] AND departmentId>5 AND departmentId<15 AND salary>50000` |
+| `<out>/join-result.txt` | the **inner‑join** result (`StreamLakeJoinDemo`): `Orders ⋈ Customers` with the runtime semi‑join filter (e.g. *Orders pages read: 4 of 40*) |
 
 Expected (validated against a brute‑force oracle in the test):
 
@@ -297,10 +302,78 @@ Run the whole verified test suite instead:
 
 ---
 
-## 5. Status & limitations
+## 5. Query, joins, and broker back‑pressure
+
+### Predicate scan
+`StreamLakePageScan` runs a predicate query as three‑level pruning: broker date‑partition prune →
+bookie `PAGE_PRUNE` (per‑column min/max **ranges** AND per‑column **key‑set blooms**) → selective
+row decode. It returns rows (`{properties, value}`), with stats (`ledgersScanned`,
+`ledgersPrunedByDate`, `pagesRead`).
+
+### Inner join — broadcast hash + runtime semi‑join (dynamic filtering)
+`StreamLakeJoin.innerJoin(probeSide A, buildSide B, bk)` runs **entirely in the broker**:
+
+1. Scan the build side **B** (its `WHERE` pushed to the bookie), hash its rows by the join key, and
+   collect the keys' **min/max** and the **key set**.
+2. Inject into the probe side **A**'s scan a runtime range `Bound(key in [min,max])` (prunes pages by
+   the page‑index min/max) **and** the key‑set (prunes pages by each page's value **bloom**). A reads
+   only pages whose key range/bloom can overlap B's keys.
+3. Probe each A row against the hash and emit. Bloom false positives are harmless — the hash probe is
+   the exact membership test.
+
+> Code: `StreamLakeJoin`, `StreamLakePageScan.scanRows(..., keySets, ...)`, `BloomFilter`,
+> `PageRangeCodec.encodePage(ranges, blooms)` / `encodePredicate(ranges, keySets)`.
+
+**Worked example** (`StreamLakeJoinTest`, oracle‑checked; `StreamLakeJoinDemo` writes `join-result.txt`):
+
+```
+SELECT o.orderId, c.region
+  FROM Orders o JOIN Customers c ON o.customerId = c.customerId
+ WHERE c.region = 'US-WEST' AND c.tier = 'gold'   AND o.day IN [8,9]
+
+-> build side = 4 gold US-WEST customers;  Orders pages read: 4 of 40  (range+bloom);  8 rows
+```
+
+### Memory & CPU back‑pressure on the broker
+
+Both the predicate scan and the join run server‑side (the page index lives on the bookies). Cost
+profile of a join:
+
+**Memory** — dominated by the build side; the probe streams.
+
+| Component | Size | Notes |
+|---|---|---|
+| Build‑side hash (filtered B) — *dominant* | `N_B × (key + projected cols + map overhead)` | bound it; build the **smaller** side; spill/fall back to sort‑merge above a threshold |
+| Probe buffer (A) | a few pages in flight | streams page‑by‑page; independent of A's size |
+| Runtime filter | min/max = 16 B; key‑set/bloom ≈ KB–few MB | negligible vs the hash |
+
+Multipliers: **concurrency** (K joins ≈ K resident build hashes — cap concurrent queries / budget per
+query), and **GC** (row objects + boxed maps → prefer primitive maps + Arrow/off‑heap). Run heavy
+queries on a dedicated **DataLake/query broker**, not the latency‑sensitive pub/sub broker.
+
+**CPU / I/O** — dominated by decoding the surviving probe pages, which the semi‑join filter shrinks.
+
+| Phase | Cost | Cut by the semi‑join filter? |
+|---|---|---|
+| `pagePrune` (both sides) | cheap, on the bookie (RocksDB range scan + bloom tests) | — |
+| Scan B + build hash + min/max | `O(N_B)` | — |
+| **Decode surviving A pages** — *dominant* | `O(pagesRead × rows/page)` | ✅ directly (e.g. 4 of 40) |
+| **BK reads / network** | 1 fetch per surviving page | ✅ fewer reads |
+| Probe + emit | `O(1)` per A row | ✅ fewer rows |
+
+**Rules of thumb:** the win is proportional to how much the key range/bloom shrinks A's page set
+(large when B's keys are clustered or sparse; ~zero when they densely cover every page — the bloom
+helps the scattered case the range can't). Memory ∝ the filtered build side — bound it and the query
+concurrency. Make join keys **indexed on both sides**, build the smaller side, run on a query broker,
+and prefer primitive maps + Arrow/off‑heap to keep GC predictable.
+
+---
+
+## 6. Status & limitations
 
 **Implemented and verified end‑to‑end on a real broker + real bookie:** steps 1, 2, 3
-(column‑major; not Vortex), 4, 5a, 5b, 6, 7 (durable), 8, 9, 10, 11, 12, 13.
+(column‑major; not Vortex), 4, 5a, 5b, 6, 7 (durable), 8, 9, 10, 11, 12, 13; plus **predicate scan**,
+**bloom page‑index pruning**, and a **broadcast hash inner join with runtime semi‑join push‑down**.
 
 **Open items:**
 - **Vortex codec (3/4/12):** no usable JVM binding; the JVM column‑major codec is used and a
