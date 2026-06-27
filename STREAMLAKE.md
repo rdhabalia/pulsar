@@ -12,7 +12,11 @@ This document covers:
 2. [Design proposal](#2-design-proposal)
 3. [Code changes — read this to understand the code](#3-code-changes)
 4. [Standalone scripts to verify the full scan + query result](#4-verify-it-yourself)
-5. [Status, limitations, and what's next](#5-status--limitations)
+5. [Query, joins, and broker back‑pressure](#5-query-joins-and-broker-back-pressure)
+6. [Status, limitations, and what's next](#6-status--limitations)
+
+**Companion:** [`STREAMLAKE_JOIN.md`](STREAMLAKE_JOIN.md) — how the bloom‑filter page index and the
+inner join are implemented, with steps to build, run, and validate them.
 
 ---
 
@@ -303,6 +307,9 @@ Run the whole verified test suite instead:
 ---
 
 ## 5. Query, joins, and broker back‑pressure
+
+> **Companion doc:** [`STREAMLAKE_JOIN.md`](STREAMLAKE_JOIN.md) — how the **bloom‑filter page index**
+> and the **inner join** are implemented, plus copy‑paste steps to build, run, and validate them.
 
 ### Predicate scan
 `StreamLakePageScan` runs a predicate query as three‑level pruning: broker date‑partition prune →
