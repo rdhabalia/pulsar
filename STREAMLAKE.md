@@ -312,10 +312,17 @@ Run the whole verified test suite instead:
 > and the **inner join** are implemented, plus copy‑paste steps to build, run, and validate them.
 
 ### Predicate scan
-`StreamLakePageScan` runs a predicate query as three‑level pruning: broker date‑partition prune →
-bookie `PAGE_PRUNE` (per‑column min/max **ranges** AND per‑column **key‑set blooms**) → selective
-row decode. It returns rows (`{properties, value}`), with stats (`ledgersScanned`,
-`ledgersPrunedByDate`, `pagesRead`).
+`StreamLakePageScan` runs a predicate query as **four‑level** pruning: broker date‑partition prune →
+bookie `PAGE_PRUNE` (per‑column min/max **ranges** AND per‑column **key‑set blooms**) → **in‑page
+granule** prune → selective row decode. It returns rows (`{properties, value}`), with stats
+(`ledgersScanned`, `ledgersPrunedByDate`, `pagesRead`, `granulesTotal`, `granulesRead`).
+
+### Granule zone maps (sub‑page pruning, broker‑only)
+Each page is carved into **granules** of `granuleSize` rows (config, default 256), and the page
+stores a per‑column **zone map** (min/max + a value bloom) per granule (`StreamLakeBatchPage`). Inside
+a surviving page the scan **skips granules** whose zone map can't match — skipping their column data
+and per‑row evaluation entirely — instead of scanning every row. No bookie change: the granule maps
+live in the page payload the broker already reads (page fetch is unchanged; the win is decode CPU).
 
 ### Inner join — broadcast hash + runtime semi‑join (dynamic filtering)
 `StreamLakeJoin.innerJoin(probeSide A, buildSide B, bk)` runs **entirely in the broker**:

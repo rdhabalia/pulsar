@@ -86,7 +86,7 @@ public class StreamLakeJoinDemo extends StreamLakeRealBookieTestBase {
         admin.topics().createNonPartitionedTopic(customers);
 
         setPolicy(orders, StreamingLakeConfig.builder().enabled(true).batchingEnabled(true)
-                .maxPageMessages(50).pageGroupingDelayMs(5_000)
+                .maxPageMessages(50).pageGroupingDelayMs(5_000).granuleSize(10)
                 .indexedColumns(Arrays.asList(col(CUST, "customerId"), col(DAY, "day"))).build());
         setPolicy(customers, StreamingLakeConfig.builder().enabled(true).batchingEnabled(true)
                 .maxPageMessages(50).pageGroupingDelayMs(5_000)
@@ -164,6 +164,8 @@ public class StreamLakeJoinDemo extends StreamLakeRealBookieTestBase {
             w.println("# build side (gold US-WEST customers) = " + res.buildRows + " rows");
             w.println("# Orders pages read: " + res.probePagesRead + " of " + totalPages
                     + "  (runtime semi-join range+bloom pruning)");
+            w.println("# Orders granules read: " + res.probeGranulesRead + " of " + res.probeGranulesTotal
+                    + "  (in-page granule zone-map pruning)");
             w.println("# matched = " + res.rows.size() + " rows");
             for (String l : lines) {
                 w.println(l);

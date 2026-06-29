@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import org.apache.bookkeeper.bookie.storage.ldb.BloomFilter;
 import org.apache.bookkeeper.bookie.storage.ldb.PageRangeCodec;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
@@ -128,13 +129,18 @@ public final class StreamLakePageScan {
         public final List<Row> rows;
         public final int ledgersScanned;
         public final int ledgersPrunedByDate;
-        public final int pagesRead; // candidate pages surviving date + bookie prune (i.e. actually read)
+        public final int pagesRead;     // candidate pages surviving date + bookie prune (i.e. actually read)
+        public final int granulesTotal; // granules across the read pages
+        public final int granulesRead;  // granules whose zone map survived -> column data + rows decoded
 
-        RowResult(List<Row> rows, int ledgersScanned, int ledgersPrunedByDate, int pagesRead) {
+        RowResult(List<Row> rows, int ledgersScanned, int ledgersPrunedByDate, int pagesRead,
+                  int granulesTotal, int granulesRead) {
             this.rows = rows;
             this.ledgersScanned = ledgersScanned;
             this.ledgersPrunedByDate = ledgersPrunedByDate;
             this.pagesRead = pagesRead;
+            this.granulesTotal = granulesTotal;
+            this.granulesRead = granulesRead;
         }
     }
 
@@ -154,6 +160,8 @@ public final class StreamLakePageScan {
         int scanned = 0;
         int prunedByDate = 0;
         int pagesRead = 0;
+        int granulesTotal = 0;
+        int granulesRead = 0;
         for (Map.Entry<Long, LedgerInfo> e : ml.getLedgersInfo().entrySet()) {
             long ledgerId = e.getKey();
             long lastEntry = (lac != null && lac.getLedgerId() == ledgerId)
@@ -178,33 +186,47 @@ public final class StreamLakePageScan {
                     .get(30, TimeUnit.SECONDS);
             pagesRead += pages.size();
             for (long entryId : pages) {
-                // point 12/13: read only surviving pages, evaluate the predicate on the columns,
-                // then decode ONLY the matching rows (selective decode).
+                // point 12/13: read only surviving pages; inside each, prune GRANULES by their zone
+                // maps (min/max + bloom) before reading column data / evaluating rows (selective decode).
                 ByteBuf pageData = readEntry(topic, ledgerId, entryId);
                 try {
                     int n = StreamLakeBatchPage.messageCount(pageData);
-                    boolean[] keep = new boolean[n];
-                    java.util.Arrays.fill(keep, true);
-                    for (Bound b : bounds) {
-                        long[] values = StreamLakeBatchPage.readColumn(pageData, b.columnId);
-                        for (int i = 0; i < n; i++) {
-                            if (b.gt != null && !(values[i] > b.gt)) {
-                                keep[i] = false;
-                            }
-                            if (b.lt != null && !(values[i] < b.lt)) {
-                                keep[i] = false;
-                            }
-                        }
-                    }
-                    for (int i = 0; i < n; i++) {
-                        if (!keep[i]) {
+                    int gsize = StreamLakeBatchPage.granuleSize(pageData);
+                    int numG = StreamLakeBatchPage.granuleCount(pageData);
+                    Map<Short, StreamLakeBatchPage.GranuleStat[]> zone =
+                            StreamLakeBatchPage.decodeZoneMaps(pageData);
+                    granulesTotal += numG;
+                    for (int g = 0; g < numG; g++) {
+                        int from = g * gsize;
+                        int to = Math.min(from + gsize, n);
+                        if (granuleSkipped(zone, g, bounds, keySets)) {
                             continue;
                         }
-                        ByteBuf msg = StreamLakeBatchPage.messageAt(pageData, i);
-                        try {
-                            result.add(extractRow(msg));
-                        } finally {
-                            msg.release();
+                        granulesRead++;
+                        // per-row filter over only this granule's rows
+                        boolean[] keep = new boolean[to - from];
+                        java.util.Arrays.fill(keep, true);
+                        for (Bound b : bounds) {
+                            long[] values = StreamLakeBatchPage.readColumnRange(pageData, b.columnId, from, to);
+                            for (int i = 0; i < values.length; i++) {
+                                if (b.gt != null && !(values[i] > b.gt)) {
+                                    keep[i] = false;
+                                }
+                                if (b.lt != null && !(values[i] < b.lt)) {
+                                    keep[i] = false;
+                                }
+                            }
+                        }
+                        for (int i = 0; i < keep.length; i++) {
+                            if (!keep[i]) {
+                                continue;
+                            }
+                            ByteBuf msg = StreamLakeBatchPage.messageAt(pageData, from + i);
+                            try {
+                                result.add(extractRow(msg));
+                            } finally {
+                                msg.release();
+                            }
                         }
                     }
                 } finally {
@@ -212,7 +234,44 @@ public final class StreamLakePageScan {
                 }
             }
         }
-        return new RowResult(result, scanned, prunedByDate, pagesRead);
+        return new RowResult(result, scanned, prunedByDate, pagesRead, granulesTotal, granulesRead);
+    }
+
+    /** True if a granule's zone map proves it cannot contain a row matching the predicate. */
+    private static boolean granuleSkipped(Map<Short, StreamLakeBatchPage.GranuleStat[]> zone, int g,
+                                          List<Bound> bounds, Map<Short, List<byte[]>> keySets) {
+        for (Bound b : bounds) {
+            StreamLakeBatchPage.GranuleStat[] stats = zone.get(b.columnId);
+            if (stats == null) {
+                continue;
+            }
+            StreamLakeBatchPage.GranuleStat s = stats[g];
+            if (b.gt != null && s.max <= b.gt) {
+                return true; // every value <= gt -> none satisfies value > gt
+            }
+            if (b.lt != null && s.min >= b.lt) {
+                return true; // every value >= lt -> none satisfies value < lt
+            }
+        }
+        if (keySets != null) {
+            for (Map.Entry<Short, List<byte[]>> e : keySets.entrySet()) {
+                StreamLakeBatchPage.GranuleStat[] stats = zone.get(e.getKey());
+                if (stats == null || stats[g].bloom == null) {
+                    continue;
+                }
+                boolean anyHit = false;
+                for (byte[] key : e.getValue()) {
+                    if (BloomFilter.mightContain(stats[g].bloom, key)) {
+                        anyHit = true;
+                        break;
+                    }
+                }
+                if (!anyHit) {
+                    return true; // granule bloom holds none of the probe keys
+                }
+            }
+        }
+        return false;
     }
 
     private static Row extractRow(ByteBuf msg) {

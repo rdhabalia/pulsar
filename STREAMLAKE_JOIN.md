@@ -64,6 +64,20 @@ checks.
 > bloom AND, round‑trip) and the existing `PageRangeIndexTest` / `StreamingLakePagePruneIntegrationTest`
 > (range‑only back‑compat).
 
+### Granule zone maps (sub‑page pruning, broker‑only)
+The bookie bloom prunes whole *pages*. To prune *within* a surviving page, each page is carved into
+**granules** of `granuleSize` rows (config, default 256), and the page stores a per‑column **zone
+map** — min/max + a value bloom — **per granule** (`StreamLakeBatchPage`, single format V1). During
+selective decode (`StreamLakePageScan`), `granuleSkipped(...)` tests each granule's zone map against
+the predicate (range) and key‑sets (bloom); a granule that can't match is skipped — its column data
+and per‑row work are never touched. `RowResult` reports `granulesTotal` / `granulesRead`.
+
+This is **broker‑only**: the granule maps live inside the page payload the broker already reads, so
+`PAGE_PRUNE`/`PageRangeCodec`/the bookie are unchanged. The page is still fetched whole, so the win is
+**decode CPU + per‑row evaluation**, not fetch I/O. Tested by `StreamLakeGranuleScanTest` (a page of
+100 rows, granuleSize 10 → 10 granules; `v>75` reads exactly 3) and shown in the join demo
+(`granules read: 4 of 20`).
+
 ---
 
 ## 2. Inner join (broadcast hash + runtime semi‑join)
@@ -147,6 +161,13 @@ brute‑force oracle, and asserts the bloom key‑set prunes Orders pages beyond
 # expect: BUILD SUCCESSFUL ; Tests run: 1, Failures: 0
 ```
 
+### 3.2b Granule pruning test (real broker + real bookie)
+```bash
+./gradlew :pulsar-broker:test \
+  --tests "org.apache.pulsar.broker.service.streaminglake.StreamLakeGranuleScanTest"
+# expect: 100 rows / 10 granules; v>75 reads exactly 3 granules. Tests run: 1, Failures: 0
+```
+
 ### 3.3 Join demo — run it and see the output file
 Starts the cluster, runs the same query, writes the joined rows + prune stats to a file, and stops the
 cluster automatically.
@@ -167,6 +188,7 @@ cat /tmp/streamlake-out/join-result.txt
 # WHERE c.region='US-WEST' AND c.tier='gold' AND o.day IN [8,9]
 # build side (gold US-WEST customers) = 4 rows
 # Orders pages read: 4 of 40  (runtime semi-join range+bloom pruning)
+# Orders granules read: 4 of 20  (in-page granule zone-map pruning)
 # matched = 8 rows
 order-0-8  ->  region=US-WEST
 order-0-9  ->  region=US-WEST

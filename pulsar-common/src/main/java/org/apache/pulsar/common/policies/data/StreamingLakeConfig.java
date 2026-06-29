@@ -54,6 +54,10 @@ public class StreamingLakeConfig {
     @Builder.Default
     private int pageSizeBytes = 2 * 1024 * 1024;
 
+    /** Rows per granule (sub-page zone-map row group) for in-page granule pruning (default 256). */
+    @Builder.Default
+    private int granuleSize = 256;
+
     /** Max messages packed into one page before it is sealed (default 1000). */
     @Builder.Default
     private int maxPageMessages = 1000;

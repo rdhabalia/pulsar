@@ -106,7 +106,7 @@ public class StreamLakeBatcher {
         final StreamLakeRangeBuilder.ColumnData cols = StreamLakeRangeBuilder.extractColumns(config, batch);
         final long[] dateRange = StreamLakeRangeBuilder.dateRange(batch);
         final ByteBuf page = StreamLakeBatchPage.encode(batch, cols.columnIds, cols.columnTypes, cols.values,
-                dateRange[0], dateRange[1]);
+                dateRange[0], dateRange[1], config.getGranuleSize());
         final byte[] ranges = StreamLakeRangeBuilder.buildForBatch(config, batch);
         for (ByteBuf b : batch) {
             b.release();

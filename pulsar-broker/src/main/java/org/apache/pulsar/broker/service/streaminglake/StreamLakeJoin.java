@@ -89,14 +89,18 @@ public final class StreamLakeJoin {
         public final List<JoinRow> rows;
         public final int buildRows;                 // |B after its WHERE|
         public final int probePagesRead;            // A pages actually read (after range+bloom prune)
+        public final int probeGranulesTotal;        // granules across those pages
+        public final int probeGranulesRead;         // granules whose zone map survived (decoded)
         public final int probeLedgersScanned;
         public final int probeLedgersPrunedByDate;
 
-        JoinResult(List<JoinRow> rows, int buildRows, int probePagesRead,
-                   int probeLedgersScanned, int probeLedgersPrunedByDate) {
+        JoinResult(List<JoinRow> rows, int buildRows, int probePagesRead, int probeGranulesTotal,
+                   int probeGranulesRead, int probeLedgersScanned, int probeLedgersPrunedByDate) {
             this.rows = rows;
             this.buildRows = buildRows;
             this.probePagesRead = probePagesRead;
+            this.probeGranulesTotal = probeGranulesTotal;
+            this.probeGranulesRead = probeGranulesRead;
             this.probeLedgersScanned = probeLedgersScanned;
             this.probeLedgersPrunedByDate = probeLedgersPrunedByDate;
         }
@@ -122,7 +126,7 @@ public final class StreamLakeJoin {
             maxKey = Math.max(maxKey, k);
         }
         if (hash.isEmpty()) {
-            return new JoinResult(new ArrayList<>(), bRes.rows.size(), 0, 0, 0);
+            return new JoinResult(new ArrayList<>(), bRes.rows.size(), 0, 0, 0, 0, 0);
         }
 
         // 2. runtime semi-join filters on A's join column: range (min/max) + key-set (bloom).
@@ -151,8 +155,8 @@ public final class StreamLakeJoin {
                 }
             }
         }
-        return new JoinResult(out, bRes.rows.size(), aRes.pagesRead,
-                aRes.ledgersScanned, aRes.ledgersPrunedByDate);
+        return new JoinResult(out, bRes.rows.size(), aRes.pagesRead, aRes.granulesTotal,
+                aRes.granulesRead, aRes.ledgersScanned, aRes.ledgersPrunedByDate);
     }
 
     private static Integer intProp(StreamLakePageScan.Row r, String prop) {
