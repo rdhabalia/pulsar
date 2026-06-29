@@ -58,6 +58,24 @@ public class StreamingLakeConfig {
     @Builder.Default
     private int granuleSize = 256;
 
+    /**
+     * Max distinct values per column per granule stored as an <b>exact set index</b> (ClickHouse
+     * {@code set(N)}). When a granule's distinct count for a column is at most this, the page stores
+     * the exact set so equality/IN predicates prune the granule with <i>no false positives</i> (even
+     * when the value falls inside the granule's min/max). Above it, the granule falls back to
+     * min/max + bloom. Default 64.
+     */
+    @Builder.Default
+    private int setMaxCardinality = 64;
+
+    /**
+     * Column id to <b>sort rows by within each page</b> so the per-granule marks form a sparse
+     * primary index (ClickHouse MergeTree primary key). A predicate on this column then
+     * binary-searches the granule range instead of scanning every granule. 0 (default) = unsorted.
+     */
+    @Builder.Default
+    private int sortColumnId = 0;
+
     /** Max messages packed into one page before it is sealed (default 1000). */
     @Builder.Default
     private int maxPageMessages = 1000;

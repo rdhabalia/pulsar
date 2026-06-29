@@ -7,6 +7,7 @@ validate** them. It is a companion to [`STREAMLAKE.md`](STREAMLAKE.md) (the end�
 - [1. Bloom filter in the bookie page index](#1-bloom-filter-in-the-bookie-page-index)
 - [2. Inner join (broadcast hash + runtime semi‑join)](#2-inner-join-broadcast-hash--runtime-semi-join)
 - [3. Build, run, and validate](#3-build-run-and-validate)
+- [4. ClickHouse data‑skipping borrows: set index, PREWHERE, sparse index](#4-clickhouse-data-skipping-borrows-set-index-prewhere-sparse-index)
 
 ---
 
@@ -168,6 +169,14 @@ brute‑force oracle, and asserts the bloom key‑set prunes Orders pages beyond
 # expect: 100 rows / 10 granules; v>75 reads exactly 3 granules. Tests run: 1, Failures: 0
 ```
 
+### 3.2c Skip‑index tests — set index, PREWHERE, sparse index (§4)
+```bash
+./gradlew :pulsar-broker:test \
+  --tests "org.apache.pulsar.broker.service.streaminglake.StreamLakeSkipIndexTest"
+# expect: set index v==5 reads 1 granule / v==50 reads 0; PREWHERE cellsScanned==101 (vs 200);
+#         sparse index id==512 examines 1 of 100 granules. Tests run: 3, Failures: 0
+```
+
 ### 3.3 Join demo — run it and see the output file
 Starts the cluster, runs the same query, writes the joined rows + prune stats to a file, and stops the
 cluster automatically.
@@ -205,5 +214,47 @@ bloom) read only the 4 pages that can contain the 4 gold US‑WEST customers, sk
 ### 3.4 Full StreamLake regression (optional)
 ```bash
 ./gradlew :pulsar-broker:test --tests "org.apache.pulsar.broker.service.streaminglake.*"
-# expect: 15 tests, 0 failures (includes the join + both demos)
+# expect: 21 tests, 0 failures (includes the join, both demos, granule + skip-index tests)
 ```
+
+---
+
+## 4. ClickHouse data‑skipping borrows: set index, PREWHERE, sparse index
+
+Three further ClickHouse skip‑index ideas ride on the granule zone map. All three are **broker‑only**
+(no bookie/`PageRangeCodec` change) and are verified by `StreamLakeSkipIndexTest` on a real
+broker + bookie. They reuse the same encoding so the bookie page‑level prune is unaffected.
+
+### `set(N)` exact‑value granule index
+A bloom answers "maybe present"; min/max answers "inside the range." Neither can prove a value is
+**absent when it falls inside `[min,max]`**. ClickHouse's `set(max_rows)` does: it stores the exact
+distinct set per granule. We store, per granule per column, the **sorted distinct values** when the
+granule's cardinality is ≤ `setMaxCardinality` (config, default 64); above it the granule keeps just
+min/max + bloom. An **equality** predicate — `Bound.eq(columnId, name, value)` — then prunes a granule
+exactly: `granuleSkipped` returns true if `value` is outside `[min,max]` **or** the exact set lacks it.
+
+> Test `setIndexPrunesInsideMinMax`: 10 granules where granule *g* holds values `{g, g+1000}` (so its
+> min/max `[g, g+1000]` spans 5 and 50). `v == 5` reads **1** granule (the set narrows 6 in‑range
+> candidates to one); `v == 50` reads **0** (the set rules out all 10 that min/max would keep).
+
+### PREWHERE — multi‑column late materialization
+With several predicate columns, reading every predicate column in full is wasteful once the first one
+has already eliminated most rows. Like ClickHouse PREWHERE, the scan **orders the predicate columns by
+estimated selectivity** (from each column's granule zone map), evaluates the most selective first to a
+set of surviving row indices, then reads each later column **only at those rows** (`readColumnAt`). The
+`cellsScanned` stat reports column cells touched during predicate evaluation.
+
+> Test `prewhereReadsLaterColumnsOnlyForSurvivors`: one granule of 100 rows, `a == 42` (one match) and
+> a wide range on `b` (all match). The selective column `a` is read in full (100 cells) → 1 survivor;
+> `b` is read for just that row → `cellsScanned == 101`, versus the naive 200.
+
+### Sparse primary index — binary‑searched, key‑sorted pages
+ClickHouse's primary index is **sparse** (one mark per granule over sorted data). Set `sortColumnId`
+and a page's rows are **sorted by that key** at encode time (`FLAG_SORTED`), so the per‑granule marks
+(mins/maxs) are monotonic. A predicate on the sort key then **binary‑searches** the candidate granule
+window (`sparseWindow`) instead of inspecting every granule's zone map; `granulesExamined` reports how
+many granule maps were inspected.
+
+> Test `sparseIndexBinarySearchesSortedGranules`: one page of 1000 rows inserted in a scrambled
+> permutation; sorted into 100 granules of 10. `id == 512` inspects **1** of 100 granules (binary
+> search), and `id > 994` likewise inspects only the last granule's window — versus 100 unsorted.

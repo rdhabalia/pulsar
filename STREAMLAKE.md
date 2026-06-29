@@ -315,14 +315,31 @@ Run the whole verified test suite instead:
 `StreamLakePageScan` runs a predicate query as **four‑level** pruning: broker date‑partition prune →
 bookie `PAGE_PRUNE` (per‑column min/max **ranges** AND per‑column **key‑set blooms**) → **in‑page
 granule** prune → selective row decode. It returns rows (`{properties, value}`), with stats
-(`ledgersScanned`, `ledgersPrunedByDate`, `pagesRead`, `granulesTotal`, `granulesRead`).
+(`ledgersScanned`, `ledgersPrunedByDate`, `pagesRead`, `granulesTotal`, `granulesExamined`,
+`granulesRead`, `cellsScanned`).
 
 ### Granule zone maps (sub‑page pruning, broker‑only)
 Each page is carved into **granules** of `granuleSize` rows (config, default 256), and the page
-stores a per‑column **zone map** (min/max + a value bloom) per granule (`StreamLakeBatchPage`). Inside
-a surviving page the scan **skips granules** whose zone map can't match — skipping their column data
-and per‑row evaluation entirely — instead of scanning every row. No bookie change: the granule maps
-live in the page payload the broker already reads (page fetch is unchanged; the win is decode CPU).
+stores a per‑column **zone map** per granule (`StreamLakeBatchPage`). Inside a surviving page the scan
+**skips granules** whose zone map can't match — skipping their column data and per‑row evaluation
+entirely — instead of scanning every row. No bookie change: the granule maps live in the page payload
+the broker already reads (page fetch is unchanged; the win is decode CPU).
+
+Three ClickHouse data‑skipping borrows ride on top of the zone map (all broker‑only; see
+[`STREAMLAKE_JOIN.md` §4](STREAMLAKE_JOIN.md#4-clickhouse-data-skipping-borrows-set-index-prewhere-sparse-index)):
+
+- **`set(N)` exact‑value index** — when a granule's distinct count for a column is ≤ `setMaxCardinality`
+  (default 64), the zone map also stores the **exact distinct set**. An equality/IN predicate then
+  prunes a granule with **no false positives** even when the value lies inside `[min,max]` (where
+  min/max and a bloom would both keep it). `Bound.eq(col, name, value)`.
+- **PREWHERE / late materialization** — with several predicate columns the scan evaluates the **most
+  selective first** (estimated from the granule's zone map) and reads each later column **only at the
+  rows that still survive**, so unselective columns are barely touched. Reported as `cellsScanned`.
+- **Sparse primary index** — set `sortColumnId` and a page's rows are **sorted by that key**, making the
+  per‑granule marks monotonic. A predicate on that key then **binary‑searches** the candidate granule
+  window instead of inspecting every granule. Reported as `granulesExamined`.
+
+Stats: `granulesTotal`, `granulesExamined`, `granulesRead`, `cellsScanned`.
 
 ### Inner join — broadcast hash + runtime semi‑join (dynamic filtering)
 `StreamLakeJoin.innerJoin(probeSide A, buildSide B, bk)` runs **entirely in the broker**:
