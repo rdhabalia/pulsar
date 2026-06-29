@@ -218,39 +218,27 @@ public final class StreamLakePageScan {
                             StreamLakeBatchPage.decodeZoneMaps(pageData);
                     granulesTotal += numG;
 
-                    // Feature 3 (sparse primary index): if the page is sorted by a predicate column,
-                    // binary-search its per-granule marks for the candidate granule window instead of
-                    // inspecting every granule's zone map.
-                    int gStart = 0;
-                    int gEnd = numG;
-                    if (StreamLakeBatchPage.isSorted(pageData)) {
-                        short sortCol = (short) StreamLakeBatchPage.sortColumnId(pageData);
-                        Bound sortBound = boundOn(bounds, sortCol);
-                        StreamLakeBatchPage.GranuleStat[] marks = zone.get(sortCol);
-                        if (sortBound != null && marks != null) {
-                            int[] window = sparseWindow(marks, sortBound);
-                            gStart = window[0];
-                            gEnd = window[1];
-                        }
-                    }
-
-                    for (int g = gStart; g < gEnd; g++) {
-                        granulesExamined++;
-                        int from = g * gsize;
-                        int to = Math.min(from + gsize, n);
-                        if (granuleSkipped(zone, g, bounds, keySets)) {
-                            continue;
-                        }
-                        granulesRead++;
-                        // Feature 2 (PREWHERE / late materialization): evaluate the most selective
-                        // predicate column first; read each later column ONLY at the rows that still
-                        // survive, so unselective columns are barely touched.
-                        int[] survivors = new int[to - from];
-                        for (int i = from; i < to; i++) {
-                            survivors[i - from] = i;
+                    // Feature 3 (sparse primary index): if the page carries a sort index AND the
+                    // predicate bounds its sort column, binary-search the sorted marks to a tiny
+                    // granule window, then dereference the permutation to the candidate PHYSICAL rows.
+                    // The page stays in publish order; only this side index is consulted.
+                    Bound sortBound = StreamLakeBatchPage.hasSortIndex(pageData)
+                            ? boundOn(bounds, (short) StreamLakeBatchPage.sortColumnId(pageData))
+                            : null;
+                    if (sortBound != null) {
+                        StreamLakeBatchPage.SortIndex idx = StreamLakeBatchPage.decodeSortIndex(pageData);
+                        int[] window = sparseWindow(idx.marks, sortBound);
+                        granulesExamined += window[1] - window[0];
+                        granulesRead += window[1] - window[0];
+                        int lo = window[0] * gsize;
+                        int hi = Math.min(window[1] * gsize, n);
+                        int[] survivors = new int[Math.max(0, hi - lo)];
+                        for (int i = lo; i < hi; i++) {
+                            survivors[i - lo] = idx.perm[i]; // physical (publish-order) row
                         }
                         int survivorCount = survivors.length;
-                        for (Bound b : orderBySelectivity(bounds, zone, g)) {
+                        // evaluate the sort-key bound first (it drove the index), then the rest
+                        for (Bound b : sortFirst(bounds, sortBound)) {
                             if (survivorCount == 0) {
                                 break;
                             }
@@ -265,13 +253,40 @@ public final class StreamLakePageScan {
                             }
                             survivorCount = w;
                         }
-                        for (int i = 0; i < survivorCount; i++) {
-                            ByteBuf msg = StreamLakeBatchPage.messageAt(pageData, survivors[i]);
-                            try {
-                                result.add(extractRow(msg));
-                            } finally {
-                                msg.release();
+                        materialize(pageData, survivors, survivorCount, result);
+                    } else {
+                        // no sort index applicable: inspect each physical granule's zone map and prune.
+                        for (int g = 0; g < numG; g++) {
+                            granulesExamined++;
+                            int from = g * gsize;
+                            int to = Math.min(from + gsize, n);
+                            if (granuleSkipped(zone, g, bounds, keySets)) {
+                                continue;
                             }
+                            granulesRead++;
+                            // Feature 2 (PREWHERE / late materialization): evaluate the most selective
+                            // predicate column first; read each later column ONLY at surviving rows.
+                            int[] survivors = new int[to - from];
+                            for (int i = from; i < to; i++) {
+                                survivors[i - from] = i;
+                            }
+                            int survivorCount = survivors.length;
+                            for (Bound b : orderBySelectivity(bounds, zone, g)) {
+                                if (survivorCount == 0) {
+                                    break;
+                                }
+                                long[] vals = StreamLakeBatchPage.readColumnAt(pageData, b.columnId,
+                                        survivors, survivorCount);
+                                cellsScanned += survivorCount;
+                                int w = 0;
+                                for (int i = 0; i < survivorCount; i++) {
+                                    if (passes(b, vals[i])) {
+                                        survivors[w++] = survivors[i];
+                                    }
+                                }
+                                survivorCount = w;
+                            }
+                            materialize(pageData, survivors, survivorCount, result);
                         }
                     }
                 } finally {
@@ -291,6 +306,30 @@ public final class StreamLakePageScan {
             }
         }
         return null;
+    }
+
+    /** Bounds with {@code sortBound} first (it drove the sparse index), then the rest in order. */
+    private static List<Bound> sortFirst(List<Bound> bounds, Bound sortBound) {
+        List<Bound> ordered = new ArrayList<>(bounds.size());
+        ordered.add(sortBound);
+        for (Bound b : bounds) {
+            if (b != sortBound) {
+                ordered.add(b);
+            }
+        }
+        return ordered;
+    }
+
+    /** Materialize the surviving rows (by physical row index) into the result list. */
+    private static void materialize(ByteBuf pageData, int[] survivors, int count, List<Row> result) {
+        for (int i = 0; i < count; i++) {
+            ByteBuf msg = StreamLakeBatchPage.messageAt(pageData, survivors[i]);
+            try {
+                result.add(extractRow(msg));
+            } finally {
+                msg.release();
+            }
+        }
     }
 
     /** True if a granule's zone map proves it cannot contain a row matching the predicate. */

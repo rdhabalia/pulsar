@@ -32,8 +32,12 @@ import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.conf.ClientConfiguration;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
+import org.apache.pulsar.client.api.Consumer;
+import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.Producer;
+import org.apache.pulsar.client.api.SubscriptionInitialPosition;
+import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.StreamingLakeConfig;
 import org.awaitility.Awaitility;
@@ -221,6 +225,42 @@ public class StreamLakeSkipIndexTest extends StreamLakeRealBookieTestBase {
             assertEquals(gt.granulesRead, 1);
         } finally {
             bk.close();
+        }
+    }
+
+    /**
+     * The sparse index must NOT change pub-sub delivery order. With {@code sortColumnId} set and ids
+     * produced in a scrambled order, an ordinary consumer must still receive messages in <b>publish
+     * order</b> (r-0, r-1, …) — because the page keeps publish order on disk and only stores the sort
+     * permutation as a side index the transcoder never reads.
+     */
+    @Test(timeOut = 120_000)
+    public void sortIndexDoesNotChangeConsumerDeliveryOrder() throws Exception {
+        String topic = "persistent://" + NAMESPACE + "/sparse-order";
+        StreamingLakeConfig cfg = StreamingLakeConfig.builder().enabled(true).batchingEnabled(true)
+                .maxPageMessages(25).pageGroupingDelayMs(5_000).granuleSize(5).sortColumnId(V)
+                .indexedColumns(Arrays.asList(col(V, "id"))).build();
+        // ids scrambled so that a sorted layout would deliver a very different order than publish order
+        produce(topic, cfg, 50, (m, i) -> m.property("id", String.valueOf((i * 37) % 50)));
+
+        Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topic)
+                .subscriptionName("order").subscriptionType(SubscriptionType.Shared)
+                .subscriptionInitialPosition(SubscriptionInitialPosition.Earliest).subscribe();
+        try {
+            List<String> received = new ArrayList<>();
+            for (int i = 0; i < 50; i++) {
+                Message<byte[]> m = consumer.receive(30, TimeUnit.SECONDS);
+                org.testng.Assert.assertNotNull(m, "missing message " + i);
+                received.add(new String(m.getValue()));
+                consumer.acknowledge(m);
+            }
+            List<String> expected = new ArrayList<>();
+            for (int i = 0; i < 50; i++) {
+                expected.add("r-" + i);
+            }
+            assertEquals(received, expected, "consumer must receive publish order, not sort-key order");
+        } finally {
+            consumer.close();
         }
     }
 

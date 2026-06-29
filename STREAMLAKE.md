@@ -335,9 +335,11 @@ Three ClickHouse data‑skipping borrows ride on top of the zone map (all broker
 - **PREWHERE / late materialization** — with several predicate columns the scan evaluates the **most
   selective first** (estimated from the granule's zone map) and reads each later column **only at the
   rows that still survive**, so unselective columns are barely touched. Reported as `cellsScanned`.
-- **Sparse primary index** — set `sortColumnId` and a page's rows are **sorted by that key**, making the
-  per‑granule marks monotonic. A predicate on that key then **binary‑searches** the candidate granule
-  window instead of inspecting every granule. Reported as `granulesExamined`.
+- **Sparse primary index** — set `sortColumnId` and the page stores a **sort permutation + per‑(sorted‑)
+  granule marks** as a side index. A predicate on that key **binary‑searches** the marks to a tiny
+  granule window, then dereferences the permutation to the matching physical rows. The page's rows are
+  **not reordered** — payloads stay in **publish order**, so ordinary consumer delivery is unchanged
+  (the transcoder never reads the sort index). Reported as `granulesExamined`.
 
 Stats: `granulesTotal`, `granulesExamined`, `granulesRead`, `cellsScanned`.
 

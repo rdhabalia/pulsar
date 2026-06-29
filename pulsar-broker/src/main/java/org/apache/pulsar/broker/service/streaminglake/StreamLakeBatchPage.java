@@ -32,20 +32,27 @@ import org.apache.bookkeeper.bookie.storage.ldb.BloomFilter;
  * <b>granules</b> (sub-page row groups) each with a per-column <b>zone map</b>. A zone map carries
  * min/max, a value bloom, and — for low-cardinality columns — an <b>exact value set</b> (ClickHouse
  * {@code set(N)}) so equality/IN predicates prune a granule with no false positives even when the
- * value lies inside [min,max]. When a {@code sortColumnId} is configured the page's rows are
- * <b>sorted</b> by that column, so the per-granule marks form a <b>sparse primary index</b> that the
- * scan binary-searches instead of inspecting every granule.
+ * value lies inside [min,max].
+ *
+ * <p>When a {@code sortColumnId} is configured the page additionally stores a <b>sparse primary
+ * index</b>: a permutation of the rows by the sort key plus per-(sorted-)granule marks. The page's
+ * <b>rows are NOT reordered</b> — payloads, column data and the payload index stay in <b>publish
+ * order</b>, so ordinary consumers receive messages in the original order (the transcoder never reads
+ * the sort index). Only the scan uses it, binary-searching the marks to a tiny granule window and
+ * then dereferencing the permutation to the matching physical rows.
  *
  * <pre>
- *   header(46): magic 'SLB1' | version 1 | flags | numMessages | numCols | minDate | maxDate
+ *   header(50): magic 'SLB1' | version 1 | flags | numMessages | numCols | minDate | maxDate
  *               | granuleSize | numGranules | zoneMapOffset | payloadIndexOffset | sortColumnId
+ *               | sortIndexOffset
  *   column directory:  numCols x [ columnId(2) type(1) dataOffset(4) ]
  *   zone maps:         per column, per granule
  *                        [ min(8) max(8) bloomLen(4) bloomBytes setCount(4) setVals(8 x setCount) ]
  *                        setCount == -1 means "no exact set" (cardinality above the cap)
- *   column data:       per column, numMessages values (INT=4, LONG=8)   (column-major)
- *   payload index:     (numMessages+1) x offset(4)
- *   payloads:          each message's headersAndPayload
+ *   sort index:        (iff FLAG_SORTED) numGranules x [ min(8) max(8) ] then perm(numMessages x 4)
+ *   column data:       per column, numMessages values (INT=4, LONG=8)   (column-major, publish order)
+ *   payload index:     (numMessages+1) x offset(4)                      (publish order)
+ *   payloads:          each message's headersAndPayload                 (publish order)
  * </pre>
  */
 public final class StreamLakeBatchPage {
@@ -72,7 +79,8 @@ public final class StreamLakeBatchPage {
     private static final int OFF_ZONEMAP_OFFSET = 36;
     private static final int OFF_PAYLOAD_INDEX_OFFSET = 40;
     private static final int OFF_SORT_COL = 44;
-    private static final int HEADER = 46;
+    private static final int OFF_SORTINDEX_OFFSET = 46;
+    private static final int HEADER = 50;
     private static final int DIR_ENTRY = 7; // columnId(2) + type(1) + dataOffset(4)
 
     private StreamLakeBatchPage() {
@@ -131,8 +139,10 @@ public final class StreamLakeBatchPage {
         int g = Math.max(1, granuleSize);
         int numGranules = Math.max(1, (n + g - 1) / g);
 
-        // optional: sort rows by the primary/sort key so per-granule marks form a sparse index
-        boolean sorted = false;
+        // optional sparse primary index: compute the sort permutation of the rows by the sort key,
+        // but DO NOT reorder the page. Payloads, column data and the payload index stay in publish
+        // order so ordinary consumer delivery is unchanged; the permutation + per-(sorted-)granule
+        // marks are written as a side index that only the scan reads.
         int sortColIdx = -1;
         if (sortColumnId != 0) {
             for (int c = 0; c < numCols; c++) {
@@ -142,8 +152,11 @@ public final class StreamLakeBatchPage {
                 }
             }
         }
-        List<ByteBuf> msgs = messages;
-        if (sortColIdx >= 0 && n > 1) {
+        boolean hasSortIndex = sortColIdx >= 0;
+        int[] sortPerm = null;       // sortPerm[k] = physical row of the k-th smallest sort-key value
+        long[] sortMarkMin = null;   // per logical (sorted) granule, monotonic non-decreasing
+        long[] sortMarkMax = null;
+        if (hasSortIndex) {
             final int sc = sortColIdx;
             final long[][] cv = columnValues;
             Integer[] perm = new Integer[n];
@@ -151,18 +164,20 @@ public final class StreamLakeBatchPage {
                 perm[i] = i;
             }
             java.util.Arrays.sort(perm, (a, b) -> Long.compare(cv[sc][a], cv[sc][b]));
-            List<ByteBuf> sm = new ArrayList<>(n);
-            long[][] sv = new long[numCols][n];
+            sortPerm = new int[n];
             for (int i = 0; i < n; i++) {
-                sm.add(messages.get(perm[i]));
-                for (int c = 0; c < numCols; c++) {
-                    sv[c][i] = columnValues[c][perm[i]];
-                }
+                sortPerm[i] = perm[i];
             }
-            msgs = sm;
-            columnValues = sv;
-            sorted = true;
+            sortMarkMin = new long[numGranules];
+            sortMarkMax = new long[numGranules];
+            for (int k = 0; k < numGranules; k++) {
+                int from = k * g;
+                int to = Math.min(from + g, n);
+                sortMarkMin[k] = columnValues[sc][sortPerm[from]];
+                sortMarkMax[k] = columnValues[sc][sortPerm[to - 1]];
+            }
         }
+        List<ByteBuf> msgs = messages;
 
         // build per-column, per-granule min/max + bloom + (optional) exact value set
         long[][] gMin = new long[numCols][numGranules];
@@ -210,6 +225,11 @@ public final class StreamLakeBatchPage {
                         + (gSet[c][gi] == null ? 0 : gSet[c][gi].length * 8);
             }
         }
+        int sortIndexStart = cursor;
+        if (hasSortIndex) {
+            cursor += numGranules * 16;   // per logical granule: min(8) + max(8)
+            cursor += n * 4;              // perm
+        }
         int[] colOffset = new int[numCols];
         for (int c = 0; c < numCols; c++) {
             colOffset[c] = cursor;
@@ -230,7 +250,7 @@ public final class StreamLakeBatchPage {
         ByteBuf out = Unpooled.buffer(total, total);
         out.writeInt(MAGIC);
         out.writeByte(VERSION);
-        out.writeByte(FLAG_COLUMNAR | (sorted ? FLAG_SORTED : 0));
+        out.writeByte(FLAG_COLUMNAR | (hasSortIndex ? FLAG_SORTED : 0));
         out.writeInt(n);
         out.writeShort(numCols);
         out.writeLong(minDate);
@@ -239,7 +259,8 @@ public final class StreamLakeBatchPage {
         out.writeInt(numGranules);
         out.writeInt(zoneMapStart);
         out.writeInt(payloadIndexOffset);
-        out.writeShort(sorted ? sortColumnId : 0);
+        out.writeShort(hasSortIndex ? sortColumnId : 0);
+        out.writeInt(hasSortIndex ? sortIndexStart : 0);
         // directory
         for (int c = 0; c < numCols; c++) {
             out.writeShort(columnIds[c]);
@@ -260,6 +281,16 @@ public final class StreamLakeBatchPage {
                         out.writeLong(v);
                     }
                 }
+            }
+        }
+        // sort index (sparse primary index over a sorted VIEW; the page itself stays in publish order)
+        if (hasSortIndex) {
+            for (int k = 0; k < numGranules; k++) {
+                out.writeLong(sortMarkMin[k]);
+                out.writeLong(sortMarkMax[k]);
+            }
+            for (int i = 0; i < n; i++) {
+                out.writeInt(sortPerm[i]);
             }
         }
         // column data
@@ -302,14 +333,48 @@ public final class StreamLakeBatchPage {
         return page.getInt(page.readerIndex() + OFF_NUM_GRANULES);
     }
 
-    /** True if the page's rows are sorted by {@link #sortColumnId} (sparse-index ready). */
-    public static boolean isSorted(ByteBuf page) {
+    /** True if the page carries a sparse primary index (the page itself stays in publish order). */
+    public static boolean hasSortIndex(ByteBuf page) {
         return (page.getByte(page.readerIndex() + OFF_FLAGS) & FLAG_SORTED) != 0;
     }
 
-    /** The column id the page is sorted by, or 0 if unsorted. */
+    /** The column id the sparse primary index is built on, or 0 if none. */
     public static int sortColumnId(ByteBuf page) {
         return page.getShort(page.readerIndex() + OFF_SORT_COL) & 0xFFFF;
+    }
+
+    /** The sparse primary index: per-(sorted-)granule marks plus the row permutation. */
+    public static final class SortIndex {
+        /** min/max of the sort key per sorted granule (monotonic non-decreasing); bloom/set null. */
+        public final GranuleStat[] marks;
+        /** perm[k] = physical (publish-order) row of the k-th smallest sort-key value. */
+        public final int[] perm;
+
+        SortIndex(GranuleStat[] marks, int[] perm) {
+            this.marks = marks;
+            this.perm = perm;
+        }
+    }
+
+    /** Decode the sparse primary index (only valid when {@link #hasSortIndex} is true). */
+    public static SortIndex decodeSortIndex(ByteBuf page) {
+        int base = page.readerIndex();
+        int n = page.getInt(base + OFF_NUM_MESSAGES);
+        int numGranules = page.getInt(base + OFF_NUM_GRANULES);
+        int off = base + page.getInt(base + OFF_SORTINDEX_OFFSET);
+        GranuleStat[] marks = new GranuleStat[numGranules];
+        for (int k = 0; k < numGranules; k++) {
+            long mn = page.getLong(off);
+            long mx = page.getLong(off + 8);
+            marks[k] = new GranuleStat(mn, mx, null, null);
+            off += 16;
+        }
+        int[] perm = new int[n];
+        for (int i = 0; i < n; i++) {
+            perm[i] = page.getInt(off);
+            off += 4;
+        }
+        return new SortIndex(marks, perm);
     }
 
     /** Decode the per-column granule zone maps: columnId -&gt; one GranuleStat per granule. */

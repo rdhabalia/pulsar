@@ -174,7 +174,7 @@ brute‑force oracle, and asserts the bloom key‑set prunes Orders pages beyond
 ./gradlew :pulsar-broker:test \
   --tests "org.apache.pulsar.broker.service.streaminglake.StreamLakeSkipIndexTest"
 # expect: set index v==5 reads 1 granule / v==50 reads 0; PREWHERE cellsScanned==101 (vs 200);
-#         sparse index id==512 examines 1 of 100 granules. Tests run: 3, Failures: 0
+#         sparse index id==512 examines 1 of 100 granules; consumer order preserved. Tests run: 4, Failures: 0
 ```
 
 ### 3.3 Join demo — run it and see the output file
@@ -214,7 +214,7 @@ bloom) read only the 4 pages that can contain the 4 gold US‑WEST customers, sk
 ### 3.4 Full StreamLake regression (optional)
 ```bash
 ./gradlew :pulsar-broker:test --tests "org.apache.pulsar.broker.service.streaminglake.*"
-# expect: 21 tests, 0 failures (includes the join, both demos, granule + skip-index tests)
+# expect: 22 tests, 0 failures (includes the join, both demos, granule + skip-index tests)
 ```
 
 ---
@@ -248,13 +248,22 @@ set of surviving row indices, then reads each later column **only at those rows*
 > a wide range on `b` (all match). The selective column `a` is read in full (100 cells) → 1 survivor;
 > `b` is read for just that row → `cellsScanned == 101`, versus the naive 200.
 
-### Sparse primary index — binary‑searched, key‑sorted pages
-ClickHouse's primary index is **sparse** (one mark per granule over sorted data). Set `sortColumnId`
-and a page's rows are **sorted by that key** at encode time (`FLAG_SORTED`), so the per‑granule marks
-(mins/maxs) are monotonic. A predicate on the sort key then **binary‑searches** the candidate granule
-window (`sparseWindow`) instead of inspecting every granule's zone map; `granulesExamined` reports how
-many granule maps were inspected.
+### Sparse primary index — binary‑searched, **without reordering the log**
+ClickHouse's primary index is **sparse** (one mark per granule over sorted data) — but ClickHouse can
+sort its data because it isn't also a pub‑sub log. A StreamLake page **is** a bookie entry that ordinary
+consumers read (via `StreamLakeTranscoder`, which delivers `StreamLakeBatchPage.decode()` in stored
+order), so reordering rows on disk would **change pub‑sub delivery order**. We get the index without
+that cost: set `sortColumnId` and the page keeps every row in **publish order**, but additionally stores
+a **side index** (`FLAG_SORTED`) — a permutation `perm[k] = physical row of the k‑th smallest key`, plus
+per‑(sorted‑)granule **marks** (min/max, monotonic). The scan binary‑searches the marks (`sparseWindow`)
+to a tiny granule window, then **dereferences `perm`** to the candidate physical rows and reads them via
+`readColumnAt`. The transcoder never reads the sort index, so **consumers are unaffected**;
+`granulesExamined` reports how many marks were inspected.
 
-> Test `sparseIndexBinarySearchesSortedGranules`: one page of 1000 rows inserted in a scrambled
-> permutation; sorted into 100 granules of 10. `id == 512` inspects **1** of 100 granules (binary
-> search), and `id > 994` likewise inspects only the last granule's window — versus 100 unsorted.
+> Test `sparseIndexBinarySearchesSortedGranules`: one page of 1000 rows in a scrambled permutation,
+> 100 granules of 10. `id == 512` inspects **1** of 100 granules (binary search), `id > 994` likewise
+> only the last window — versus 100 without the index.
+>
+> Test `sortIndexDoesNotChangeConsumerDeliveryOrder`: with `sortColumnId` set and ids produced
+> scrambled, an ordinary `Shared` consumer still receives messages in **publish order** (`r-0, r-1, …`),
+> proving the page stays in publish order and only the side index is sorted.
