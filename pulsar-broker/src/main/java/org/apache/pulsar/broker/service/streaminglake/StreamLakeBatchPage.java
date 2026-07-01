@@ -45,12 +45,13 @@ import org.apache.bookkeeper.bookie.storage.ldb.BloomFilter;
  *   header(50): magic 'SLB1' | version 1 | flags | numMessages | numCols | minDate | maxDate
  *               | granuleSize | numGranules | zoneMapOffset | payloadIndexOffset | sortColumnId
  *               | sortIndexOffset
- *   column directory:  numCols x [ columnId(2) type(1) dataOffset(4) ]
+ *   column directory:  numCols x [ columnId(2) type(1) codecId(1) dataOffset(4) encodedLen(4) ]
  *   zone maps:         per column, per granule
  *                        [ min(8) max(8) bloomLen(4) bloomBytes setCount(4) setVals(8 x setCount) ]
  *                        setCount == -1 means "no exact set" (cardinality above the cap)
  *   sort index:        (iff FLAG_SORTED) numGranules x [ min(8) max(8) ] then perm(numMessages x 4)
- *   column data:       per column, numMessages values (INT=4, LONG=8)   (column-major, publish order)
+ *   column data:       per column, a {@link StreamLakeColumnCodec} block (raw fixed-stride when
+ *                        compression is off; FLAG_VORTEX is set when any column is compressed)
  *   payload index:     (numMessages+1) x offset(4)                      (publish order)
  *   payloads:          each message's headersAndPayload                 (publish order)
  * </pre>
@@ -81,7 +82,11 @@ public final class StreamLakeBatchPage {
     private static final int OFF_SORT_COL = 44;
     private static final int OFF_SORTINDEX_OFFSET = 46;
     private static final int HEADER = 50;
-    private static final int DIR_ENTRY = 7; // columnId(2) + type(1) + dataOffset(4)
+    // columnId(2) + type(1) + codecId(1) + dataOffset(4) + encodedLen(4)
+    private static final int DIR_ENTRY = 12;
+    private static final int DIR_CODEC = 3;   // codecId offset within a directory entry
+    private static final int DIR_OFFSET = 4;  // dataOffset offset within a directory entry
+    private static final int DIR_ENC_LEN = 8; // encodedLen offset within a directory entry
 
     private StreamLakeBatchPage() {
     }
@@ -130,10 +135,11 @@ public final class StreamLakeBatchPage {
      * @param granuleSize      rows per granule (clamped to ≥ 1)
      * @param sortColumnId     sort rows by this column so granule marks form a sparse index (0 = none)
      * @param setMaxCardinality store an exact value set per granule up to this distinct count (else bloom only)
+     * @param compress         compress each column block with the smallest lossless integer codec
      */
     public static ByteBuf encode(List<ByteBuf> messages, int[] columnIds, byte[] columnTypes,
                                  long[][] columnValues, long minDate, long maxDate, int granuleSize,
-                                 int sortColumnId, int setMaxCardinality) {
+                                 int sortColumnId, int setMaxCardinality, boolean compress) {
         int n = messages.size();
         int numCols = columnIds.length;
         int g = Math.max(1, granuleSize);
@@ -230,10 +236,17 @@ public final class StreamLakeBatchPage {
             cursor += numGranules * 16;   // per logical granule: min(8) + max(8)
             cursor += n * 4;              // perm
         }
+        // encode each column block with the smallest lossless codec (raw when compression is off)
+        StreamLakeColumnCodec.Encoded[] colEnc = new StreamLakeColumnCodec.Encoded[numCols];
+        boolean hasVortex = false;
+        for (int c = 0; c < numCols; c++) {
+            colEnc[c] = StreamLakeColumnCodec.encode(columnValues[c], n, columnTypes[c], compress);
+            hasVortex |= colEnc[c].codecId != StreamLakeColumnCodec.RAW;
+        }
         int[] colOffset = new int[numCols];
         for (int c = 0; c < numCols; c++) {
             colOffset[c] = cursor;
-            cursor += n * (columnTypes[c] == TYPE_LONG ? 8 : 4);
+            cursor += colEnc[c].bytes.length;
         }
         int payloadIndexOffset = cursor;
         cursor += (n + 1) * 4;
@@ -250,7 +263,7 @@ public final class StreamLakeBatchPage {
         ByteBuf out = Unpooled.buffer(total, total);
         out.writeInt(MAGIC);
         out.writeByte(VERSION);
-        out.writeByte(FLAG_COLUMNAR | (hasSortIndex ? FLAG_SORTED : 0));
+        out.writeByte(FLAG_COLUMNAR | (hasSortIndex ? FLAG_SORTED : 0) | (hasVortex ? FLAG_VORTEX : 0));
         out.writeInt(n);
         out.writeShort(numCols);
         out.writeLong(minDate);
@@ -265,7 +278,9 @@ public final class StreamLakeBatchPage {
         for (int c = 0; c < numCols; c++) {
             out.writeShort(columnIds[c]);
             out.writeByte(columnTypes[c]);
+            out.writeByte(colEnc[c].codecId);
             out.writeInt(colOffset[c]);
+            out.writeInt(colEnc[c].bytes.length);
         }
         // zone maps (column-major: all granules of col 0, then col 1, ...)
         for (int c = 0; c < numCols; c++) {
@@ -293,15 +308,9 @@ public final class StreamLakeBatchPage {
                 out.writeInt(sortPerm[i]);
             }
         }
-        // column data
+        // column data (one self-contained codec block per column, in directory order)
         for (int c = 0; c < numCols; c++) {
-            for (int i = 0; i < n; i++) {
-                if (columnTypes[c] == TYPE_LONG) {
-                    out.writeLong(columnValues[c][i]);
-                } else {
-                    out.writeInt((int) columnValues[c][i]);
-                }
-            }
+            out.writeBytes(colEnc[c].bytes);
         }
         // payload index + payloads
         for (int i = 0; i <= n; i++) {
@@ -336,6 +345,11 @@ public final class StreamLakeBatchPage {
     /** True if the page carries a sparse primary index (the page itself stays in publish order). */
     public static boolean hasSortIndex(ByteBuf page) {
         return (page.getByte(page.readerIndex() + OFF_FLAGS) & FLAG_SORTED) != 0;
+    }
+
+    /** True if any of the page's column blocks are stored with a compression codec (FLAG_VORTEX). */
+    public static boolean hasCompressedColumns(ByteBuf page) {
+        return (page.getByte(page.readerIndex() + OFF_FLAGS) & FLAG_VORTEX) != 0;
     }
 
     /** The column id the sparse primary index is built on, or 0 if none. */
@@ -415,41 +429,76 @@ public final class StreamLakeBatchPage {
         return out;
     }
 
-    private static int columnDataOrigin(ByteBuf page, int columnId, byte[] typeOut) {
+    /** Resolved column directory entry: data origin, type, codec id, and encoded block length. */
+    private static final class ColRef {
+        final int origin;     // absolute byte offset of the column block in the page
+        final byte type;
+        final byte codecId;
+        final int encodedLen;
+
+        ColRef(int origin, byte type, byte codecId, int encodedLen) {
+            this.origin = origin;
+            this.type = type;
+            this.codecId = codecId;
+            this.encodedLen = encodedLen;
+        }
+    }
+
+    private static ColRef colRef(ByteBuf page, int columnId) {
         int base = page.readerIndex();
         int numCols = page.getShort(base + OFF_NUM_COLS);
         int dir = base + HEADER;
         for (int c = 0; c < numCols; c++) {
             int entry = dir + c * DIR_ENTRY;
             if ((page.getShort(entry) & 0xFFFF) == columnId) {
-                typeOut[0] = page.getByte(entry + 2);
-                return base + page.getInt(entry + 3);
+                byte type = page.getByte(entry + 2);
+                byte codec = page.getByte(entry + DIR_CODEC);
+                int origin = base + page.getInt(entry + DIR_OFFSET);
+                int encLen = page.getInt(entry + DIR_ENC_LEN);
+                return new ColRef(origin, type, codec, encLen);
             }
         }
         throw new IllegalArgumentException("column not found: " + columnId);
     }
 
+    /** Decode a whole (compressed) column block into normalized values. */
+    private static long[] decodeColumnBlock(ByteBuf page, ColRef ref, int n) {
+        byte[] blob = new byte[ref.encodedLen];
+        page.getBytes(ref.origin, blob);
+        return StreamLakeColumnCodec.decode(ref.codecId, blob, n);
+    }
+
     /** Read column {@code columnId}'s values for rows [{@code fromRow}, {@code toRow}). */
     public static long[] readColumnRange(ByteBuf page, int columnId, int fromRow, int toRow) {
-        byte[] type = new byte[1];
-        int origin = columnDataOrigin(page, columnId, type);
+        ColRef ref = colRef(page, columnId);
         long[] values = new long[toRow - fromRow];
-        for (int i = fromRow; i < toRow; i++) {
-            values[i - fromRow] = type[0] == TYPE_LONG
-                    ? page.getLong(origin + i * 8) : page.getInt(origin + i * 4);
+        if (ref.codecId == StreamLakeColumnCodec.RAW) {
+            for (int i = fromRow; i < toRow; i++) {
+                values[i - fromRow] = ref.type == TYPE_LONG
+                        ? page.getLong(ref.origin + i * 8) : page.getInt(ref.origin + i * 4);
+            }
+            return values;
         }
+        long[] all = decodeColumnBlock(page, ref, messageCount(page));
+        System.arraycopy(all, fromRow, values, 0, toRow - fromRow);
         return values;
     }
 
     /** Read column {@code columnId}'s values only at the given row indices (late materialization). */
     public static long[] readColumnAt(ByteBuf page, int columnId, int[] rows, int count) {
-        byte[] type = new byte[1];
-        int origin = columnDataOrigin(page, columnId, type);
+        ColRef ref = colRef(page, columnId);
         long[] values = new long[count];
+        if (ref.codecId == StreamLakeColumnCodec.RAW) {
+            for (int i = 0; i < count; i++) {
+                int r = rows[i];
+                values[i] = ref.type == TYPE_LONG
+                        ? page.getLong(ref.origin + r * 8) : page.getInt(ref.origin + r * 4);
+            }
+            return values;
+        }
+        long[] all = decodeColumnBlock(page, ref, messageCount(page));
         for (int i = 0; i < count; i++) {
-            int r = rows[i];
-            values[i] = type[0] == TYPE_LONG
-                    ? page.getLong(origin + r * 8) : page.getInt(origin + r * 4);
+            values[i] = all[rows[i]];
         }
         return values;
     }

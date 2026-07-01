@@ -80,12 +80,18 @@ page-level ranges: deptId[min=1,max=2], salary[min=10,max=30]
 ```
 
 > Code: `StreamLakeBatchPage.encode()` lays out a column directory + contiguous column arrays +
-> the original message payloads. **Vortex is not wired** (no usable JVM binding); the JVM
-> column‑major codec sits behind the same API and a `FLAG_VORTEX` bit is reserved for it.
+> the original message payloads. **Vortex is not wired** (no usable JVM binding); instead a JVM
+> column‑major codec (`StreamLakeColumnCodec`) sits behind the same `FLAG_VORTEX` bit: when the
+> topic sets `columnCompressionEnabled`, each column block is stored with the smallest of several
+> lossless integer codecs (frame‑of‑reference, delta, double‑delta, dictionary, or raw). Decoding
+> reproduces the exact values, so pruning, selective decode and consumer delivery are unchanged —
+> it only shrinks the stored/transferred column bytes. The column directory entry therefore records
+> a per‑column `codecId` + `encodedLen`, and the page sets `FLAG_VORTEX` when any column is
+> compressed. Default off (raw fixed‑stride columns).
 
 **4. Version + encoding flag in the entry.**
 The page header carries `magic='SLB2'`, a `version` byte, and a `flags` byte (`FLAG_COLUMNAR`,
-and a reserved `FLAG_VORTEX`).
+`FLAG_SORTED`, and `FLAG_VORTEX` — the last set when column blocks are compressed).
 
 > Code: `StreamLakeBatchPage` header (`MAGIC`, `VERSION`, `FLAG_COLUMNAR`, `FLAG_VORTEX`).
 

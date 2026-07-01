@@ -30,6 +30,8 @@ import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.pulsar.broker.service.Topic.PublishContext;
 import org.apache.pulsar.common.policies.data.StreamingLakeConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Broker-side batcher for a StreamLake topic. Buffers published messages and, once the page
@@ -42,6 +44,8 @@ import org.apache.pulsar.common.policies.data.StreamingLakeConfig;
  * distinct batch indices when the page is transcoded back into a standard batch on read.
  */
 public class StreamLakeBatcher {
+
+    private static final Logger log = LoggerFactory.getLogger(StreamLakeBatcher.class);
 
     private final ManagedLedger ledger;
     private final StreamingLakeConfig config;
@@ -103,12 +107,32 @@ public class StreamLakeBatcher {
         contexts.clear();
         bufferedBytes = 0;
 
-        final StreamLakeRangeBuilder.ColumnData cols = StreamLakeRangeBuilder.extractColumns(config, batch);
-        final long[] dateRange = StreamLakeRangeBuilder.dateRange(batch);
-        final ByteBuf page = StreamLakeBatchPage.encode(batch, cols.columnIds, cols.columnTypes, cols.values,
-                dateRange[0], dateRange[1], config.getGranuleSize(),
-                config.getSortColumnId(), config.getSetMaxCardinality());
-        final byte[] ranges = StreamLakeRangeBuilder.buildForBatch(config, batch);
+        final long[] dateRange;
+        final ByteBuf page;
+        final byte[] ranges;
+        try {
+            final StreamLakeRangeBuilder.ColumnData cols =
+                    StreamLakeRangeBuilder.extractColumns(config, batch);
+            dateRange = StreamLakeRangeBuilder.dateRange(batch);
+            page = StreamLakeBatchPage.encode(batch, cols.columnIds, cols.columnTypes, cols.values,
+                    dateRange[0], dateRange[1], config.getGranuleSize(),
+                    config.getSortColumnId(), config.getSetMaxCardinality(),
+                    config.isColumnCompressionEnabled());
+            ranges = StreamLakeRangeBuilder.buildForBatch(config, batch);
+        } catch (Exception t) {
+            // A seal-time failure must fail the buffered publishes, not silently hang them.
+            log.error("StreamLake page seal failed for {} messages on {}: {}",
+                    batch.size(), ledger.getName(), t.toString(), t);
+            for (ByteBuf b : batch) {
+                b.release();
+            }
+            ManagedLedgerException mle = t instanceof ManagedLedgerException
+                    ? (ManagedLedgerException) t : new ManagedLedgerException(t);
+            for (PublishContext pc : ctxs) {
+                pc.completed(mle, -1, -1);
+            }
+            return;
+        }
         for (ByteBuf b : batch) {
             b.release();
         }
@@ -126,6 +150,7 @@ public class StreamLakeBatcher {
 
             @Override
             public void addFailed(ManagedLedgerException exception, Object ctx) {
+                log.error("StreamLake page add failed on {}: {}", ledger.getName(), exception.toString());
                 for (PublishContext pc : ctxs) {
                     pc.completed(exception, -1, -1);
                 }

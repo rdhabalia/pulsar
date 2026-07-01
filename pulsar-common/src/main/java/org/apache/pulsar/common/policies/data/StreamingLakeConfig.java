@@ -80,6 +80,15 @@ public class StreamingLakeConfig {
     @Builder.Default
     private int maxPageMessages = 1000;
 
+    /**
+     * When true, each page compresses its INT/LONG column blocks with the smallest of several
+     * lossless integer codecs (frame-of-reference, delta, dictionary, or raw) chosen per column.
+     * Purely a storage/transfer optimization: decoding reproduces the exact values, so scans,
+     * pruning and consumer delivery are unchanged. Default false (raw fixed-stride columns).
+     */
+    @Builder.Default
+    private boolean columnCompressionEnabled = false;
+
     /** Grouping window: a partial page is sealed after this many ms (default 10). */
     @Builder.Default
     private long pageGroupingDelayMs = 10;
