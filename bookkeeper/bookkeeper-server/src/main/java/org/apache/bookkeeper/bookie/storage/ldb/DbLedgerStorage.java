@@ -373,6 +373,12 @@ public class DbLedgerStorage implements LedgerStorage {
     }
 
     @Override
+    public java.util.List<org.apache.bookkeeper.bookie.storage.ldb.PageStatEntry> scanPageStats(
+            long ledgerId, long startEntryId, long endEntryId) throws IOException {
+        return getLedgerStorage(ledgerId).scanPageStats(ledgerId, startEntryId, endEntryId);
+    }
+
+    @Override
     public long getLastAddConfirmed(long ledgerId) throws IOException, BookieException {
         return getLedgerStorage(ledgerId).getLastAddConfirmed(ledgerId);
     }

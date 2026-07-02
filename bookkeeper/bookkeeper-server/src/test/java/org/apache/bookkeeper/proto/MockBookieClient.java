@@ -313,6 +313,18 @@ public class MockBookieClient implements BookieClient {
     }
 
     @Override
+    public CompletableFuture<List<org.apache.bookkeeper.bookie.storage.ldb.PageStatEntry>> pageStats(
+            BookieId address, long ledgerId, long startEntryId, long endEntryId) {
+        CompletableFuture<List<org.apache.bookkeeper.bookie.storage.ldb.PageStatEntry>> future =
+                new CompletableFuture<>();
+        executor.executeOrdered(address, () ->
+                future.completeExceptionally(
+                        BKException.create(BKException.Code.IllegalOpException).fillInStackTrace())
+        );
+        return future;
+    }
+
+    @Override
     public boolean isClosed() {
         return false;
     }

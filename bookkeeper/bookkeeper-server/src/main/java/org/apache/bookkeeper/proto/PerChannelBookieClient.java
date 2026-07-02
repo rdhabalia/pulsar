@@ -902,6 +902,29 @@ public class PerChannelBookieClient extends ChannelInboundHandlerAdapter {
     }
 
     /**
+     * Streaming Lake: read this bookie's raw per-page range blobs for [startEntryId, endEntryId] of
+     * a ledger, so an index-compaction consumer can merge them into segment summaries.
+     */
+    public void pageStats(final long ledgerId, long startEntryId, long endEntryId,
+                          BookkeeperInternalCallbacks.PageStatsCallback cb) {
+        final long txnId = getTxnId();
+        final CompletionKey completionKey = new TxnCompletionKey(txnId, OperationType.PAGE_STATS);
+        completionObjects.put(completionKey, new PageStatsCompletion(completionKey, cb, ledgerId, this));
+
+        Request pageStatsRequest = new Request();
+        pageStatsRequest.setHeader()
+                .setVersion(ProtocolVersion.VERSION_THREE)
+                .setOperation(OperationType.PAGE_STATS)
+                .setTxnId(txnId);
+        pageStatsRequest.setPageStatsRequest()
+                .setLedgerId(ledgerId)
+                .setStartEntryId(startEntryId)
+                .setEndEntryId(endEntryId);
+
+        writeAndFlush(channel, completionKey, pageStatsRequest);
+    }
+
+    /**
      * Long Poll Reads.
      */
     public void readEntryWaitForLACUpdate(final long ledgerId,

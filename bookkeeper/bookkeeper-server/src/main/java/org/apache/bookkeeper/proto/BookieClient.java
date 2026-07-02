@@ -292,6 +292,13 @@ public interface BookieClient {
             long startEntryId, long endEntryId, byte[] predicate);
 
     /**
+     * Streaming Lake: read a bookie's raw per-page range blobs for [startEntryId, endEntryId] of a
+     * ledger (each paired with its entryId), for segment-index compaction. The blobs are opaque.
+     */
+    CompletableFuture<java.util.List<org.apache.bookkeeper.bookie.storage.ldb.PageStatEntry>> pageStats(
+            BookieId address, long ledgerId, long startEntryId, long endEntryId);
+
+    /**
      * @return whether bookie client object has been closed
      */
     boolean isClosed();

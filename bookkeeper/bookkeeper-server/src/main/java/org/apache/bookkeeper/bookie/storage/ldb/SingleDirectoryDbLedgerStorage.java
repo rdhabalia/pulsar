@@ -1327,4 +1327,13 @@ public class SingleDirectoryDbLedgerStorage implements CompactableLedgerStorage 
             throws IOException {
         return pageRangeIndex.giveIndexPages(ledgerId, startEntryId, endEntryId, predicateBlob);
     }
+
+    /**
+     * Page-stats read API: return each page's entryId paired with its raw range blob for
+     * [startEntryId, endEntryId] of the ledger (no predicate filtering), for index compaction.
+     */
+    public List<PageStatEntry> scanPageStats(long ledgerId, long startEntryId, long endEntryId)
+            throws IOException {
+        return pageRangeIndex.scanPageStats(ledgerId, startEntryId, endEntryId);
+    }
 }

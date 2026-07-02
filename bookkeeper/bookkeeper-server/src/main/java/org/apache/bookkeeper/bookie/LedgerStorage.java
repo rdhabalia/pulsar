@@ -242,6 +242,16 @@ public interface LedgerStorage {
     }
 
     /**
+     * Streaming Lake page-stats read API: return each page's {@code entryId} paired with its raw
+     * range blob for [startEntryId, endEntryId] of the ledger (no predicate filtering), for index
+     * compaction. Empty by default (page index not supported).
+     */
+    default java.util.List<org.apache.bookkeeper.bookie.storage.ldb.PageStatEntry> scanPageStats(
+            long ledgerId, long startEntryId, long endEntryId) throws IOException {
+        return java.util.Collections.emptyList();
+    }
+
+    /**
      * Force trigger Garbage Collection.
      */
     default void forceGC() {

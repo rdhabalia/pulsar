@@ -368,6 +368,34 @@ public class BookieClientImpl implements BookieClient, PerChannelBookieClientFac
         return futureResult;
     }
 
+    @Override
+    public CompletableFuture<java.util.List<org.apache.bookkeeper.bookie.storage.ldb.PageStatEntry>> pageStats(
+            BookieId address, long ledgerId, long startEntryId, long endEntryId) {
+        BookkeeperInternalCallbacks.FuturePageStats futureResult =
+                new BookkeeperInternalCallbacks.FuturePageStats(ledgerId);
+        final PerChannelBookieClientPool client = lookupClient(address);
+        if (client == null) {
+            futureResult.pageStatsComplete(getRc(BKException.Code.BookieHandleNotAvailableException),
+                    ledgerId, null);
+            return futureResult;
+        }
+        client.obtain((rc, pcbc) -> {
+            if (rc != BKException.Code.OK) {
+                try {
+                    executor.executeOrdered(ledgerId, () ->
+                            futureResult.pageStatsComplete(rc, ledgerId, null)
+                    );
+                } catch (RejectedExecutionException re) {
+                    futureResult.pageStatsComplete(getRc(BKException.Code.InterruptedException),
+                            ledgerId, null);
+                }
+            } else {
+                pcbc.pageStats(ledgerId, startEntryId, endEntryId, futureResult);
+            }
+        }, ledgerId);
+        return futureResult;
+    }
+
     private void completeRead(final int rc,
                               final long ledgerId,
                               final long entryId,

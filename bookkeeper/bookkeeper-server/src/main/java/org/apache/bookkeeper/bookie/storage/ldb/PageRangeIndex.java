@@ -95,6 +95,32 @@ public class PageRangeIndex implements Closeable {
         return matches;
     }
 
+    /**
+     * The bookie page-stats read API. Iterate the index for entries in [startEntryId, endEntryId]
+     * within a ledger and return each page's {@code entryId} paired with its raw range blob (no
+     * predicate filtering). Used by index compaction to merge page stats into segment summaries.
+     */
+    public List<PageStatEntry> scanPageStats(long ledgerId, long startEntryId, long endEntryId)
+            throws IOException {
+        List<PageStatEntry> stats = new ArrayList<>();
+        LongPairWrapper firstKey = LongPairWrapper.get(ledgerId, startEntryId);
+        LongPairWrapper lastKey = LongPairWrapper.get(ledgerId, endEntryId + 1); // exclusive upper bound
+        try (CloseableIterator<byte[]> it = pageRangesDb.keys(firstKey.array, lastKey.array)) {
+            while (it.hasNext()) {
+                byte[] keyBytes = it.next();
+                long entryId = getLong(keyBytes, 8);
+                byte[] pageBlob = pageRangesDb.get(keyBytes);
+                if (pageBlob != null) {
+                    stats.add(new PageStatEntry(entryId, pageBlob));
+                }
+            }
+        } finally {
+            firstKey.recycle();
+            lastKey.recycle();
+        }
+        return stats;
+    }
+
     public void delete(long ledgerId) throws IOException {
         LongPairWrapper firstKey = LongPairWrapper.get(ledgerId, 0);
         LongPairWrapper lastKey = LongPairWrapper.get(ledgerId + 1, 0);

@@ -69,6 +69,8 @@ enum OperationType {
     BATCH_READ_ENTRY = 12;
     // Streaming Lake: prune candidate pages of a ledger by column-range predicate.
     PAGE_PRUNE = 13;
+    // Streaming Lake: read raw per-page range blobs for a ledger entry range (index compaction).
+    PAGE_STATS = 14;
 }
 
 /**
@@ -99,6 +101,7 @@ message Request {
     optional ForceLedgerRequest forceLedgerRequest = 107;
     optional GetListOfEntriesOfLedgerRequest getListOfEntriesOfLedgerRequest = 108;
     optional PagePruneRequest pagePruneRequest = 109;
+    optional PageStatsRequest pageStatsRequest = 110;
     // to pass MDC context
     repeated ContextPair requestContext = 200;
 }
@@ -183,6 +186,7 @@ message Response {
     optional ForceLedgerResponse forceLedgerResponse = 107;
     optional GetListOfEntriesOfLedgerResponse getListOfEntriesOfLedgerResponse = 108;
     optional PagePruneResponse pagePruneResponse = 109;
+    optional PageStatsResponse pageStatsResponse = 110;
 }
 
 message ReadResponse {
@@ -251,6 +255,27 @@ message PagePruneResponse {
     required int64 ledgerId = 2;
     // entryIds of candidate pages that survived range pruning
     repeated int64 entryId = 3;
+}
+
+// Streaming Lake: read the raw per-page range blobs for [startEntryId, endEntryId] of a
+// ledger, so an index-compaction consumer can merge them into segment summaries. The blobs
+// are opaque to the bookie (it returns them verbatim, never decoding schema).
+message PageStatsRequest {
+    required int64 ledgerId = 1;
+    required int64 startEntryId = 2;
+    required int64 endEntryId = 3;
+}
+
+message PageStat {
+    required int64 entryId = 1;
+    // serialized per-page range blob (see PageRangeCodec)
+    optional bytes blob = 2;
+}
+
+message PageStatsResponse {
+    required StatusCode status = 1;
+    required int64 ledgerId = 2;
+    repeated PageStat stat = 3;
 }
 
 message StartTLSResponse {
