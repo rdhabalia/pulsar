@@ -47,23 +47,24 @@ import org.slf4j.LoggerFactory;
 public class StreamLakeDateIndex {
 
     private static final Logger log = LoggerFactory.getLogger(StreamLakeDateIndex.class);
-    private static final String PROP = "streamlake.datePartitionLedgerId";
     private static final byte[] PASSWORD = "streamlake-date".getBytes();
     private static final int ENTRY_SIZE = 24; // ledgerId(8) + minDate(8) + maxDate(8)
 
     private final BookKeeper bk;
     private final ManagedLedger ml;
+    private final StreamLakeMetaStore metaStore;
     private final ConcurrentMap<Long, long[]> ranges = new ConcurrentHashMap<>();
     private volatile LedgerHandle writeLedger; // null => in-memory only (BK unavailable)
 
-    private StreamLakeDateIndex(BookKeeper bk, ManagedLedger ml) {
+    private StreamLakeDateIndex(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore) {
         this.bk = bk;
         this.ml = ml;
+        this.metaStore = metaStore;
     }
 
     /** Load (replay + rotate) the date-partition-list ledger; never throws -- falls back to memory. */
-    public static StreamLakeDateIndex open(BookKeeper bk, ManagedLedger ml) {
-        StreamLakeDateIndex idx = new StreamLakeDateIndex(bk, ml);
+    public static StreamLakeDateIndex open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore) {
+        StreamLakeDateIndex idx = new StreamLakeDateIndex(bk, ml, metaStore);
         try {
             idx.loadAndRotate();
         } catch (Exception e) {
@@ -75,10 +76,9 @@ public class StreamLakeDateIndex {
     }
 
     private synchronized void loadAndRotate() throws Exception {
-        Long oldId = null;
-        String prop = ml.getProperties().get(PROP);
-        if (prop != null) {
-            oldId = Long.parseLong(prop);
+        // Pointer lives in the dedicated /streamlake node, never in the managed-ledger znode.
+        Long oldId = metaStore.read().datePartitionLedgerId;
+        if (oldId != null) {
             try {
                 LedgerHandle old = bk.openLedger(oldId, BookKeeper.DigestType.CRC32, PASSWORD);
                 long lac = old.getLastAddConfirmed();
@@ -99,7 +99,7 @@ public class StreamLakeDateIndex {
             fresh.addEntry(encode(e.getKey(), e.getValue()[0], e.getValue()[1]));
         }
         this.writeLedger = fresh;
-        ml.setProperty(PROP, Long.toString(fresh.getId()));
+        metaStore.updateDatePartitionLedgerId(fresh.getId());
         if (oldId != null && oldId != fresh.getId()) {
             try {
                 bk.deleteLedger(oldId);
