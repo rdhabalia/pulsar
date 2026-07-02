@@ -213,8 +213,9 @@ public final class SegmentSummary {
         }
 
         /**
-         * Fold one page in from its raw L0 blob (min/max from the range section; exact sets once the
-         * L0 blob carries them). Until L0 stores per-page sets, segment sets stay {@code null}.
+         * Fold one page in from its raw L0 blob: min/max from the range section, and the per-page
+         * exact set from the set section when present (a column with a range but no set contributes
+         * values without an exact set, so the segment set for that column is dropped).
          */
         public Builder addPage(long entryId, long rowsInPage, byte[] l0Blob) {
             PageRangeCodec.Decoded d = PageRangeCodec.decodeAll(l0Blob);
@@ -224,7 +225,14 @@ public final class SegmentSummary {
                     ranges.put(e.getKey(), e.getValue().get(0));
                 }
             }
-            return addPage(entryId, rowsInPage, ranges, null);
+            Map<Short, byte[][]> sets = null;
+            if (d.sets != null && !d.sets.isEmpty()) {
+                sets = new HashMap<>();
+                for (Map.Entry<Short, List<byte[]>> e : d.sets.entrySet()) {
+                    sets.put(e.getKey(), e.getValue().toArray(new byte[0][]));
+                }
+            }
+            return addPage(entryId, rowsInPage, ranges, sets);
         }
 
         public SegmentSummary build() {

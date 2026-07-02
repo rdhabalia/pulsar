@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import org.apache.bookkeeper.bookie.storage.ldb.BloomFilter;
 import org.apache.bookkeeper.bookie.storage.ldb.PageRangeCodec;
 import org.apache.pulsar.common.api.proto.KeyValue;
@@ -110,12 +111,26 @@ public final class StreamLakeRangeBuilder {
         }
         Map<Short, PageRangeCodec.Range> ranges = new HashMap<>();
         Map<Short, byte[]> blooms = new HashMap<>();
+        Map<Short, List<byte[]>> sets = new HashMap<>();
+        int setCap = config.getSetMaxCardinality();
         for (Map.Entry<Short, byte[]> e : mins.entrySet()) {
-            ranges.put(e.getKey(), new PageRangeCodec.Range(e.getValue(), maxs.get(e.getKey()), false, false));
+            short key = e.getKey();
+            List<byte[]> colValues = values.get(key);
+            ranges.put(key, new PageRangeCodec.Range(e.getValue(), maxs.get(key), false, false));
             // per-column bloom of the page's values, so the bookie can answer key-set (semi-join) probes
-            blooms.put(e.getKey(), BloomFilter.build(values.get(e.getKey()), 10));
+            blooms.put(key, BloomFilter.build(colValues, 10));
+            // per-column exact distinct set for low-cardinality columns (ClickHouse set(N)): dedup+sort
+            // the page's values and keep them only when the distinct count is within the cap. The
+            // segment-index compaction merges these per-page sets into segment-level exact sets.
+            if (setCap > 0) {
+                TreeSet<byte[]> distinct = new TreeSet<>(PageRangeCodec::lex);
+                distinct.addAll(colValues);
+                if (distinct.size() <= setCap) {
+                    sets.put(key, new ArrayList<>(distinct));
+                }
+            }
         }
-        return PageRangeCodec.encodePage(ranges, blooms);
+        return PageRangeCodec.encodePage(ranges, blooms, sets);
     }
 
     /** Column-major values for the INT/LONG indexed columns, for {@link StreamLakeBatchPage}. */

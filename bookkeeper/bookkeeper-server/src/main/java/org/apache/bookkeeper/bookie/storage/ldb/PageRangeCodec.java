@@ -109,8 +109,10 @@ public final class PageRangeCodec {
      *   byte  EXT_PRESENT(=1)
      *   short numBloomColumns      per: short columnId, int bloomLen, bloomBytes   (page side)
      *   short numKeySetColumns     per: short columnId, int numKeys, [int len, bytes]*  (predicate side)
+     *   short numSetColumns        per: short columnId, int numVals, [int len, bytes]*  (page side, optional)
      * </pre>
-     * A blob without this section (a plain range blob) is read exactly as before.
+     * The set section is written only when a set map is supplied; a blob without it (an older page
+     * blob, or a predicate blob) simply stops after the key-set section and is read exactly as before.
      */
     private static final int EXT_PRESENT = 1;
 
@@ -128,16 +130,27 @@ public final class PageRangeCodec {
 
     /** Page blob carrying per-column min/max ranges plus a per-column value bloom filter. */
     public static byte[] encodePage(Map<Short, Range> pageRanges, Map<Short, byte[]> blooms) {
-        return encodeExtended(toListMap(pageRanges), blooms, null);
+        return encodeExtended(toListMap(pageRanges), blooms, null, null);
+    }
+
+    /**
+     * Page blob carrying per-column min/max ranges, a per-column value bloom, and — for
+     * low-cardinality columns — a per-column exact distinct set (sorted order-preserving values).
+     * The set lets equality/IN pruning be exact (no false positives) and lets segment-index
+     * compaction merge per-page sets into segment sets.
+     */
+    public static byte[] encodePage(Map<Short, Range> pageRanges, Map<Short, byte[]> blooms,
+                                    Map<Short, List<byte[]>> sets) {
+        return encodeExtended(toListMap(pageRanges), blooms, null, sets);
     }
 
     /** Predicate blob carrying per-column ranges plus a per-column key-set (semi-join probe keys). */
     public static byte[] encodePredicate(Map<Short, List<Range>> ranges, Map<Short, List<byte[]>> keySets) {
-        return encodeExtended(ranges, null, keySets);
+        return encodeExtended(ranges, null, keySets, null);
     }
 
-    private static byte[] encodeExtended(Map<Short, List<Range>> ranges,
-                                         Map<Short, byte[]> blooms, Map<Short, List<byte[]>> keySets) {
+    private static byte[] encodeExtended(Map<Short, List<Range>> ranges, Map<Short, byte[]> blooms,
+                                         Map<Short, List<byte[]>> keySets, Map<Short, List<byte[]>> sets) {
         Map<Short, byte[]> bl = blooms == null ? new HashMap<>() : blooms;
         Map<Short, List<byte[]>> ks = keySets == null ? new HashMap<>() : keySets;
         int size = rangeSize(ranges) + 1 + 2 + 2;
@@ -148,6 +161,15 @@ public final class PageRangeCodec {
             size += 2 + 4;
             for (byte[] k : e.getValue()) {
                 size += 4 + k.length;
+            }
+        }
+        if (sets != null) {
+            size += 2;
+            for (Map.Entry<Short, List<byte[]>> e : sets.entrySet()) {
+                size += 2 + 4;
+                for (byte[] v : e.getValue()) {
+                    size += 4 + v.length;
+                }
             }
         }
         ByteBuffer buf = ByteBuffer.allocate(size);
@@ -166,6 +188,17 @@ public final class PageRangeCodec {
             for (byte[] k : e.getValue()) {
                 buf.putInt(k.length);
                 buf.put(k);
+            }
+        }
+        if (sets != null) {
+            buf.putShort((short) sets.size());
+            for (Map.Entry<Short, List<byte[]>> e : sets.entrySet()) {
+                buf.putShort(e.getKey());
+                buf.putInt(e.getValue().size());
+                for (byte[] v : e.getValue()) {
+                    buf.putInt(v.length);
+                    buf.put(v);
+                }
             }
         }
         return buf.array();
@@ -236,16 +269,22 @@ public final class PageRangeCodec {
         return parseRanges(ByteBuffer.wrap(blob));
     }
 
-    /** A fully-decoded blob: per-column ranges, optional page blooms, optional predicate key-sets. */
+    /**
+     * A fully-decoded blob: per-column ranges, optional page blooms, optional predicate key-sets,
+     * and optional per-column exact distinct sets (sorted order-preserving values, page side).
+     */
     public static final class Decoded {
         public final Map<Short, List<Range>> ranges;
         public final Map<Short, byte[]> blooms;
         public final Map<Short, List<byte[]>> keySets;
+        public final Map<Short, List<byte[]>> sets;
 
-        Decoded(Map<Short, List<Range>> ranges, Map<Short, byte[]> blooms, Map<Short, List<byte[]>> keySets) {
+        Decoded(Map<Short, List<Range>> ranges, Map<Short, byte[]> blooms, Map<Short, List<byte[]>> keySets,
+                Map<Short, List<byte[]>> sets) {
             this.ranges = ranges;
             this.blooms = blooms;
             this.keySets = keySets;
+            this.sets = sets;
         }
     }
 
@@ -254,6 +293,7 @@ public final class PageRangeCodec {
         Map<Short, List<Range>> ranges = parseRanges(buf);
         Map<Short, byte[]> blooms = new HashMap<>();
         Map<Short, List<byte[]>> keySets = new HashMap<>();
+        Map<Short, List<byte[]>> sets = new HashMap<>();
         if (buf.hasRemaining() && (buf.get() & 0xFF) == EXT_PRESENT) {
             int nb = buf.getShort();
             for (int i = 0; i < nb; i++) {
@@ -274,8 +314,23 @@ public final class PageRangeCodec {
                 }
                 keySets.put(col, keys);
             }
+            // optional set section (present only on page blobs written with per-page sets)
+            if (buf.hasRemaining()) {
+                int ns = buf.getShort();
+                for (int i = 0; i < ns; i++) {
+                    short col = buf.getShort();
+                    int numVals = buf.getInt();
+                    List<byte[]> vals = new ArrayList<>(numVals);
+                    for (int j = 0; j < numVals; j++) {
+                        byte[] v = new byte[buf.getInt()];
+                        buf.get(v);
+                        vals.add(v);
+                    }
+                    sets.put(col, vals);
+                }
+            }
         }
-        return new Decoded(ranges, blooms, keySets);
+        return new Decoded(ranges, blooms, keySets, sets);
     }
 
     private static Map<Short, List<Range>> parseRanges(ByteBuffer buf) {
