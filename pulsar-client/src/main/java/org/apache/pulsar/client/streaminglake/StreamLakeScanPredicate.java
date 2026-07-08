@@ -34,12 +34,14 @@ public final class StreamLakeScanPredicate {
     /** A predicate on one column: an optional [lo, hi] range (either bound may be null) and/or IN set. */
     public static final class ColumnPredicate {
         final int columnIndex;
+        final StreamLakeType type;
         final byte[] lo;
         final byte[] hi;
         final List<byte[]> inValues;
 
-        ColumnPredicate(int columnIndex, byte[] lo, byte[] hi, List<byte[]> inValues) {
+        ColumnPredicate(int columnIndex, StreamLakeType type, byte[] lo, byte[] hi, List<byte[]> inValues) {
             this.columnIndex = columnIndex;
+            this.type = type;
             this.lo = lo;
             this.hi = hi;
             this.inValues = inValues;
@@ -59,6 +61,33 @@ public final class StreamLakeScanPredicate {
                 boolean any = false;
                 for (byte[] v : inValues) {
                     if (cs.mightContain(v)) {
+                        any = true;
+                        break;
+                    }
+                }
+                if (!any) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /** Exact evaluation against a concrete decoded row value (SQL null -> excluded). */
+        boolean matchesRow(Object rowValue) {
+            if (rowValue == null) {
+                return false;
+            }
+            byte[] v = StreamLakeOrderPreserving.encode(type, rowValue);
+            if (lo != null && Arrays.compareUnsigned(v, lo) < 0) {
+                return false;
+            }
+            if (hi != null && Arrays.compareUnsigned(v, hi) > 0) {
+                return false;
+            }
+            if (inValues != null && !inValues.isEmpty()) {
+                boolean any = false;
+                for (byte[] in : inValues) {
+                    if (Arrays.equals(v, in)) {
                         any = true;
                         break;
                     }
@@ -91,6 +120,16 @@ public final class StreamLakeScanPredicate {
         return true;
     }
 
+    /** Exact evaluation against a fully decoded row (the row filter applied after pruning). */
+    public boolean matchesRow(Object[] row) {
+        for (ColumnPredicate cp : columns) {
+            if (!cp.matchesRow(row[cp.columnIndex])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -103,14 +142,14 @@ public final class StreamLakeScanPredicate {
         public Builder range(int columnIndex, StreamLakeType type, Object loInclusive, Object hiInclusive) {
             byte[] lo = loInclusive == null ? null : StreamLakeOrderPreserving.encode(type, loInclusive);
             byte[] hi = hiInclusive == null ? null : StreamLakeOrderPreserving.encode(type, hiInclusive);
-            columns.add(new ColumnPredicate(columnIndex, lo, hi, null));
+            columns.add(new ColumnPredicate(columnIndex, type, lo, hi, null));
             return this;
         }
 
         /** An equality predicate ({@code column = value}). */
         public Builder eq(int columnIndex, StreamLakeType type, Object value) {
             byte[] v = StreamLakeOrderPreserving.encode(type, value);
-            columns.add(new ColumnPredicate(columnIndex, v, v, java.util.Collections.singletonList(v)));
+            columns.add(new ColumnPredicate(columnIndex, type, v, v, java.util.Collections.singletonList(v)));
             return this;
         }
 
@@ -129,7 +168,7 @@ public final class StreamLakeScanPredicate {
                     hi = e;
                 }
             }
-            columns.add(new ColumnPredicate(columnIndex, lo, hi, encoded));
+            columns.add(new ColumnPredicate(columnIndex, type, lo, hi, encoded));
             return this;
         }
 
