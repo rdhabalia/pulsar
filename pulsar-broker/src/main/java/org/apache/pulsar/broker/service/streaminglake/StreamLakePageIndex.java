@@ -87,6 +87,9 @@ public class StreamLakePageIndex implements AutoCloseable {
     private final ManagedLedger ml;
     private final StreamLakeMetaStore metaStore;
     private final long maxHeadBytes;
+    private final int ensembleSize;
+    private final int writeQuorum;
+    private final int ackQuorum;
 
     private final Map<Long, List<Ref>> refsByDataLedger = new HashMap<>();
     private final List<Long> chain = new ArrayList<>();
@@ -95,11 +98,14 @@ public class StreamLakePageIndex implements AutoCloseable {
     private long headBytes;
 
     private StreamLakePageIndex(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
-                                long maxHeadBytes) {
+                                long maxHeadBytes, int ensembleSize, int writeQuorum, int ackQuorum) {
         this.bk = bk;
         this.ml = ml;
         this.metaStore = metaStore;
         this.maxHeadBytes = maxHeadBytes > 0 ? maxHeadBytes : DEFAULT_MAX_HEAD_BYTES;
+        this.ensembleSize = ensembleSize;
+        this.writeQuorum = writeQuorum;
+        this.ackQuorum = ackQuorum;
     }
 
     /** Load and replay the page-index ledger chain; never throws (falls back to an empty index). */
@@ -109,7 +115,14 @@ public class StreamLakePageIndex implements AutoCloseable {
 
     public static StreamLakePageIndex open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
                                            long maxHeadBytes) {
-        StreamLakePageIndex idx = new StreamLakePageIndex(bk, ml, metaStore, maxHeadBytes);
+        return open(bk, ml, metaStore, maxHeadBytes, 1, 1, 1);
+    }
+
+    /** Open with an explicit replication (production: RF-3 on the isolated metadata bookie pool). */
+    public static StreamLakePageIndex open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
+            long maxHeadBytes, int ensembleSize, int writeQuorum, int ackQuorum) {
+        StreamLakePageIndex idx = new StreamLakePageIndex(bk, ml, metaStore, maxHeadBytes,
+                ensembleSize, writeQuorum, ackQuorum);
         try {
             idx.chain.addAll(metaStore.read().pageIndexLedgerIds);
             idx.replay();
@@ -226,7 +239,8 @@ public class StreamLakePageIndex implements AutoCloseable {
 
     private void rotateHead() throws Exception {
         closeHeadQuietly();
-        LedgerHandle fresh = bk.createLedger(1, 1, BookKeeper.DigestType.CRC32, PASSWORD);
+        LedgerHandle fresh = bk.createLedger(ensembleSize, writeQuorum, ackQuorum,
+                BookKeeper.DigestType.CRC32, PASSWORD);
         chain.add(fresh.getId());
         metaStore.setPageIndexLedgerIds(chain);
         head = fresh;

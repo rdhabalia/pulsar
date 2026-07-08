@@ -115,6 +115,42 @@ public class StreamingLakeConfig {
     @Builder.Default
     private int pagesPerSegment = 1024;
 
+    /**
+     * Replication of the shared page-index ledger (hot write path): a modest RF-3 by default. Kept
+     * lower than the segment RF because it is written on every batch; isolated onto the metadata
+     * bookie pool (see {@code metadataBookieAffinityGroup}).
+     */
+    @Builder.Default
+    private int pageIndexEnsembleSize = 3;
+    @Builder.Default
+    private int pageIndexWriteQuorum = 3;
+    @Builder.Default
+    private int pageIndexAckQuorum = 2;
+
+    /**
+     * Replication of the segment ledgers (immutable, read-heavy pruning tier): higher RF so pruning
+     * reads scale horizontally, plus a query-tier cache and object-storage offload. Reject an
+     * ensemble far above the bookie count -- prefer caching/offload over RF for read scaling.
+     */
+    @Builder.Default
+    private int segmentEnsembleSize = 5;
+    @Builder.Default
+    private int segmentWriteQuorum = 5;
+    @Builder.Default
+    private int segmentAckQuorum = 3;
+
+    /** Bookie affinity/rackaware group isolating StreamLake metadata ledgers off the pub-sub pool. */
+    @Builder.Default
+    private String metadataBookieAffinityGroup = "";
+
+    /** When true, this broker acts as a StreamLake query-executor (segment build + query engine). */
+    @Builder.Default
+    private boolean queryExecutorEnabled = false;
+
+    /** When true, immutable cold segments are offloaded to object storage via Pulsar's offloaders. */
+    @Builder.Default
+    private boolean segmentOffloadEnabled = false;
+
     /** Columns for which the broker emits min/max ranges into the page-range index. */
     @Builder.Default
     private List<IndexedColumn> indexedColumns = new ArrayList<>();

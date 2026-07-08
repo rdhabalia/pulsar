@@ -73,6 +73,9 @@ public class StreamLakeSegmentStore implements AutoCloseable {
     private final ManagedLedger ml;
     private final StreamLakeMetaStore metaStore;
     private final long maxHeadBytes;
+    private final int ensembleSize;
+    private final int writeQuorum;
+    private final int ackQuorum;
 
     private final Map<Long, List<Segment>> byLedger = new HashMap<>();
     private final List<Long> chain = new ArrayList<>();
@@ -80,11 +83,14 @@ public class StreamLakeSegmentStore implements AutoCloseable {
     private long headBytes;
 
     private StreamLakeSegmentStore(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
-                                   long maxHeadBytes) {
+                                   long maxHeadBytes, int ensembleSize, int writeQuorum, int ackQuorum) {
         this.bk = bk;
         this.ml = ml;
         this.metaStore = metaStore;
         this.maxHeadBytes = maxHeadBytes > 0 ? maxHeadBytes : DEFAULT_MAX_HEAD_BYTES;
+        this.ensembleSize = ensembleSize;
+        this.writeQuorum = writeQuorum;
+        this.ackQuorum = ackQuorum;
     }
 
     public static StreamLakeSegmentStore open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore) {
@@ -93,7 +99,14 @@ public class StreamLakeSegmentStore implements AutoCloseable {
 
     public static StreamLakeSegmentStore open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
                                               long maxHeadBytes) {
-        StreamLakeSegmentStore store = new StreamLakeSegmentStore(bk, ml, metaStore, maxHeadBytes);
+        return open(bk, ml, metaStore, maxHeadBytes, 1, 1, 1);
+    }
+
+    /** Open with an explicit replication (production: higher RF for read-scalable pruning). */
+    public static StreamLakeSegmentStore open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
+            long maxHeadBytes, int ensembleSize, int writeQuorum, int ackQuorum) {
+        StreamLakeSegmentStore store = new StreamLakeSegmentStore(bk, ml, metaStore, maxHeadBytes,
+                ensembleSize, writeQuorum, ackQuorum);
         try {
             store.chain.addAll(metaStore.read().segmentLedgerIds);
             store.replay();
@@ -191,7 +204,8 @@ public class StreamLakeSegmentStore implements AutoCloseable {
                 // best-effort
             }
         }
-        LedgerHandle fresh = bk.createLedger(1, 1, BookKeeper.DigestType.CRC32, PASSWORD);
+        LedgerHandle fresh = bk.createLedger(ensembleSize, writeQuorum, ackQuorum,
+                BookKeeper.DigestType.CRC32, PASSWORD);
         chain.add(fresh.getId());
         metaStore.setSegmentLedgerIds(chain);
         head = fresh;
