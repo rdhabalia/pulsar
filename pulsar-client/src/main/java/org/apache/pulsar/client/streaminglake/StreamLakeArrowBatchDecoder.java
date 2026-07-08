@@ -72,6 +72,53 @@ public final class StreamLakeArrowBatchDecoder implements AutoCloseable {
         }
     }
 
+    /**
+     * Late materialization: decode only the given columns (in the given order), leaving the rest of
+     * the columnar batch untouched. Used to read just the join-key/predicate columns first, match, and
+     * fetch the remaining projected columns for surviving rows only.
+     */
+    public List<Object[]> decodeColumns(byte[] ipc, int[] columnIndexes) {
+        List<Object[]> rows = new ArrayList<>();
+        try (ArrowStreamReader reader = new ArrowStreamReader(new ByteArrayInputStream(ipc), allocator)) {
+            while (reader.loadNextBatch()) {
+                VectorSchemaRoot root = reader.getVectorSchemaRoot();
+                int rowCount = root.getRowCount();
+                FieldVector[] selected = new FieldVector[columnIndexes.length];
+                for (int c = 0; c < columnIndexes.length; c++) {
+                    selected[c] = root.getVector(columnIndexes[c]);
+                }
+                for (int r = 0; r < rowCount; r++) {
+                    Object[] row = new Object[columnIndexes.length];
+                    for (int c = 0; c < selected.length; c++) {
+                        row[c] = get(selected[c], r);
+                    }
+                    rows.add(row);
+                }
+            }
+            return rows;
+        } catch (IOException e) {
+            throw new UncheckedIOException("StreamLake Arrow decode failed", e);
+        }
+    }
+
+    /** Late materialization of a single column as one value per row (nulls preserved). */
+    public List<Object> decodeColumn(byte[] ipc, int columnIndex) {
+        List<Object> values = new ArrayList<>();
+        try (ArrowStreamReader reader = new ArrowStreamReader(new ByteArrayInputStream(ipc), allocator)) {
+            while (reader.loadNextBatch()) {
+                VectorSchemaRoot root = reader.getVectorSchemaRoot();
+                FieldVector v = root.getVector(columnIndex);
+                int rowCount = root.getRowCount();
+                for (int r = 0; r < rowCount; r++) {
+                    values.add(get(v, r));
+                }
+            }
+            return values;
+        } catch (IOException e) {
+            throw new UncheckedIOException("StreamLake Arrow decode failed", e);
+        }
+    }
+
     private static Object get(FieldVector vector, int idx) {
         if (vector.isNull(idx)) {
             return null;
