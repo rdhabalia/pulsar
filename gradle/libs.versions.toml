@@ -37,6 +37,8 @@ slf4j = "2.0.18"
 slog = "0.9.9"
 log4j2 = "2.26.0"
 lombok = "1.18.42"
+# Apache Arrow (StreamLake columnar client encoding)
+arrow = "19.0.0"
 # OpenTelemetry
 opentelemetry = "1.62.0"
 opentelemetry-alpha = "1.62.0-alpha"
@@ -205,6 +207,9 @@ jackson-datatype-jdk8 = { module = "com.fasterxml.jackson.datatype:jackson-datat
 jackson-dataformat-yaml = { module = "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml", version.ref = "jackson" }
 jackson-module-jsonSchema = { module = "com.fasterxml.jackson.module:jackson-module-jsonSchema", version.ref = "jackson" }
 jackson-jakarta-rs-json-provider = { module = "com.fasterxml.jackson.jakarta.rs:jackson-jakarta-rs-json-provider", version.ref = "jackson" }
+# Apache Arrow (StreamLake columnar client encoding)
+arrow-vector = { module = "org.apache.arrow:arrow-vector", version.ref = "arrow" }
+arrow-memory-unsafe = { module = "org.apache.arrow:arrow-memory-unsafe", version.ref = "arrow" }
 # Netty
 netty-bom = { module = "io.netty:netty-bom", version.ref = "netty" }
 netty-common = { module = "io.netty:netty-common", version.ref = "netty" }

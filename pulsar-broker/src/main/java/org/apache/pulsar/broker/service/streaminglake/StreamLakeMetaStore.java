@@ -32,8 +32,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Durable pointers for a topic's StreamLake indexes (the date-partition-list ledger and the segment
- * index-ledger), kept in a <b>dedicated metadata node</b> that mirrors the managed-ledger path under
+ * Durable pointers for a topic's StreamLake indexes (the date-partition-list ledger, the segment
+ * index-ledger, and the shared page-index ledger), kept in a <b>dedicated metadata node</b> that
+ * mirrors the managed-ledger path under
  * a separate {@code /streamlake} root — e.g. {@code /streamlake/tenant/ns/persistent/topic}.
  *
  * <p>This intentionally does <b>not</b> use managed-ledger properties: writing a property rewrites
@@ -52,7 +53,8 @@ public class StreamLakeMetaStore {
     private static final String ROOT = "/streamlake";
     private static final String LEGACY_DATE_PROP = "streamlake.datePartitionLedgerId";
     private static final byte VERSION_V1 = 1; // version(1) flags(1) dateId(8) segId(8)   (single segment ledger)
-    private static final byte VERSION = 2;    // version(1) flags(1) dateId(8) numSeg(4) segIds(8*n)
+    private static final byte VERSION_V2 = 2; // version(1) flags(1) dateId(8) numSeg(4) segIds(8*n)
+    private static final byte VERSION = 3;    // v2 + numPi(4) piIds(8*n)  (shared page-index ledger chain)
     private static final int FLAG_DATE = 0x1;
     private static final int FLAG_SEG = 0x2; // v1 only
     private static final long OP_TIMEOUT_SEC = 30;
@@ -73,6 +75,8 @@ public class StreamLakeMetaStore {
         public Long datePartitionLedgerId;
         /** The chain of segment index-ledgers (append to the head; new head on fence; roll for GC). */
         public List<Long> segmentLedgerIds = new ArrayList<>();
+        /** The chain of shared page-index ledgers (per-batch stat footers; new head on roll/fence). */
+        public List<Long> pageIndexLedgerIds = new ArrayList<>();
     }
 
     /**
@@ -98,6 +102,11 @@ public class StreamLakeMetaStore {
     /** Replace the segment index-ledger chain (used when rolling a new head or collapsing on GC). */
     public synchronized void setSegmentLedgerIds(List<Long> ids) throws MetadataStoreException {
         update(rec -> rec.segmentLedgerIds = new ArrayList<>(ids));
+    }
+
+    /** Replace the shared page-index-ledger chain (used when rolling a new head or collapsing on GC). */
+    public synchronized void setPageIndexLedgerIds(List<Long> ids) throws MetadataStoreException {
+        update(rec -> rec.pageIndexLedgerIds = new ArrayList<>(ids));
     }
 
     /** Remove the node (topic/managed-ledger deletion); tolerates an already-absent node. */
@@ -160,12 +169,17 @@ public class StreamLakeMetaStore {
 
     private static byte[] encode(Record rec) {
         List<Long> segs = rec.segmentLedgerIds == null ? java.util.Collections.emptyList() : rec.segmentLedgerIds;
-        ByteBuffer bb = ByteBuffer.allocate(1 + 1 + 8 + 4 + segs.size() * 8);
+        List<Long> pis = rec.pageIndexLedgerIds == null ? java.util.Collections.emptyList() : rec.pageIndexLedgerIds;
+        ByteBuffer bb = ByteBuffer.allocate(1 + 1 + 8 + 4 + segs.size() * 8 + 4 + pis.size() * 8);
         bb.put(VERSION);
         bb.put((byte) (rec.datePartitionLedgerId != null ? FLAG_DATE : 0));
         bb.putLong(rec.datePartitionLedgerId != null ? rec.datePartitionLedgerId : 0L);
         bb.putInt(segs.size());
         for (long id : segs) {
+            bb.putLong(id);
+        }
+        bb.putInt(pis.size());
+        for (long id : pis) {
             bb.putLong(id);
         }
         return bb.array();
@@ -185,10 +199,16 @@ public class StreamLakeMetaStore {
             if ((flags & FLAG_SEG) != 0) {
                 rec.segmentLedgerIds.add(segId);
             }
-        } else {
-            int n = bb.getInt();
-            for (int i = 0; i < n; i++) {
-                rec.segmentLedgerIds.add(bb.getLong());
+            return rec;
+        }
+        int nSeg = bb.getInt();
+        for (int i = 0; i < nSeg; i++) {
+            rec.segmentLedgerIds.add(bb.getLong());
+        }
+        if (version >= VERSION && bb.remaining() >= 4) { // v3+: shared page-index ledger chain
+            int nPi = bb.getInt();
+            for (int i = 0; i < nPi; i++) {
+                rec.pageIndexLedgerIds.add(bb.getLong());
             }
         }
         return rec;

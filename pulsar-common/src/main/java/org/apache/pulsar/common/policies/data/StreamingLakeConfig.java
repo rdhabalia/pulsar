@@ -111,6 +111,23 @@ public class StreamingLakeConfig {
     private List<IndexedColumn> indexedColumns = new ArrayList<>();
 
     /**
+     * The full ordered StreamLake table schema the client encodes into Arrow batches (redesign:
+     * client-side columnar encoding). Column index = position in this list; the per-batch stats
+     * footer and segment index reference columns by that index. A column with {@code indexed=true}
+     * emits per-batch pruning stats (min/max + exact set or bloom).
+     */
+    @Builder.Default
+    private List<SchemaColumn> columns = new ArrayList<>();
+
+    /** Target bloom false-positive probability for high-cardinality indexed columns (default 0.01). */
+    @Builder.Default
+    private double bloomFpp = 0.01;
+
+    /** StreamLake wire/format version, for forward compatibility (default 1). */
+    @Builder.Default
+    private int formatVersion = 1;
+
+    /**
      * A schema column that participates in range pruning. {@code columnId} is stable
      * for the lifetime of the topic; query execution uses ids, never names.
      */
@@ -123,5 +140,21 @@ public class StreamingLakeConfig {
         private String name;
         /** One of INT, LONG, STRING (matches the bookie-side order-preserving encoding). */
         private String type;
+    }
+
+    /**
+     * A column in the full StreamLake table schema. {@code columnId} is stable for the topic's
+     * lifetime; {@code type} is a StreamLake logical type name (INT32, INT64, DOUBLE, BOOLEAN,
+     * STRING, BYTES); {@code indexed} marks columns that emit per-batch pruning stats.
+     */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SchemaColumn {
+        private int columnId;
+        private String name;
+        private String type;
+        private boolean indexed;
     }
 }

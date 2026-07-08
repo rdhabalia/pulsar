@@ -63,6 +63,11 @@ dependencies {
     api(libs.jspecify)
     implementation(libs.roaringbitmap)
     implementation(libs.fastutil)
+    // Apache Arrow: columnar batch encoding for StreamLake topics (client-side encode/decode).
+    // arrow-memory-unsafe (not -netty): Arrow 11's netty allocator pokes Netty 4.1 internals
+    // (PoolArena.chunkSize) that Pulsar's Netty 4.2 removed. The unsafe allocator avoids the conflict.
+    implementation(libs.arrow.vector)
+    implementation(libs.arrow.memory.unsafe)
 
     compileOnly(libs.swagger.annotations)
     compileOnly(libs.protobuf.java)

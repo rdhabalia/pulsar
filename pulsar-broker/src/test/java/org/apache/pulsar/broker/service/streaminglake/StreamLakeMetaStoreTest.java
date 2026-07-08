@@ -77,6 +77,7 @@ public class StreamLakeMetaStoreTest {
         StreamLakeMetaStore.Record rec = metaStore().read();
         assertNull(rec.datePartitionLedgerId);
         assertTrue(rec.segmentLedgerIds.isEmpty());
+        assertTrue(rec.pageIndexLedgerIds.isEmpty());
     }
 
     @Test
@@ -88,6 +89,49 @@ public class StreamLakeMetaStoreTest {
         StreamLakeMetaStore.Record rec = metaStore().read(); // fresh instance -> reads from the node
         assertEquals(rec.datePartitionLedgerId, Long.valueOf(42L));
         assertEquals(rec.segmentLedgerIds, java.util.Arrays.asList(87L, 88L, 89L));
+    }
+
+    @Test
+    public void roundTripsAllThreePointersIndependently() throws Exception {
+        StreamLakeMetaStore ms = metaStore();
+        ms.updateDatePartitionLedgerId(42L);
+        ms.setSegmentLedgerIds(java.util.Arrays.asList(87L, 88L));
+        ms.setPageIndexLedgerIds(java.util.Arrays.asList(500L, 501L, 502L));
+
+        StreamLakeMetaStore.Record rec = metaStore().read(); // fresh instance -> reads from the node
+        assertEquals(rec.datePartitionLedgerId, Long.valueOf(42L));
+        assertEquals(rec.segmentLedgerIds, java.util.Arrays.asList(87L, 88L));
+        assertEquals(rec.pageIndexLedgerIds, java.util.Arrays.asList(500L, 501L, 502L));
+    }
+
+    @Test
+    public void pageIndexChainUpdateLeavesSegmentAndDateUntouched() throws Exception {
+        StreamLakeMetaStore ms = metaStore();
+        ms.updateDatePartitionLedgerId(9L);
+        ms.setSegmentLedgerIds(java.util.Arrays.asList(7L));
+        ms.setPageIndexLedgerIds(java.util.Arrays.asList(11L));
+
+        StreamLakeMetaStore.Record rec = metaStore().read();
+        assertEquals(rec.datePartitionLedgerId, Long.valueOf(9L));
+        assertEquals(rec.segmentLedgerIds, java.util.Arrays.asList(7L));
+        assertEquals(rec.pageIndexLedgerIds, java.util.Arrays.asList(11L));
+    }
+
+    @Test
+    public void decodesLegacyV2RecordWithEmptyPageIndexChain() throws Exception {
+        // Hand-craft a v2 blob (no page-index chain) and verify it decodes with an empty pi chain.
+        byte[] v2 = java.nio.ByteBuffer.allocate(1 + 1 + 8 + 4 + 2 * 8)
+                .put((byte) 2)          // VERSION_V2
+                .put((byte) 0x1)        // FLAG_DATE
+                .putLong(42L)           // dateId
+                .putInt(2).putLong(87L).putLong(88L) // segment chain
+                .array();
+        store.put("/streamlake/" + LEDGER_NAME, v2, java.util.Optional.empty()).get();
+
+        StreamLakeMetaStore.Record rec = metaStore().read();
+        assertEquals(rec.datePartitionLedgerId, Long.valueOf(42L));
+        assertEquals(rec.segmentLedgerIds, java.util.Arrays.asList(87L, 88L));
+        assertTrue(rec.pageIndexLedgerIds.isEmpty(), "v2 record decodes with an empty page-index chain");
     }
 
     @Test
