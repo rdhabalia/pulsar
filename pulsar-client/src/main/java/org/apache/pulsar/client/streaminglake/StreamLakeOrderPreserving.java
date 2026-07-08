@@ -26,12 +26,12 @@ import java.nio.charset.StandardCharsets;
  * by raw byte comparison (schema-blind) without decoding types. Used for per-column min/max and the
  * values of a low-cardinality exact set.
  */
-final class StreamLakeOrderPreserving {
+public final class StreamLakeOrderPreserving {
 
     private StreamLakeOrderPreserving() {
     }
 
-    static byte[] encode(StreamLakeType type, Object value) {
+    public static byte[] encode(StreamLakeType type, Object value) {
         switch (type) {
             case INT32:
                 return encInt(((Number) value).intValue());
