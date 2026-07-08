@@ -76,32 +76,32 @@ public class StreamLakeMetaStoreTest {
     public void readsEmptyWhenAbsent() throws Exception {
         StreamLakeMetaStore.Record rec = metaStore().read();
         assertNull(rec.datePartitionLedgerId);
-        assertNull(rec.segmentIndexLedgerId);
+        assertTrue(rec.segmentLedgerIds.isEmpty());
     }
 
     @Test
     public void roundTripsBothPointers() throws Exception {
         StreamLakeMetaStore ms = metaStore();
         ms.updateDatePartitionLedgerId(42L);
-        ms.updateSegmentIndexLedgerId(87L);
+        ms.setSegmentLedgerIds(java.util.Arrays.asList(87L, 88L, 89L));
 
         StreamLakeMetaStore.Record rec = metaStore().read(); // fresh instance -> reads from the node
         assertEquals(rec.datePartitionLedgerId, Long.valueOf(42L));
-        assertEquals(rec.segmentIndexLedgerId, Long.valueOf(87L));
+        assertEquals(rec.segmentLedgerIds, java.util.Arrays.asList(87L, 88L, 89L));
     }
 
     @Test
     public void updatesArePreservedIndependently() throws Exception {
         StreamLakeMetaStore ms = metaStore();
-        ms.updateSegmentIndexLedgerId(7L);
+        ms.setSegmentLedgerIds(java.util.Arrays.asList(7L));
         StreamLakeMetaStore.Record afterSeg = metaStore().read();
-        assertEquals(afterSeg.segmentIndexLedgerId, Long.valueOf(7L));
+        assertEquals(afterSeg.segmentLedgerIds, java.util.Arrays.asList(7L));
         assertNull(afterSeg.datePartitionLedgerId, "date pointer untouched by a segment update");
 
         ms.updateDatePartitionLedgerId(9L);
         StreamLakeMetaStore.Record both = metaStore().read();
         assertEquals(both.datePartitionLedgerId, Long.valueOf(9L));
-        assertEquals(both.segmentIndexLedgerId, Long.valueOf(7L), "segment pointer preserved");
+        assertEquals(both.segmentLedgerIds, java.util.Arrays.asList(7L), "segment chain preserved");
     }
 
     @Test
@@ -113,10 +113,10 @@ public class StreamLakeMetaStoreTest {
 
         // a later segment update carries the seeded date pointer into the /streamlake node.
         StreamLakeMetaStore ms = metaStore();
-        ms.updateSegmentIndexLedgerId(5L);
+        ms.setSegmentLedgerIds(java.util.Arrays.asList(5L));
         StreamLakeMetaStore.Record rec = metaStore().read();
         assertEquals(rec.datePartitionLedgerId, Long.valueOf(99L), "legacy date pointer migrated");
-        assertEquals(rec.segmentIndexLedgerId, Long.valueOf(5L));
+        assertEquals(rec.segmentLedgerIds, java.util.Arrays.asList(5L));
     }
 
     @Test
@@ -134,7 +134,7 @@ public class StreamLakeMetaStoreTest {
     public void neverWritesManagedLedgerMetadata() throws Exception {
         StreamLakeMetaStore ms = metaStore();
         ms.updateDatePartitionLedgerId(1L);
-        ms.updateSegmentIndexLedgerId(2L);
+        ms.setSegmentLedgerIds(java.util.Arrays.asList(2L));
         ms.read();
         ms.delete();
 

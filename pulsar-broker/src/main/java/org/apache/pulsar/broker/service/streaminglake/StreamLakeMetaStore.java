@@ -19,6 +19,8 @@
 package org.apache.pulsar.broker.service.streaminglake;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -49,10 +51,10 @@ public class StreamLakeMetaStore {
     private static final Logger log = LoggerFactory.getLogger(StreamLakeMetaStore.class);
     private static final String ROOT = "/streamlake";
     private static final String LEGACY_DATE_PROP = "streamlake.datePartitionLedgerId";
-    private static final byte VERSION = 1;
-    private static final int RECORD_SIZE = 18; // version(1) + flags(1) + dateId(8) + segId(8)
+    private static final byte VERSION_V1 = 1; // version(1) flags(1) dateId(8) segId(8)   (single segment ledger)
+    private static final byte VERSION = 2;    // version(1) flags(1) dateId(8) numSeg(4) segIds(8*n)
     private static final int FLAG_DATE = 0x1;
-    private static final int FLAG_SEG = 0x2;
+    private static final int FLAG_SEG = 0x2; // v1 only
     private static final long OP_TIMEOUT_SEC = 30;
     private static final int MAX_ATTEMPTS = 5;
 
@@ -66,10 +68,11 @@ public class StreamLakeMetaStore {
         this.path = ROOT + "/" + ml.getName();
     }
 
-    /** The persisted index pointers; a null field means "not set". */
+    /** The persisted index pointers; a null/empty field means "not set". */
     public static final class Record {
         public Long datePartitionLedgerId;
-        public Long segmentIndexLedgerId;
+        /** The chain of segment index-ledgers (append to the head; new head on fence; roll for GC). */
+        public List<Long> segmentLedgerIds = new ArrayList<>();
     }
 
     /**
@@ -92,8 +95,9 @@ public class StreamLakeMetaStore {
         update(rec -> rec.datePartitionLedgerId = id);
     }
 
-    public synchronized void updateSegmentIndexLedgerId(long id) throws MetadataStoreException {
-        update(rec -> rec.segmentIndexLedgerId = id);
+    /** Replace the segment index-ledger chain (used when rolling a new head or collapsing on GC). */
+    public synchronized void setSegmentLedgerIds(List<Long> ids) throws MetadataStoreException {
+        update(rec -> rec.segmentLedgerIds = new ArrayList<>(ids));
     }
 
     /** Remove the node (topic/managed-ledger deletion); tolerates an already-absent node. */
@@ -151,37 +155,41 @@ public class StreamLakeMetaStore {
     }
 
     private static boolean isPresent(Optional<GetResult> res) {
-        return res.isPresent() && res.get().getValue() != null && res.get().getValue().length >= RECORD_SIZE;
+        return res.isPresent() && res.get().getValue() != null && res.get().getValue().length >= 10;
     }
 
     private static byte[] encode(Record rec) {
-        ByteBuffer bb = ByteBuffer.allocate(RECORD_SIZE);
-        int flags = 0;
-        if (rec.datePartitionLedgerId != null) {
-            flags |= FLAG_DATE;
-        }
-        if (rec.segmentIndexLedgerId != null) {
-            flags |= FLAG_SEG;
-        }
+        List<Long> segs = rec.segmentLedgerIds == null ? java.util.Collections.emptyList() : rec.segmentLedgerIds;
+        ByteBuffer bb = ByteBuffer.allocate(1 + 1 + 8 + 4 + segs.size() * 8);
         bb.put(VERSION);
-        bb.put((byte) flags);
+        bb.put((byte) (rec.datePartitionLedgerId != null ? FLAG_DATE : 0));
         bb.putLong(rec.datePartitionLedgerId != null ? rec.datePartitionLedgerId : 0L);
-        bb.putLong(rec.segmentIndexLedgerId != null ? rec.segmentIndexLedgerId : 0L);
+        bb.putInt(segs.size());
+        for (long id : segs) {
+            bb.putLong(id);
+        }
         return bb.array();
     }
 
     private static Record decode(byte[] bytes) {
         ByteBuffer bb = ByteBuffer.wrap(bytes);
-        bb.get(); // version (reserved for future format changes)
+        int version = bb.get() & 0xFF;
         int flags = bb.get() & 0xFF;
         long dateId = bb.getLong();
-        long segId = bb.getLong();
         Record rec = new Record();
         if ((flags & FLAG_DATE) != 0) {
             rec.datePartitionLedgerId = dateId;
         }
-        if ((flags & FLAG_SEG) != 0) {
-            rec.segmentIndexLedgerId = segId;
+        if (version == VERSION_V1) {
+            long segId = bb.getLong(); // single segment ledger in the old fixed format
+            if ((flags & FLAG_SEG) != 0) {
+                rec.segmentLedgerIds.add(segId);
+            }
+        } else {
+            int n = bb.getInt();
+            for (int i = 0; i < n; i++) {
+                rec.segmentLedgerIds.add(bb.getLong());
+            }
         }
         return rec;
     }

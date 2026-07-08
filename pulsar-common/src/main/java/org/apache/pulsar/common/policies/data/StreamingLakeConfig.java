@@ -93,6 +93,19 @@ public class StreamingLakeConfig {
     @Builder.Default
     private long pageGroupingDelayMs = 10;
 
+    /**
+     * When true, the broker maintains a segment-level metadata index: a compaction pass merges each
+     * closed ledger's per-page stats into coarse segment summaries (min/max + exact set) stored in a
+     * per-topic index-ledger, so scans can skip whole segments before issuing a bookie page prune.
+     * Read-side only; default false.
+     */
+    @Builder.Default
+    private boolean segmentIndexEnabled = false;
+
+    /** Pages summarized into one segment when building the segment index (default 1024). */
+    @Builder.Default
+    private int pagesPerSegment = 1024;
+
     /** Columns for which the broker emits min/max ranges into the page-range index. */
     @Builder.Default
     private List<IndexedColumn> indexedColumns = new ArrayList<>();
