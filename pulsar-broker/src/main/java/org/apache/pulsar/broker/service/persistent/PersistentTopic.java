@@ -146,6 +146,7 @@ import org.apache.pulsar.broker.service.schema.exceptions.NotExistSchemaExceptio
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeBatcher;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeDateIndex;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeMetaStore;
+import org.apache.pulsar.broker.service.streaminglake.StreamLakePageIndex;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeRangeBuilder;
 import org.apache.pulsar.broker.stats.ClusterReplicationMetrics;
 import org.apache.pulsar.broker.stats.NamespaceStats;
@@ -165,6 +166,7 @@ import org.apache.pulsar.client.impl.BatchMessageIdImpl;
 import org.apache.pulsar.client.impl.MessageIdImpl;
 import org.apache.pulsar.client.impl.MessageImpl;
 import org.apache.pulsar.client.impl.PulsarClientImpl;
+import org.apache.pulsar.client.streaminglake.StreamLakeBatchPayload;
 import org.apache.pulsar.common.api.proto.CommandSubscribe;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.InitialPosition;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.SubType;
@@ -229,6 +231,10 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     // StreamLake batched column-major storage (created lazily when the topic is a batched
     // StreamLake topic).
     private volatile StreamLakeBatcher streamLakeBatcher;
+
+    // StreamLake client-columnar page index (created lazily when the topic uses the redesign path):
+    // the broker slices each batch's stats footer into a shared page-index ledger.
+    private volatile StreamLakePageIndex streamLakePageIndex;
 
     // Subscriptions to this topic
     private final Map<String, PersistentSubscription> subscriptions = new ConcurrentHashMap<>();
@@ -721,6 +727,14 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     private void asyncAddEntry(ByteBuf headersAndPayload, PublishContext publishContext) {
         if (isStreamLakeEnabled()) {
             StreamingLakeConfig cfg = getStreamingLakeConfig();
+            if (cfg.isClientColumnarEnabled()) {
+                // Redesign path: the client already produced a columnar payload with a stats footer.
+                // Persist it as a normal entry; addComplete() slices the footer into the page index.
+                getOrCreateStreamLakePageIndex(); // ensure the field is set before addComplete runs
+                ledger.asyncAddEntry(headersAndPayload,
+                    (int) publishContext.getNumberOfMessages(), this, publishContext);
+                return;
+            }
             if (cfg.isBatchingEnabled()) {
                 // StreamLake batched column-major storage: pack messages into a page entry.
                 getOrCreateStreamLakeBatcher(cfg).add(headersAndPayload, publishContext);
@@ -758,6 +772,28 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             }
         }
         return b;
+    }
+
+    /** The client-columnar page index for this topic, or {@code null} if not the redesign path. */
+    public StreamLakePageIndex getStreamLakePageIndex() {
+        return streamLakePageIndex;
+    }
+
+    private StreamLakePageIndex getOrCreateStreamLakePageIndex() {
+        StreamLakePageIndex pi = streamLakePageIndex;
+        if (pi == null) {
+            synchronized (this) {
+                pi = streamLakePageIndex;
+                if (pi == null) {
+                    StreamLakeMetaStore metaStore = new StreamLakeMetaStore(
+                            brokerService.getPulsar().getLocalMetadataStore(), ledger);
+                    pi = StreamLakePageIndex.open(
+                            brokerService.getPulsar().getBookKeeperClient(), ledger, metaStore);
+                    streamLakePageIndex = pi;
+                }
+            }
+        }
+        return pi;
     }
 
     public void asyncReadEntry(Position position, AsyncCallbacks.ReadEntryCallback callback, Object ctx) {
@@ -811,6 +847,24 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         publishContext.setMetadataFromEntryData(entryData);
         publishContext.completed(null, position.getLedgerId(), position.getEntryId());
         decrementPendingWriteOpsAndCheck();
+
+        // Redesign path: slice the client's stats footer from the entry tail (no Arrow parse, no full
+        // copy) and append it to the shared page index off the hot path. Best-effort: a scan falls
+        // back to the message's own footer if this is missing.
+        StreamLakePageIndex pageIndex = streamLakePageIndex;
+        if (pageIndex != null && StreamLakeBatchPayload.hasFooter(entryData)) {
+            byte[] footer = StreamLakeBatchPayload.statsFooter(entryData);
+            long dataLedgerId = position.getLedgerId();
+            long dataEntryId = position.getEntryId();
+            brokerService.getPulsar().getExecutor().execute(() -> {
+                try {
+                    pageIndex.appendFooter(dataLedgerId, dataEntryId, footer);
+                } catch (Exception e) {
+                    log.warn().exceptionMessage(e).log("StreamLake page-index footer append failed for "
+                            + topic + " at " + dataLedgerId + ":" + dataEntryId);
+                }
+            });
+        }
     }
 
     @Override

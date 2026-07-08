@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.client.streaminglake;
 
+import io.netty.buffer.ByteBuf;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
@@ -76,5 +77,32 @@ public final class StreamLakeBatchPayload {
         int off = payload.length - TRAILER;
         return ((payload[off] & 0xFF) << 24) | ((payload[off + 1] & 0xFF) << 16)
                 | ((payload[off + 2] & 0xFF) << 8) | (payload[off + 3] & 0xFF);
+    }
+
+    // ---- ByteBuf tail views (broker slices the footer from a persisted entry without a full copy) --
+
+    /** Whether the tail of a persisted entry carries a StreamLake stats footer (trailing magic). */
+    public static boolean hasFooter(ByteBuf entry) {
+        int n = entry.readableBytes();
+        if (n < TRAILER) {
+            return false;
+        }
+        int magicOff = entry.readerIndex() + n - MAGIC.length;
+        for (int i = 0; i < MAGIC.length; i++) {
+            if (entry.getByte(magicOff + i) != MAGIC[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** The stats-footer bytes sliced from the tail of a persisted entry (reads only the tail). */
+    public static byte[] statsFooter(ByteBuf entry) {
+        int n = entry.readableBytes();
+        int trailerOff = entry.readerIndex() + n - TRAILER;
+        int footerLen = entry.getInt(trailerOff); // big-endian, matches combine()'s putInt
+        byte[] footer = new byte[footerLen];
+        entry.getBytes(trailerOff - footerLen, footer);
+        return footer;
     }
 }

@@ -50,6 +50,15 @@ public class StreamingLakeConfig {
     @Builder.Default
     private boolean batchingEnabled = false;
 
+    /**
+     * When true, the <b>client</b> encodes each batch as a columnar (Arrow) payload with a trailing
+     * stats footer, and the broker only slices that footer into the shared page-index ledger (it does
+     * not batch, encode, or compute ranges itself). This is the redesign write path; distinct from
+     * {@code batchingEnabled} (broker-side batching). Default false.
+     */
+    @Builder.Default
+    private boolean clientColumnarEnabled = false;
+
     /** Target sealed-page size in bytes (default 2 MB). */
     @Builder.Default
     private int pageSizeBytes = 2 * 1024 * 1024;
