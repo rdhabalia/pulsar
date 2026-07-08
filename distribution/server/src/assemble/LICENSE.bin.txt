@@ -364,6 +364,12 @@ The Apache Software License, Version 2.0
     - org.apache.bookkeeper-bookkeeper-tools-framework-4.18.0.jar
     - org.apache.bookkeeper-circe-checksum-4.18.0.jar
     - org.apache.bookkeeper-cpu-affinity-4.18.0.jar
+ * Apache Arrow (StreamLake columnar client encoding)
+    - org.apache.arrow-arrow-format-19.0.0.jar
+    - org.apache.arrow-arrow-memory-core-19.0.0.jar
+    - org.apache.arrow-arrow-memory-unsafe-19.0.0.jar
+    - org.apache.arrow-arrow-vector-19.0.0.jar
+    - com.google.flatbuffers-flatbuffers-java-24.3.25.jar
     - org.apache.bookkeeper-statelib-4.18.0.jar
     - org.apache.bookkeeper-stream-storage-api-4.18.0.jar
     - org.apache.bookkeeper-stream-storage-common-4.18.0.jar
