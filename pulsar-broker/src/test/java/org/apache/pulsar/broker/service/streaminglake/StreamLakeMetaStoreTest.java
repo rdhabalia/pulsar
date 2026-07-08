@@ -26,7 +26,6 @@ import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
-
 import java.util.HashMap;
 import java.util.Map;
 import org.apache.bookkeeper.mledger.ManagedLedger;
@@ -132,6 +131,37 @@ public class StreamLakeMetaStoreTest {
         assertEquals(rec.datePartitionLedgerId, Long.valueOf(42L));
         assertEquals(rec.segmentLedgerIds, java.util.Arrays.asList(87L, 88L));
         assertTrue(rec.pageIndexLedgerIds.isEmpty(), "v2 record decodes with an empty page-index chain");
+    }
+
+    @Test
+    public void decodesLegacyV3RecordWithNoCatalogPointer() throws Exception {
+        // Hand-craft a v3 blob (date + segment chain + page-index chain, no catalog) and verify it
+        // decodes with the chains intact and a null catalog pointer.
+        byte[] v3 = java.nio.ByteBuffer.allocate(1 + 1 + 8 + 4 + 8 + 4 + 8)
+                .put((byte) 3)          // VERSION_V3
+                .put((byte) 0x1)        // FLAG_DATE
+                .putLong(42L)           // dateId
+                .putInt(1).putLong(87L) // segment chain
+                .putInt(1).putLong(70L) // page-index chain
+                .array();
+        store.put("/streamlake/" + LEDGER_NAME, v3, java.util.Optional.empty()).get();
+
+        StreamLakeMetaStore.Record rec = metaStore().read();
+        assertEquals(rec.datePartitionLedgerId, Long.valueOf(42L));
+        assertEquals(rec.segmentLedgerIds, java.util.Arrays.asList(87L));
+        assertEquals(rec.pageIndexLedgerIds, java.util.Arrays.asList(70L));
+        assertNull(rec.catalogLedgerId, "v3 record decodes with a null catalog pointer");
+    }
+
+    @Test
+    public void roundTripsCatalogPointerIndependently() throws Exception {
+        StreamLakeMetaStore ms = metaStore();
+        ms.setPageIndexLedgerIds(java.util.Arrays.asList(70L, 71L));
+        ms.updateCatalogLedgerId(555L);
+
+        StreamLakeMetaStore.Record rec = metaStore().read();
+        assertEquals(rec.catalogLedgerId, Long.valueOf(555L));
+        assertEquals(rec.pageIndexLedgerIds, java.util.Arrays.asList(70L, 71L), "chains preserved");
     }
 
     @Test
