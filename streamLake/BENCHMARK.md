@@ -67,7 +67,7 @@ SL_BENCH_RUN=true SL_BENCH_TOTALGB=10 SL_BENCH_WINDOWHOURS=8 \
   -x checkstyleMain -x checkstyleTest --no-daemon --no-build-cache --rerun-tasks
 ```
 
-| Query window | Pages read (of 9,216) | **Data scanned** | **IO reduction** | Output rows | Build rows | Off‑heap spilled | Query latency |
+| Query window | Pages read (of 9,216) | **Data scanned** | **IO reduction** | **Matches** (output rows) | Build rows | **Off‑heap spilled** | **Latency** |
 |---|---|---|---|---|---|---|---|
 | 8 h  | 832 | 832 MiB / 9.0 GB = **9.03 %** | **11×** | 412,672 | 425,997 | **14.6 MB** (real disk) | **1,110 ms** |
 | 1 h  | 128 | 128 MiB / 9.0 GB = **1.39 %** | **72×** | 63,488 | 65,538 | — (on‑heap) | 148 ms |
