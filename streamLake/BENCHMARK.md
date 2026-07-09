@@ -153,23 +153,34 @@ lives on cheap, role‑specific hardware:
 | **Pub‑sub brokers** (cheap, stateless) | 2 × m5.xlarge @ $0.192/hr × 730 | **$280** |
 | **Query brokers** (NVMe — runs the joins + off‑heap spill) | 2 × r5.2xlarge @ $0.504/hr × 730 + 256 GB NVMe each | **$777** |
 | **Bookie** compute | 3 × m5.2xlarge @ $0.384/hr × 730 | **$841** |
-| **Bookie journal** device (**NVMe**) | 3 × 100 GB NVMe (gp3) @ $0.08/GB‑mo | **$24** |
-| **Bookie ledger** device (**HDD**) — full 30‑day dataset | ~26 TB × **RF‑3** = ~78 TB × $0.045/GB‑mo (st1) | **$3,499** |
+| **Bookie journal** device (**gp3 SSD**) | 3 × 100 GB gp3 @ $0.08/GB‑mo | **$24** |
+| **Bookie ledger** device (**sc1 Cold HDD**) — full 30‑day dataset | ~26 TB × **RF‑2** = ~52 TB × $0.015/GB‑mo | **$778** |
 | **Query execution** | on the query brokers above — **no separate per‑query cluster** | **incl.** |
-| **Total** | | **≈ $5,420/mo** |
+| **Total** | | **≈ $2,700/mo** |
 
-**No S3 line, by design.** Everything an Iceberg‑on‑S3 lake would store sits on the BookKeeper HDD
-ledger instead. That is the honest trade: BookKeeper keeps **RF‑3 = 3× bytes** on servers you run,
-where S3 is ~1.4× erasure at rest — so per stored byte BookKeeper is dearer, but you delete the entire
-object‑store + ETL + query‑compute stack around it. Two levers move the storage line:
+**No S3 line, by design.** Everything an Iceberg‑on‑S3 lake would store sits on the BookKeeper ledger
+instead. The honest trade: BookKeeper keeps **2× bytes at RF‑2** on servers you run, where S3 is ~1.4×
+erasure at rest — so per stored byte BookKeeper is dearer, but you delete the entire object‑store + ETL
++ query‑compute stack around it.
 
-- **Replication.** Pulsar's *default* data‑ledger quorum is **RF‑2** (E=2/Qw=2/Qa=2), which drops the
-  ledger line to **~$2,333/mo** and the total to **≈ $4,250/mo**. RF‑3 above is the conservative,
-  higher‑durability choice.
-- **Storage device.** NVMe is used only where latency matters — the **bookie journal** (100 GB) and
-  the **query‑broker spill**. The **bulk ledger is HDD**; putting 78 TB on NVMe (gp3) would cost
-  ~$6.2k/mo alone and is never necessary, because pruning means a query reads only the **1–9 %**
-  working set (§2) and hot pages sit in page cache on the query brokers.
+**Storage sensitivity — the two knobs that move the number** (all EBS, US‑East‑1 list; journal stays gp3):
+
+| Ledger device × replication | Ledger $/mo | StreamLake total | vs $7,689 |
+|---|---|---|---|
+| **sc1 (Cold HDD, $0.015) × RF‑2** — *headline* | $778 | **~$2,700** | **~2.8×** |
+| sc1 (Cold HDD) × RF‑3 | $1,166 | ~$3,088 | ~2.5× |
+| st1 (HDD, $0.045) × RF‑2 | $2,333 | ~$4,255 | ~1.8× |
+| st1 (HDD) × RF‑3 | $3,499 | ~$5,421 | ~1.4× |
+| gp3 (SSD, $0.08) × RF‑2 | $4,147 | ~$6,069 | ~1.3× |
+
+- **Replication.** RF‑2 (Pulsar's default, E=2/Qw=2/Qa=2) survives one bookie failure; RF‑3 survives two
+  and adds ~50 % to the ledger line.
+- **Ledger device.** sc1 Cold HDD is **3× cheaper than st1** ($0.015 vs $0.045). The caveat: sc1 is
+  *cold* HDD — low random IOPS and burst‑credit throttling — while StreamLake's pruned reads are small
+  (1 MiB) **random** page reads and the §2 ~1 s latency was measured on **NVMe**. So sc1 is priced here
+  as the **bulk / cold‑tier** device; keep the **fresh/hot working set on faster media** (NVMe or st1 +
+  page cache on the query brokers) via bookie affinity groups. Query latency on HDD‑served cold data is
+  seconds, not ~1 s — budget for the tier you actually query.
 
 ### 4.2 Kafka → Spark → S3 → Iceberg → Spark (five components)
 
@@ -186,8 +197,9 @@ object‑store + ETL + query‑compute stack around it. Two levers move the stor
 
 | | StreamLake | Kafka+Spark+S3+Iceberg | Ratio |
 |---|---|---|---|
-| Monthly TCO — **RF‑3, all data on BookKeeper** | **~$5,420** | ~$7,689 | **~1.4× cheaper** |
-| Monthly TCO — RF‑2 (Pulsar default) | ~$4,250 | ~$7,689 | ~1.8× cheaper |
+| Monthly TCO — **RF‑2 on sc1 Cold HDD** (headline) | **~$2,700** | ~$7,689 | **~2.8× cheaper** |
+| Monthly TCO — RF‑2 on st1 HDD (warm tier) | ~$4,255 | ~$7,689 | ~1.8× cheaper |
+| Monthly TCO — RF‑3 on st1 HDD (higher durability) | ~$5,421 | ~$7,689 | ~1.4× cheaper |
 | Object store required | **none** — BookKeeper is the store | S3 (+ Iceberg) | — |
 | Components to operate | **1** (Pulsar/BK) | 5 | — |
 | Query latency (selective join) | **~1 s** (measured) | seconds–minutes (cluster/shuffle/spin‑up) | — |
@@ -318,7 +330,7 @@ Gradle forwards the process environment to forked test JVMs; **`-D` is not forwa
 **Canonical list prices used in §4 (US‑East‑1, on‑demand, ~mid‑2024 — the AWS pricing tables render
 via JS and did not scrape; re‑confirm on the pricing pages):**
 - S3 Standard **$0.023/GB‑mo** (first 50 TB); GET **$0.0004**/1k, PUT **$0.005**/1k.
-- EBS **st1 (HDD, ledger device) $0.045/GB‑mo**, **gp3 (SSD/NVMe‑class) $0.08/GB‑mo**.
+- EBS **sc1 (Cold HDD) $0.015/GB‑mo**, **st1 (HDD, warm ledger) $0.045/GB‑mo**, **gp3 (SSD/journal) $0.08/GB‑mo**.
 - MSK broker storage **$0.10/GB‑mo**.
 - EC2 on‑demand: m5.xlarge **$0.192/hr** (cheap pub‑sub broker), r5.2xlarge **$0.504/hr** (NVMe query
   broker), m5.2xlarge **$0.384/hr** (bookie compute), kafka.m5.2xlarge **≈$0.84/hr**, c4.2xlarge
