@@ -26,8 +26,7 @@ import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.Arrays;
 import org.apache.bookkeeper.mledger.ManagedLedger;
 import org.apache.pulsar.metadata.api.MetadataStore;
 import org.apache.pulsar.metadata.api.MetadataStoreConfig;
@@ -37,9 +36,10 @@ import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 /**
- * Unit tests for {@link StreamLakeMetaStore}: the index pointers round-trip through the dedicated
- * {@code /streamlake/<ledgerName>} node, updates are independent, the legacy managed-ledger property
- * is seeded on first read, and — the whole point — the managed-ledger metadata is never written.
+ * Unit tests for {@link StreamLakeMetaStore}: the ledger pointers (segment chain, page-index chain,
+ * catalog pointer) round-trip through the dedicated {@code /streamlake/<ledgerName>} node, updates are
+ * independent, and — the whole point — the store has <b>zero</b> coupling to managed-ledger metadata
+ * (it never reads or writes the managed-ledger properties).
  */
 public class StreamLakeMetaStoreTest {
 
@@ -47,16 +47,13 @@ public class StreamLakeMetaStoreTest {
 
     private MetadataStore store;
     private ManagedLedger ml;
-    private Map<String, String> mlProps;
 
     @BeforeMethod
     public void setup() throws Exception {
         store = MetadataStoreFactory.create("memory:local",
                 MetadataStoreConfig.builder().fsyncEnable(false).build());
-        mlProps = new HashMap<>();
         ml = mock(ManagedLedger.class);
         when(ml.getName()).thenReturn(LEDGER_NAME);
-        when(ml.getProperties()).thenReturn(mlProps);
     }
 
     @AfterMethod(alwaysRun = true)
@@ -74,147 +71,73 @@ public class StreamLakeMetaStoreTest {
     @Test
     public void readsEmptyWhenAbsent() throws Exception {
         StreamLakeMetaStore.Record rec = metaStore().read();
-        assertNull(rec.datePartitionLedgerId);
         assertTrue(rec.segmentLedgerIds.isEmpty());
         assertTrue(rec.pageIndexLedgerIds.isEmpty());
-    }
-
-    @Test
-    public void roundTripsBothPointers() throws Exception {
-        StreamLakeMetaStore ms = metaStore();
-        ms.updateDatePartitionLedgerId(42L);
-        ms.setSegmentLedgerIds(java.util.Arrays.asList(87L, 88L, 89L));
-
-        StreamLakeMetaStore.Record rec = metaStore().read(); // fresh instance -> reads from the node
-        assertEquals(rec.datePartitionLedgerId, Long.valueOf(42L));
-        assertEquals(rec.segmentLedgerIds, java.util.Arrays.asList(87L, 88L, 89L));
+        assertNull(rec.catalogLedgerId);
     }
 
     @Test
     public void roundTripsAllThreePointersIndependently() throws Exception {
         StreamLakeMetaStore ms = metaStore();
-        ms.updateDatePartitionLedgerId(42L);
-        ms.setSegmentLedgerIds(java.util.Arrays.asList(87L, 88L));
-        ms.setPageIndexLedgerIds(java.util.Arrays.asList(500L, 501L, 502L));
+        ms.setSegmentLedgerIds(Arrays.asList(87L, 88L));
+        ms.setPageIndexLedgerIds(Arrays.asList(500L, 501L, 502L));
+        ms.updateCatalogLedgerId(555L);
 
         StreamLakeMetaStore.Record rec = metaStore().read(); // fresh instance -> reads from the node
-        assertEquals(rec.datePartitionLedgerId, Long.valueOf(42L));
-        assertEquals(rec.segmentLedgerIds, java.util.Arrays.asList(87L, 88L));
-        assertEquals(rec.pageIndexLedgerIds, java.util.Arrays.asList(500L, 501L, 502L));
+        assertEquals(rec.segmentLedgerIds, Arrays.asList(87L, 88L));
+        assertEquals(rec.pageIndexLedgerIds, Arrays.asList(500L, 501L, 502L));
+        assertEquals(rec.catalogLedgerId, Long.valueOf(555L));
     }
 
     @Test
-    public void pageIndexChainUpdateLeavesSegmentAndDateUntouched() throws Exception {
+    public void pageIndexChainUpdateLeavesSegmentAndCatalogUntouched() throws Exception {
         StreamLakeMetaStore ms = metaStore();
-        ms.updateDatePartitionLedgerId(9L);
-        ms.setSegmentLedgerIds(java.util.Arrays.asList(7L));
-        ms.setPageIndexLedgerIds(java.util.Arrays.asList(11L));
+        ms.setSegmentLedgerIds(Arrays.asList(7L));
+        ms.updateCatalogLedgerId(9L);
+        ms.setPageIndexLedgerIds(Arrays.asList(11L, 12L));
 
         StreamLakeMetaStore.Record rec = metaStore().read();
-        assertEquals(rec.datePartitionLedgerId, Long.valueOf(9L));
-        assertEquals(rec.segmentLedgerIds, java.util.Arrays.asList(7L));
-        assertEquals(rec.pageIndexLedgerIds, java.util.Arrays.asList(11L));
+        assertEquals(rec.segmentLedgerIds, Arrays.asList(7L));
+        assertEquals(rec.catalogLedgerId, Long.valueOf(9L));
+        assertEquals(rec.pageIndexLedgerIds, Arrays.asList(11L, 12L));
     }
 
     @Test
-    public void decodesLegacyV2RecordWithEmptyPageIndexChain() throws Exception {
-        // Hand-craft a v2 blob (no page-index chain) and verify it decodes with an empty pi chain.
-        byte[] v2 = java.nio.ByteBuffer.allocate(1 + 1 + 8 + 4 + 2 * 8)
-                .put((byte) 2)          // VERSION_V2
-                .put((byte) 0x1)        // FLAG_DATE
-                .putLong(42L)           // dateId
-                .putInt(2).putLong(87L).putLong(88L) // segment chain
-                .array();
-        store.put("/streamlake/" + LEDGER_NAME, v2, java.util.Optional.empty()).get();
-
-        StreamLakeMetaStore.Record rec = metaStore().read();
-        assertEquals(rec.datePartitionLedgerId, Long.valueOf(42L));
-        assertEquals(rec.segmentLedgerIds, java.util.Arrays.asList(87L, 88L));
-        assertTrue(rec.pageIndexLedgerIds.isEmpty(), "v2 record decodes with an empty page-index chain");
-    }
-
-    @Test
-    public void decodesLegacyV3RecordWithNoCatalogPointer() throws Exception {
-        // Hand-craft a v3 blob (date + segment chain + page-index chain, no catalog) and verify it
-        // decodes with the chains intact and a null catalog pointer.
-        byte[] v3 = java.nio.ByteBuffer.allocate(1 + 1 + 8 + 4 + 8 + 4 + 8)
-                .put((byte) 3)          // VERSION_V3
-                .put((byte) 0x1)        // FLAG_DATE
-                .putLong(42L)           // dateId
-                .putInt(1).putLong(87L) // segment chain
-                .putInt(1).putLong(70L) // page-index chain
-                .array();
-        store.put("/streamlake/" + LEDGER_NAME, v3, java.util.Optional.empty()).get();
-
-        StreamLakeMetaStore.Record rec = metaStore().read();
-        assertEquals(rec.datePartitionLedgerId, Long.valueOf(42L));
-        assertEquals(rec.segmentLedgerIds, java.util.Arrays.asList(87L));
-        assertEquals(rec.pageIndexLedgerIds, java.util.Arrays.asList(70L));
-        assertNull(rec.catalogLedgerId, "v3 record decodes with a null catalog pointer");
-    }
-
-    @Test
-    public void roundTripsCatalogPointerIndependently() throws Exception {
+    public void catalogPointerUpdateLeavesChainsUntouched() throws Exception {
         StreamLakeMetaStore ms = metaStore();
-        ms.setPageIndexLedgerIds(java.util.Arrays.asList(70L, 71L));
+        ms.setPageIndexLedgerIds(Arrays.asList(70L, 71L));
         ms.updateCatalogLedgerId(555L);
 
         StreamLakeMetaStore.Record rec = metaStore().read();
         assertEquals(rec.catalogLedgerId, Long.valueOf(555L));
-        assertEquals(rec.pageIndexLedgerIds, java.util.Arrays.asList(70L, 71L), "chains preserved");
-    }
-
-    @Test
-    public void updatesArePreservedIndependently() throws Exception {
-        StreamLakeMetaStore ms = metaStore();
-        ms.setSegmentLedgerIds(java.util.Arrays.asList(7L));
-        StreamLakeMetaStore.Record afterSeg = metaStore().read();
-        assertEquals(afterSeg.segmentLedgerIds, java.util.Arrays.asList(7L));
-        assertNull(afterSeg.datePartitionLedgerId, "date pointer untouched by a segment update");
-
-        ms.updateDatePartitionLedgerId(9L);
-        StreamLakeMetaStore.Record both = metaStore().read();
-        assertEquals(both.datePartitionLedgerId, Long.valueOf(9L));
-        assertEquals(both.segmentLedgerIds, java.util.Arrays.asList(7L), "segment chain preserved");
-    }
-
-    @Test
-    public void seedsDatePointerFromLegacyManagedLedgerProperty() throws Exception {
-        mlProps.put("streamlake.datePartitionLedgerId", "99");
-
-        // read (node absent) seeds the date pointer from the legacy property.
-        assertEquals(metaStore().read().datePartitionLedgerId, Long.valueOf(99L));
-
-        // a later segment update carries the seeded date pointer into the /streamlake node.
-        StreamLakeMetaStore ms = metaStore();
-        ms.setSegmentLedgerIds(java.util.Arrays.asList(5L));
-        StreamLakeMetaStore.Record rec = metaStore().read();
-        assertEquals(rec.datePartitionLedgerId, Long.valueOf(99L), "legacy date pointer migrated");
-        assertEquals(rec.segmentLedgerIds, java.util.Arrays.asList(5L));
+        assertEquals(rec.pageIndexLedgerIds, Arrays.asList(70L, 71L), "chains preserved");
+        assertTrue(rec.segmentLedgerIds.isEmpty());
     }
 
     @Test
     public void deleteRemovesTheNode() throws Exception {
         StreamLakeMetaStore ms = metaStore();
-        ms.updateDatePartitionLedgerId(1L);
-        assertEquals(metaStore().read().datePartitionLedgerId, Long.valueOf(1L));
+        ms.setPageIndexLedgerIds(Arrays.asList(1L));
+        assertEquals(metaStore().read().pageIndexLedgerIds, Arrays.asList(1L));
 
         ms.delete();
-        assertNull(metaStore().read().datePartitionLedgerId, "node removed -> empty again");
+        assertTrue(metaStore().read().pageIndexLedgerIds.isEmpty(), "node removed -> empty again");
         ms.delete(); // idempotent: deleting an absent node is fine
     }
 
     @Test
-    public void neverWritesManagedLedgerMetadata() throws Exception {
+    public void neverTouchesManagedLedgerMetadata() throws Exception {
         StreamLakeMetaStore ms = metaStore();
-        ms.updateDatePartitionLedgerId(1L);
-        ms.setSegmentLedgerIds(java.util.Arrays.asList(2L));
+        ms.setSegmentLedgerIds(Arrays.asList(2L));
+        ms.setPageIndexLedgerIds(Arrays.asList(3L));
+        ms.updateCatalogLedgerId(4L);
         ms.read();
         ms.delete();
 
+        // Zero coupling: neither reads (getProperties) nor writes (setProperty/...) the ML metadata.
+        verify(ml, never()).getProperties();
         verify(ml, never()).setProperty(any(), any());
         verify(ml, never()).setProperties(any());
         verify(ml, never()).asyncSetProperty(any(), any(), any(), any());
-        assertTrue(true);
     }
 }

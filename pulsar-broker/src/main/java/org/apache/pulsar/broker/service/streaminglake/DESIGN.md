@@ -257,26 +257,25 @@ ledger‑rollover metadata), path:
 /streamlake/<tenant>/<namespace>/persistent/<topic>
 ```
 
-Value = compact binary (`encode()`), current `VERSION=4`:
+Value = compact binary (`encode()`), current `VERSION=5`:
 
 ```
 version:int8 | flags:int8 |
-datePartitionLedgerId:int64 |            // 0 if unset; present when flags & FLAG_DATE(0x1)
 nSeg:int32   | segmentLedgerId  × nSeg (int64 each) |
 nPi:int32    | pageIndexLedgerId × nPi (int64 each) |
-catalogLedgerId:int64                    // present when flags & FLAG_CATALOG(0x4)
+catalogLedgerId:int64                    // present when flags & FLAG_CATALOG(0x1)
 ```
 
 Only **ledger‑id pointers** live here (never the stats). Updates use optimistic concurrency against
-this node only: `store.put(path, encode(rec), Optional.of(expectedVersion))`, retried on
-`BadVersion`. `VERSION_V1..V3` remain **decode‑only** for forward migration.
+this node only: `store.put(path, encode(rec), Optional.of(expectedVersion))`, retried on `BadVersion`.
+`StreamLakeMetaStore` has **zero coupling** to managed‑ledger metadata — it never reads or writes the
+managed‑ledger znode/properties (the node identity is derived from `ml.getName()` only).
 
 Example (decoded):
 
 ```jsonc
-// /streamlake/acme/sales/persistent/orders   (VERSION=4, flags=DATE|CATALOG)
+// /streamlake/acme/sales/persistent/orders   (VERSION=5, flags=CATALOG)
 {
-  "datePartitionLedgerId": 30002,
   "segmentLedgerIds":      [60005],          // segment ledger chain
   "pageIndexLedgerIds":    [50010, 50011],   // page-index ledger chain (head rolled once)
   "catalogLedgerId":       40001             // per-data-ledger state + event-time bounds
@@ -513,48 +512,59 @@ old broker‑side read transcoder — deserialization is now client‑side.)
 ## 5. INNER JOIN — end to end
 
 `StreamLakeHashJoin` is a two‑phase broadcast hash join: the **smaller, already‑pruned** side is built
-into a multimap keyed by the join column; the other side streams and probes, emitting
-`concat(probeRow, buildRow)` per inner match. A `maxBuildRows` guard fails fast instead of OOM (swap
-the on‑heap map for Chronicle Map / NVMe behind `addBuildRow` without changing the probe).
+into a `StreamLakeJoinTable` keyed by the join column; the other side streams and probes with **late
+materialization**, emitting `concat(probeRow, buildRow)` per inner match. The build table is pluggable
+— `OnHeapJoinTable` (default) or `SpillingJoinTable` (§9 config) — and the probe is identical either
+way.
 
-Worked example (the target query):
+Executed by `StreamLakeQueryExecutor.scanInnerJoin(fromMs, toMs, buildPredicate, buildKeyCol,
+probeSide, probePredicate, probeKeyCol, buildTable)`. Each side has its **own** executor (own
+pruner over its own catalog/segment/page‑index ledgers, own `PageReader` over its own data ledger).
+Worked on `Person ⋈ Employee ON personId` (build = Person, the smaller side after pruning):
 
-```sql
-SELECT p.personId, p.name, p.age, e.companyName, e.deptId, e.salary
-FROM Person p INNER JOIN Employee e ON p.personId = e.personId
-WHERE p.age BETWEEN 50 AND 65
-  AND p.createTime >= '2026-01-01' AND p.createTime < '2026-04-01'
-  AND e.deptId BETWEEN 100 AND 150 AND e.salary >= 300000
-  AND e.startDate >= '2025-01-01' AND e.endDate < '2026-01-01'
-ORDER BY e.salary DESC LIMIT 100;
-```
+**Phase 0 — plan.** A Calcite `StreamLakeSqlPlanner` turns each side's SQL into a
+`StreamLakeScanPredicate` (WHERE) + the event‑time `[fromMs,toMs]` window (from the timestamp
+predicates) + the join key columns. `scanInnerJoin` takes those directly.
 
-Executed by `scanInnerJoin(...)` (build = the smaller side after pruning):
+**Phase 1 — build side (`scanRows(buildPredicate, …, addBuildRow)`):** for the Person executor:
+1. `pruner.prune(window, buildPredicate)` → candidate **PagePointers**: TIER‑1 `catalog.candidateLedgers`
+   (date) → Person data ledgers; then per ledger, `segmentStore.segmentFor` gives the column segments
+   and `age`'s per‑page array yields the surviving page positions → `pageEntryIds[i]` (segmented), else
+   a page‑index footer prune (unsegmented). **No data page read yet.**
+2. For each PagePointer, `pageReader.readArrowBatch(ledgerId, entryId)` reads that **data‑ledger** entry
+   and strips the framing to Arrow; `decoder.open(arrow)` loads the batch once.
+3. Per row, `matchesRowLazy` reads **only the predicate columns** (`age`) to apply `matchesRow`; for a
+   surviving row it materializes the **full** row (`batch.row(r)`) and `join.addBuildRow(row)` — the
+   build table stores it under `row[personId]`. (Full row: any Person column may be projected.)
 
-**Phase 1 — build the smaller side (say Person, restricted by the tight `createTime` window):**
-1. Plan Person with Calcite → predicate `{age∈[50,65]}`, and `createTime∈['2026-01-01','2026-04-01')`
-   becomes the **date window** (dropped from the row filter).
-2. `prune(window, {age∈[50,65]})`: Tier 1 keeps Person data ledgers overlapping Q1‑2026; Tier 2 skips
-   segments whose `age` range misses `[50,65]`; Tier 3 keeps pages whose footer `age` range overlaps.
-3. For each surviving page, **late‑materialize** `personId` (+ `age` for the exact filter), keep rows
-   with `age∈[50,65]`, then materialize the projected `name,age`. `join.addBuildRow([personId, name,
-   age])` keying on `personId` (bounded by `maxBuildRows`).
+**Phase 2 — probe side (`probeSide.scanRows(probePredicate, …, visitor)`):** for the Employee executor:
+4. Same prune → read → `decoder.open` over Employee's ledgers.
+5. Per row, `matchesRowLazy` applies the Employee predicate (`salary ≥ 300000`, etc.) reading only those
+   columns. For a surviving row it reads **only the key cell** `batch.value(r, personId)` and calls
+   `join.matches(key)` — an O(1) lookup into the build table (the **intersection**).
+6. Only on a **hit** does it materialize the full Employee row (`batch.row(r)`) and emit, for each build
+   match, `StreamLakeHashJoin.concat(employeeRow, personRow)`. Non‑matching probe rows never allocate
+   their wide columns — that's the late‑materialization win.
 
-**Phase 2 — stream + probe the other side (Employee):**
-4. Plan Employee → predicate `{deptId∈[100,150], salary≥300000}`; `startDate/endDate` become its date
-   window.
-5. `prune(...)` Employee the same way → surviving pages.
-6. For each page, late‑materialize `personId` first; **probe** the Person table; only for a **hit** do
-   we materialize the rest (`companyName,deptId,salary`) and emit
-   `concat(employeeRow, personRow)`.
+**Phase 3 — order + limit + project.** The caller feeds the joined stream into `StreamLakeTopK(k, sort,
+desc)` and applies the SELECT projection (§4.6/4.1) — identical to a single‑table scan.
 
-**Phase 3 — order + limit:** feed the joined stream into `StreamLakeTopK(k=100, salary DESC)`; project
-to `[personId,name,age,companyName,deptId,salary]`.
+**The off‑heap map.** `join.addBuildRow` writes to the `StreamLakeJoinTable`. `OnHeapJoinTable` is a
+`HashMap<key, List<row>>` in the JVM heap (default, fast). `SpillingJoinTable` keeps only a small
+`HashMap<key, List<(offset,length)>>` index on‑heap and appends the row bytes (`StreamLakeRowCodec`) to
+a **spill file** under `joinSpillDir`; `matches(key)` reads+decodes those rows back from the file. Both
+implement the same interface, so the probe path is unchanged; the join `close()` releases the spill
+file.
+
+**Result delivery.** `scanInnerJoin` returns `List<Object[]>` **in‑process** on the query‑executor
+broker (that's how it is driven today). Streaming the result to a remote client over the wire is a
+**remaining integration point** — the old client↔broker scan RPC was removed as a dead prototype (§8),
+so there is currently no over‑the‑wire query‑result command.
 
 Why it scales: both sides are pruned to *fresh candidate pages* **before** any join, so only rows that
-survive pruning + row filter reach the join. The build side stays small (fits in a
-128–256 GB broker, or spills to NVMe); the probe side streams — no distributed shuffle/sort like
-Iceberg+Spark, and 1 MiB pages waste ~128× less read IO than 128 MiB Parquet row groups.
+survive pruning + row filter reach it. The build side stays small (fits a 128–256 GB broker, or spills
+to NVMe); the probe side streams and skips full decode for non‑matches — no distributed shuffle/sort
+like Iceberg+Spark, and 1 MiB pages waste ~128× less read IO than 128 MiB Parquet row groups.
 
 ---
 
@@ -641,3 +651,50 @@ rowCount=9000000 | state=2 (SEGMENTED)
   pageRanges)`. (BookKeeper fork rebuilt so the regenerated proto drops these.)
 * Client↔broker `CommandScan`/`CommandScanResponse` RPC (proto + `Commands`/`PulsarDecoder`/`ServerCnx`/
   `ClientCnx`) and the old prototype‑only `StreamingLakeConfig` knobs.
+
+---
+
+## 9. Configuration
+
+### 9.1 Topic policy — `StreamingLakeConfig` (broker/admin)
+
+Set per topic (topic policy). Drives the client encode view, the broker metadata ledgers, and the
+query tier. Defaults in parentheses.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `enabled` | false | Turn the topic into a StreamLake table. |
+| `clientColumnarEnabled` | false | Use the client‑columnar write path (broker slices the footer into the page index). |
+| `columns` | [] | Ordered schema: `SchemaColumn{columnId, name, type, indexed}`. Column index = position; `indexed=true` emits per‑batch pruning stats. |
+| `setMaxCardinality` | 64 | Per‑column exact‑set cap in a batch footer; above it the column uses a bloom. |
+| `bloomFpp` | 0.01 | Target bloom false‑positive probability for high‑cardinality columns. |
+| `segmentColumnMaxBytes` | 2 MiB | Per‑column cap on a segment's per‑page array before it collapses to one coarse stat. |
+| `pageIndexEnsembleSize` / `pageIndexWriteQuorum` / `pageIndexAckQuorum` | 3 / 3 / 2 | Replication of the page‑index ledger (hot metadata): write to `ensemble` bookies, ack after `ackQuorum`. Raise `ensemble` for read scaling. |
+| `segmentEnsembleSize` / `segmentWriteQuorum` / `segmentAckQuorum` | 5 / 5 / 3 | Replication of the segment ledgers (read‑heavy pruning tier); tune much higher for read scaling. |
+| `metadataBookieAffinityGroup` | "" | Bookie affinity group isolating StreamLake metadata ledgers off the pub/sub pool. |
+| `queryExecutorEnabled` | false | This broker runs the query‑executor + segment‑build roles. |
+| `segmentOffloadEnabled` | false | Offload cold segments to object storage. |
+| `joinMaxBuildRows` | 5,000,000 | Hash‑join build‑side admission guard (fail fast instead of OOM). |
+| `joinOffHeapEnabled` | false | Spill the join build table's row bytes to a file instead of the JVM heap (for build sides larger than RAM). |
+| `joinSpillDir` | "" | Broker‑local directory for join spill files when `joinOffHeapEnabled` (empty ⇒ JVM temp dir; point at fast local NVMe). Files are deleted after the join. |
+
+**Enabling off‑heap joins:** set `joinOffHeapEnabled=true` and `joinSpillDir=/mnt/nvme/sl-join` (a
+broker‑local path). The query executor then builds a `SpillingJoinTable(joinMaxBuildRows, joinSpillDir)`
+instead of an `OnHeapJoinTable`. On‑heap is the default because pruning is expected to keep the build
+side small; off‑heap trades speed for the ability to join build sides that exceed RAM. Only the row
+bytes go to disk — the key index stays on‑heap — so lookups stay O(1).
+
+### 9.2 Producer — `StreamLakeProducer` (client)
+
+Constructor knobs (batch flush triggers): `maxRows` (1000), `maxBytes` (1 MiB), `maxDelayMs` (10).
+Wrap a `Producer<byte[]>` created with **Pulsar batching disabled + message compression enabled**.
+
+### 9.3 Consumer — `StreamLakeConsumer` (client)
+
+Wraps a `Consumer<byte[]>`; no extra config — it decodes the columnar payload back to rows using the
+self‑describing Arrow schema.
+
+### 9.4 Broker runtime (real‑bookie)
+
+The page‑index/segment ledgers use the RF above; a test/single‑bookie cluster must set the RF to
+`1/1/1`. `bookkeeperUseV2WireProtocol=false` (the client‑columnar payload rides normal V3 add).

@@ -23,6 +23,7 @@ import java.util.Comparator;
 import java.util.List;
 import org.apache.pulsar.client.streaminglake.StreamLakeArrowBatchDecoder;
 import org.apache.pulsar.client.streaminglake.StreamLakeHashJoin;
+import org.apache.pulsar.client.streaminglake.StreamLakeJoinTable;
 import org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate;
 import org.apache.pulsar.client.streaminglake.StreamLakeSchema;
 import org.apache.pulsar.client.streaminglake.StreamLakeTopK;
@@ -113,18 +114,91 @@ public class StreamLakeQueryExecutor {
     }
 
     /**
-     * Inner-join two scanned sides on a join column. The build side (smaller, already pruned) is
-     * materialized into the hash table; the probe side streams. Emits concat(probeRow, buildRow).
+     * Inner-join two scanned sides on a join column with <b>late materialization</b>. The build side
+     * (smaller, already pruned) is filtered and its full rows are put into {@code buildTable}; the
+     * probe side is streamed: for each surviving probe row only its key column is read to probe the
+     * table, and the full probe row is materialized <i>only on a match</i>. Emits
+     * {@code concat(probeRow, buildRow)}. {@code buildTable} selects the backend (on-heap vs spilling).
      */
     public List<Object[]> scanInnerJoin(
             long fromMs, long toMs,
             StreamLakeScanPredicate buildPredicate, int buildKeyColumn,
             StreamLakeQueryExecutor probeSide, StreamLakeScanPredicate probePredicate, int probeKeyColumn,
-            long maxBuildRows) throws Exception {
-        StreamLakeHashJoin join = new StreamLakeHashJoin(buildKeyColumn, maxBuildRows);
-        for (Object[] buildRow : scan(fromMs, toMs, buildPredicate)) {
-            join.addBuildRow(buildRow);
+            StreamLakeJoinTable buildTable) throws Exception {
+        List<Object[]> out = new ArrayList<>();
+        try (StreamLakeHashJoin join = new StreamLakeHashJoin(buildKeyColumn, buildTable)) {
+            // Phase 1: build side -- filter on predicate columns, materialize the full row only for
+            // survivors (the build side is small and any of its columns may be projected downstream).
+            scanRows(buildPredicate, fromMs, toMs, (batch, row) -> join.addBuildRow(batch.row(row)));
+
+            // Phase 2: probe side -- filter, read only the key to probe, materialize the full probe row
+            // only when it matches a build key (so non-matching probe rows never allocate wide columns).
+            probeSide.scanRows(probePredicate, fromMs, toMs, (batch, row) -> {
+                List<Object[]> buildMatches = join.matches(batch.value(row, probeKeyColumn));
+                if (buildMatches.isEmpty()) {
+                    return;
+                }
+                Object[] probeRow = batch.row(row);
+                for (Object[] buildRow : buildMatches) {
+                    out.add(StreamLakeHashJoin.concat(probeRow, buildRow));
+                }
+            });
         }
-        return join.joinInner(probeSide.scan(fromMs, toMs, probePredicate), probeKeyColumn);
+        return out;
+    }
+
+    /** Convenience overload using an on-heap build table bounded by {@code maxBuildRows}. */
+    public List<Object[]> scanInnerJoin(
+            long fromMs, long toMs,
+            StreamLakeScanPredicate buildPredicate, int buildKeyColumn,
+            StreamLakeQueryExecutor probeSide, StreamLakeScanPredicate probePredicate, int probeKeyColumn,
+            long maxBuildRows) throws Exception {
+        return scanInnerJoin(fromMs, toMs, buildPredicate, buildKeyColumn, probeSide, probePredicate,
+                probeKeyColumn, new org.apache.pulsar.client.streaminglake.OnHeapJoinTable(maxBuildRows));
+    }
+
+    /** A visitor over the rows of a loaded page batch (used for late-materialized scans). */
+    private interface RowVisitor {
+        void visit(StreamLakeArrowBatchDecoder.Batch batch, int row) throws Exception;
+    }
+
+    /**
+     * Prune to candidate pages, then for each page open the Arrow batch and, for every row that passes
+     * the predicate (evaluated by reading only the predicate columns), invoke {@code visitor}. The
+     * visitor materializes the full row lazily via {@link StreamLakeArrowBatchDecoder.Batch#row}.
+     */
+    private void scanRows(StreamLakeScanPredicate predicate, long fromMs, long toMs, RowVisitor visitor)
+            throws Exception {
+        int[] predicateColumns = predicateColumns(predicate);
+        List<StreamLakePruner.PagePointer> pages = pruner.prune(fromMs, toMs, predicate);
+        try (StreamLakeArrowBatchDecoder decoder = new StreamLakeArrowBatchDecoder()) {
+            for (StreamLakePruner.PagePointer p : pages) {
+                byte[] arrow = pageReader.readArrowBatch(p.ledgerId, p.entryId);
+                try (StreamLakeArrowBatchDecoder.Batch batch = decoder.open(arrow)) {
+                    int cols = batch.columnCount();
+                    for (int r = 0; r < batch.rowCount(); r++) {
+                        if (matchesRowLazy(predicate, predicateColumns, batch, r, cols)) {
+                            visitor.visit(batch, r);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Evaluate the predicate by materializing only its columns into a sparse full-width row.
+    private static boolean matchesRowLazy(StreamLakeScanPredicate predicate, int[] predicateColumns,
+            StreamLakeArrowBatchDecoder.Batch batch, int row, int columnCount) {
+        Object[] sparse = new Object[columnCount];
+        for (int c : predicateColumns) {
+            sparse[c] = batch.value(row, c);
+        }
+        return predicate.matchesRow(sparse);
+    }
+
+    private static int[] predicateColumns(StreamLakeScanPredicate predicate) {
+        return predicate.columns().stream()
+                .mapToInt(StreamLakeScanPredicate.ColumnPredicate::columnIndex)
+                .distinct().toArray();
     }
 }

@@ -19,34 +19,36 @@
 package org.apache.pulsar.client.streaminglake;
 
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 
 /**
  * A two-phase broadcast hash join for StreamLake scans: the smaller (already heavily pruned) side is
- * built into a hash table keyed by the join column; the other side is streamed and probed, emitting
- * {@code concat(probeRow, buildRow)} for each inner match. This is the "minimize intermediate data
- * reaching the join" operator -- pruning shrinks both inputs first, so the build side fits in memory.
+ * built into a {@link StreamLakeJoinTable} keyed by the join column; the other side is streamed and
+ * probed, emitting {@code concat(probeRow, buildRow)} for each inner match. This is the "minimize
+ * intermediate data reaching the join" operator -- pruning shrinks both inputs first, so the build
+ * side is small.
  *
- * <p>The build table is an on-heap multimap here; a production deployment can swap it for an off-heap
- * / NVMe-backed map (e.g. Chronicle Map) behind {@link #addBuildRow} without changing the probe. A
- * {@code maxBuildRows} guard provides simple admission control (fail fast instead of OOM).
+ * <p>The build table is pluggable ({@link OnHeapJoinTable} by default, {@link SpillingJoinTable} for
+ * build sides larger than RAM). Callers that late-materialize the probe side use {@link #matches} to
+ * probe by key before materializing the full probe row.
  */
-public final class StreamLakeHashJoin {
+public final class StreamLakeHashJoin implements AutoCloseable {
 
     private final int buildKeyColumn;
-    private final long maxBuildRows;
-    private final Map<Object, List<Object[]>> table = new HashMap<>();
-    private long buildRows;
+    private final StreamLakeJoinTable table;
 
     public StreamLakeHashJoin(int buildKeyColumn) {
-        this(buildKeyColumn, Long.MAX_VALUE);
+        this(buildKeyColumn, new OnHeapJoinTable(Long.MAX_VALUE));
     }
 
     public StreamLakeHashJoin(int buildKeyColumn, long maxBuildRows) {
+        this(buildKeyColumn, new OnHeapJoinTable(maxBuildRows));
+    }
+
+    public StreamLakeHashJoin(int buildKeyColumn, StreamLakeJoinTable table) {
         this.buildKeyColumn = buildKeyColumn;
-        this.maxBuildRows = maxBuildRows;
+        this.table = table;
     }
 
     /** Add a build-side row, indexed by its join key. Null keys never match and are dropped. */
@@ -55,41 +57,42 @@ public final class StreamLakeHashJoin {
         if (key == null) {
             return;
         }
-        if (buildRows >= maxBuildRows) {
-            throw new IllegalStateException("StreamLake hash-join build side exceeded " + maxBuildRows
-                    + " rows; spill to an off-heap/NVMe map or increase the budget");
-        }
-        table.computeIfAbsent(key, k -> new ArrayList<>()).add(row);
-        buildRows++;
+        table.add(key, row);
     }
 
     public long buildSize() {
-        return buildRows;
+        return table.size();
     }
 
-    /** Inner-join the probe rows against the build table, emitting concat(probeRow, buildRow). */
+    /** The build rows matching a probe key (empty if none) -- for streaming late-materialized probes. */
+    public List<Object[]> matches(Object probeKey) {
+        if (probeKey == null) {
+            return Collections.emptyList();
+        }
+        return table.get(probeKey);
+    }
+
+    /** Inner-join the (already materialized) probe rows against the build table, emitting concat rows. */
     public List<Object[]> joinInner(Iterable<Object[]> probeRows, int probeKeyColumn) {
         List<Object[]> out = new ArrayList<>();
         for (Object[] probe : probeRows) {
-            Object key = probe[probeKeyColumn];
-            if (key == null) {
-                continue;
-            }
-            List<Object[]> matches = table.get(key);
-            if (matches == null) {
-                continue;
-            }
-            for (Object[] buildRow : matches) {
+            for (Object[] buildRow : matches(probe[probeKeyColumn])) {
                 out.add(concat(probe, buildRow));
             }
         }
         return out;
     }
 
-    private static Object[] concat(Object[] a, Object[] b) {
+    /** Concatenate a probe row and a build row into one output row: {@code [probe..., build...]}. */
+    public static Object[] concat(Object[] a, Object[] b) {
         Object[] r = new Object[a.length + b.length];
         System.arraycopy(a, 0, r, 0, a.length);
         System.arraycopy(b, 0, r, a.length, b.length);
         return r;
+    }
+
+    @Override
+    public void close() {
+        table.close();
     }
 }

@@ -32,33 +32,24 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Durable pointers for a topic's StreamLake indexes (the date-partition-list ledger, the segment
- * index-ledger, and the shared page-index ledger), kept in a <b>dedicated metadata node</b> that
- * mirrors the managed-ledger path under
- * a separate {@code /streamlake} root — e.g. {@code /streamlake/tenant/ns/persistent/topic}.
+ * Durable pointers for a topic's StreamLake metadata ledgers (the per-data-ledger catalog, the
+ * segment index-ledger chain, and the shared page-index ledger chain), kept in a <b>dedicated
+ * metadata node</b> that mirrors the managed-ledger path under a separate {@code /streamlake} root —
+ * e.g. {@code /streamlake/tenant/ns/persistent/topic}.
  *
- * <p>This intentionally does <b>not</b> use managed-ledger properties: writing a property rewrites
- * the managed-ledger znode and bumps its version, which would contend with the ledger's own
- * write-path metadata updates (ledger rollover). Owning a separate node means updates here use
- * optimistic concurrency only against our own node and never touch the managed-ledger metadata.
- *
- * <p>Backward compatibility: if the node does not yet exist, {@link #read()} seeds
- * {@code datePartitionLedgerId} from the legacy {@code streamlake.datePartitionLedgerId} managed-
- * ledger property (a read only — it never writes the managed-ledger znode); the value is persisted
- * into {@code /streamlake} on the next update.
+ * <p>This node is the single durable source of truth for "which StreamLake ledgers exist". It
+ * intentionally has <b>zero</b> coupling to managed-ledger metadata — it never reads or writes the
+ * managed-ledger znode/properties. Updates use optimistic concurrency against this node only, so they
+ * never contend with the ledger's own write-path metadata (ledger rollover). The node's identity is
+ * derived from {@code ml.getName()} (just the topic path), and its value is:
+ * <pre>version(1) | flags(1) | nSeg(4) | segIds(8*n) | nPi(4) | piIds(8*n) | catalogId(8)</pre>
  */
 public class StreamLakeMetaStore {
 
     private static final Logger log = LoggerFactory.getLogger(StreamLakeMetaStore.class);
     private static final String ROOT = "/streamlake";
-    private static final String LEGACY_DATE_PROP = "streamlake.datePartitionLedgerId";
-    private static final byte VERSION_V1 = 1; // version(1) flags(1) dateId(8) segId(8)   (single segment ledger)
-    private static final byte VERSION_V2 = 2; // version(1) flags(1) dateId(8) numSeg(4) segIds(8*n)
-    private static final byte VERSION_V3 = 3; // v2 + numPi(4) piIds(8*n)  (shared page-index ledger chain)
-    private static final byte VERSION = 4;    // v3 + catalogId(8)  (per-ledger catalog ledger pointer)
-    private static final int FLAG_DATE = 0x1;
-    private static final int FLAG_SEG = 0x2;  // v1 only
-    private static final int FLAG_CATALOG = 0x4;
+    private static final byte VERSION = 5; // version(1) flags(1) nSeg(4) segIds nPi(4) piIds catalogId(8)
+    private static final int FLAG_CATALOG = 0x1;
     private static final long OP_TIMEOUT_SEC = 30;
     private static final int MAX_ATTEMPTS = 5;
 
@@ -74,7 +65,6 @@ public class StreamLakeMetaStore {
 
     /** The persisted index pointers; a null/empty field means "not set". */
     public static final class Record {
-        public Long datePartitionLedgerId;
         /** The chain of segment index-ledgers (append to the head; new head on fence; roll for GC). */
         public List<Long> segmentLedgerIds = new ArrayList<>();
         /** The chain of shared page-index ledgers (per-batch stat footers; new head on roll/fence). */
@@ -83,10 +73,7 @@ public class StreamLakeMetaStore {
         public Long catalogLedgerId;
     }
 
-    /**
-     * Read the current record, or an empty one seeded from the legacy managed-ledger property when
-     * the {@code /streamlake} node does not exist yet. Never writes.
-     */
+    /** Read the current record, or an empty one when the {@code /streamlake} node does not exist yet. */
     public synchronized Record read() throws MetadataStoreException {
         try {
             Optional<GetResult> res = store.get(path).get(OP_TIMEOUT_SEC, TimeUnit.SECONDS);
@@ -96,11 +83,7 @@ public class StreamLakeMetaStore {
         } catch (Exception e) {
             throw asMetadataStoreException(e);
         }
-        return seedFromLegacy();
-    }
-
-    public synchronized void updateDatePartitionLedgerId(long id) throws MetadataStoreException {
-        update(rec -> rec.datePartitionLedgerId = id);
+        return new Record();
     }
 
     /** Replace the segment index-ledger chain (used when rolling a new head or collapsing on GC). */
@@ -141,7 +124,7 @@ public class StreamLakeMetaStore {
                     rec = decode(res.get().getValue());
                     expectedVersion = res.get().getStat().getVersion();
                 } else {
-                    rec = seedFromLegacy();
+                    rec = new Record();
                     expectedVersion = -1L; // create-if-absent
                 }
                 mutator.accept(rec);
@@ -159,32 +142,16 @@ public class StreamLakeMetaStore {
         throw last != null ? last : new MetadataStoreException("StreamLake metadata update failed: " + path);
     }
 
-    private Record seedFromLegacy() {
-        Record rec = new Record();
-        String legacy = ml.getProperties().get(LEGACY_DATE_PROP);
-        if (legacy != null) {
-            try {
-                rec.datePartitionLedgerId = Long.parseLong(legacy);
-            } catch (NumberFormatException ignore) {
-                // legacy value unparseable -> start fresh
-            }
-        }
-        return rec;
-    }
-
     private static boolean isPresent(Optional<GetResult> res) {
-        return res.isPresent() && res.get().getValue() != null && res.get().getValue().length >= 10;
+        return res.isPresent() && res.get().getValue() != null && res.get().getValue().length >= 2;
     }
 
     private static byte[] encode(Record rec) {
         List<Long> segs = rec.segmentLedgerIds == null ? java.util.Collections.emptyList() : rec.segmentLedgerIds;
         List<Long> pis = rec.pageIndexLedgerIds == null ? java.util.Collections.emptyList() : rec.pageIndexLedgerIds;
-        ByteBuffer bb = ByteBuffer.allocate(1 + 1 + 8 + 4 + segs.size() * 8 + 4 + pis.size() * 8 + 8);
+        ByteBuffer bb = ByteBuffer.allocate(1 + 1 + 4 + segs.size() * 8 + 4 + pis.size() * 8 + 8);
         bb.put(VERSION);
-        int flags = (rec.datePartitionLedgerId != null ? FLAG_DATE : 0)
-                | (rec.catalogLedgerId != null ? FLAG_CATALOG : 0);
-        bb.put((byte) flags);
-        bb.putLong(rec.datePartitionLedgerId != null ? rec.datePartitionLedgerId : 0L);
+        bb.put((byte) (rec.catalogLedgerId != null ? FLAG_CATALOG : 0));
         bb.putInt(segs.size());
         for (long id : segs) {
             bb.putLong(id);
@@ -199,31 +166,22 @@ public class StreamLakeMetaStore {
 
     private static Record decode(byte[] bytes) {
         ByteBuffer bb = ByteBuffer.wrap(bytes);
-        int version = bb.get() & 0xFF;
+        bb.get(); // version (reserved for forward evolution)
         int flags = bb.get() & 0xFF;
-        long dateId = bb.getLong();
         Record rec = new Record();
-        if ((flags & FLAG_DATE) != 0) {
-            rec.datePartitionLedgerId = dateId;
-        }
-        if (version == VERSION_V1) {
-            long segId = bb.getLong(); // single segment ledger in the old fixed format
-            if ((flags & FLAG_SEG) != 0) {
-                rec.segmentLedgerIds.add(segId);
+        if (bb.remaining() >= 4) {
+            int nSeg = bb.getInt();
+            for (int i = 0; i < nSeg && bb.remaining() >= 8; i++) {
+                rec.segmentLedgerIds.add(bb.getLong());
             }
-            return rec;
         }
-        int nSeg = bb.getInt();
-        for (int i = 0; i < nSeg; i++) {
-            rec.segmentLedgerIds.add(bb.getLong());
-        }
-        if (version >= VERSION_V3 && bb.remaining() >= 4) { // v3+: shared page-index ledger chain
+        if (bb.remaining() >= 4) {
             int nPi = bb.getInt();
-            for (int i = 0; i < nPi; i++) {
+            for (int i = 0; i < nPi && bb.remaining() >= 8; i++) {
                 rec.pageIndexLedgerIds.add(bb.getLong());
             }
         }
-        if (version >= VERSION && bb.remaining() >= 8) { // v4+: per-ledger catalog ledger pointer
+        if (bb.remaining() >= 8) {
             long catId = bb.getLong();
             if ((flags & FLAG_CATALOG) != 0) {
                 rec.catalogLedgerId = catId;

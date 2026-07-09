@@ -111,6 +111,29 @@ public class StreamingLakeConfig {
     @Builder.Default
     private boolean segmentOffloadEnabled = false;
 
+    /**
+     * Inner-join build-side admission guard: the max rows the hash-join build side may hold before it
+     * fails fast (rather than OOM). Raise it, or enable {@code joinOffHeapEnabled}, for larger builds.
+     */
+    @Builder.Default
+    private long joinMaxBuildRows = 5_000_000L;
+
+    /**
+     * When true, the hash-join build table spills row bytes to a file (only a small key index stays
+     * on-heap) instead of holding all rows in the JVM heap — for build sides larger than RAM. Default
+     * false: pruning is expected to keep the build side small enough for the fast on-heap table.
+     */
+    @Builder.Default
+    private boolean joinOffHeapEnabled = false;
+
+    /**
+     * Broker-local directory for hash-join spill files when {@code joinOffHeapEnabled}. Empty (default)
+     * uses the JVM temp dir; point it at fast local NVMe for large builds. Files are deleted after the
+     * join completes.
+     */
+    @Builder.Default
+    private String joinSpillDir = "";
+
     /** Columns for which the broker emits min/max ranges into the page-range index. */
     @Builder.Default
     private List<IndexedColumn> indexedColumns = new ArrayList<>();

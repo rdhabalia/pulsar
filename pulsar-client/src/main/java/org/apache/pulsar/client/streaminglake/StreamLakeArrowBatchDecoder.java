@@ -119,6 +119,74 @@ public final class StreamLakeArrowBatchDecoder implements AutoCloseable {
         }
     }
 
+    /**
+     * Open a single Arrow batch for <b>late materialization</b>: read the cheap key/predicate cells
+     * first ({@link Batch#value}) and materialize a full row ({@link Batch#row}) only for the rows that
+     * survive — so an inner join never allocates the wide columns of non-matching rows. A StreamLake
+     * payload holds exactly one batch. The returned {@link Batch} must be closed.
+     */
+    public Batch open(byte[] ipc) {
+        try {
+            ArrowStreamReader reader = new ArrowStreamReader(new ByteArrayInputStream(ipc), allocator);
+            if (!reader.loadNextBatch()) {
+                reader.close();
+                return new Batch(null, null, 0);
+            }
+            VectorSchemaRoot root = reader.getVectorSchemaRoot();
+            return new Batch(reader, root, root.getRowCount());
+        } catch (IOException e) {
+            throw new UncheckedIOException("StreamLake Arrow open failed", e);
+        }
+    }
+
+    /** One loaded Arrow batch; cells are read on demand from the live vectors until {@link #close()}. */
+    public static final class Batch implements AutoCloseable {
+        private final ArrowStreamReader reader;
+        private final VectorSchemaRoot root;
+        private final int rowCount;
+        private final int columnCount;
+
+        Batch(ArrowStreamReader reader, VectorSchemaRoot root, int rowCount) {
+            this.reader = reader;
+            this.root = root;
+            this.rowCount = rowCount;
+            this.columnCount = root == null ? 0 : root.getFieldVectors().size();
+        }
+
+        public int rowCount() {
+            return rowCount;
+        }
+
+        public int columnCount() {
+            return columnCount;
+        }
+
+        /** One cell (cheap: read the single vector slot). */
+        public Object value(int row, int column) {
+            return get(root.getVector(column), row);
+        }
+
+        /** Materialize the full row (all columns) -- call only for rows that survive the filter/probe. */
+        public Object[] row(int row) {
+            Object[] r = new Object[columnCount];
+            for (int c = 0; c < columnCount; c++) {
+                r[c] = get(root.getVector(c), row);
+            }
+            return r;
+        }
+
+        @Override
+        public void close() {
+            if (reader != null) {
+                try {
+                    reader.close();
+                } catch (IOException ignore) {
+                    // best-effort
+                }
+            }
+        }
+    }
+
     private static Object get(FieldVector vector, int idx) {
         if (vector.isNull(idx)) {
             return null;
