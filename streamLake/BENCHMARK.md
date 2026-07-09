@@ -132,22 +132,21 @@ granularity, and avoids the shuffle entirely.
 End‑to‑end **ingest + store + query** for one sustained pipeline. All unit prices are AWS on‑demand,
 US‑East‑1, list price (see §8 for sources + dates — **verify current pricing before quoting**).
 
-**Reference workload:** 10 MB/s sustained ingest (Person+Employee) = ~864 GB/day; 7 days queryable
-"hot"; 30‑day total retention; **~1,000 selective inner‑join queries/day** over recent windows (the
-§2 query profile).
+**Reference workload:** 10 MB/s sustained ingest (Person+Employee) = ~864 GB/day; **30‑day retention
+held entirely on BookKeeper (no object store)**; **~1,000 selective inner‑join queries/day** over
+recent windows (the §2 query profile).
 
-### 4.1 StreamLake (one system: Pulsar + BookKeeper does ingest, storage, **and** query)
+### 4.1 StreamLake (one system: Pulsar + BookKeeper does ingest, storage, **and** query — no S3)
 
-StreamLake maps cleanly onto **cheap, role‑specific hardware**, and cost is modeled the way it is
-actually deployed:
+The whole point is that **BookKeeper is the store** — there is no object tier to offload to. Data
+lives on cheap, role‑specific hardware:
 
-- **Pub‑sub brokers** — cheap, stateless serving nodes (no large local disk); they handle produce/
-  consume and dispatch.
+- **Pub‑sub brokers** — cheap, stateless serving nodes (no large local disk).
 - **Query (StreamLake) brokers** — an **isolated** analytical tier with **local NVMe** for the
   off‑heap join spill and page decode; this is the tier the §2 numbers ran on.
-- **Bookies** — a small, fast **NVMe journal device** (write‑ahead log, ~100 GB is plenty) + a large
-  **HDD (st1) ledger device** for the bulk columnar data. Perf (§2) was taken on NVMe, so an
-  all‑NVMe ledger variant is costed too.
+- **Bookies** — a small, fast **NVMe journal device** (write‑ahead log, ~100 GB) + a large
+  **HDD (st1) ledger device** that holds the **entire retained dataset** (what an Iceberg‑on‑S3 lake
+  would otherwise hold).
 
 | Component | Sizing | Monthly (list) |
 |---|---|---|
@@ -155,23 +154,22 @@ actually deployed:
 | **Query brokers** (NVMe — runs the joins + off‑heap spill) | 2 × r5.2xlarge @ $0.504/hr × 730 + 256 GB NVMe each | **$777** |
 | **Bookie** compute | 3 × m5.2xlarge @ $0.384/hr × 730 | **$841** |
 | **Bookie journal** device (**NVMe**) | 3 × 100 GB NVMe (gp3) @ $0.08/GB‑mo | **$24** |
-| **Bookie ledger** device (**HDD**, hot ≈ 6 TB × RF‑3 = 18 TB) | 18 TB × $0.045/GB‑mo (st1) | **$810** |
-| Cold offload (data > 7 d → S3) | ~19 TB × $0.023/GB‑mo | **$437** |
-| **Query compute** | **marginal** — runs on the NVMe query brokers (~1.1 s/query) | **$0** |
-| **Total (production: cheap pub‑sub + NVMe query brokers + NVMe‑journal/HDD‑ledger bookies)** | | **≈ $3,169/mo** |
+| **Bookie ledger** device (**HDD**) — full 30‑day dataset | ~26 TB × **RF‑3** = ~78 TB × $0.045/GB‑mo (st1) | **$3,499** |
+| **Query execution** | on the query brokers above — **no separate per‑query cluster** | **incl.** |
+| **Total** | | **≈ $5,420/mo** |
 
-**Ledger‑device cost — HDD vs NVMe** (the 18 TB RF‑3 hot set; the journal stays 100 GB NVMe either way):
+**No S3 line, by design.** Everything an Iceberg‑on‑S3 lake would store sits on the BookKeeper HDD
+ledger instead. That is the honest trade: BookKeeper keeps **RF‑3 = 3× bytes** on servers you run,
+where S3 is ~1.4× erasure at rest — so per stored byte BookKeeper is dearer, but you delete the entire
+object‑store + ETL + query‑compute stack around it. Two levers move the storage line:
 
-| Ledger/storage device | $/GB‑mo | 18 TB RF‑3 | Which config |
-|---|---|---|---|
-| **HDD (st1)** | $0.045 | **$810/mo** | **large‑scale production** (what we deploy) |
-| SSD (gp3, NVMe‑class) | $0.08 | **$1,440/mo** | matches the **§2 perf benchmark** config |
-
-So the StreamLake total is **≈ $3,169/mo with HDD ledgers** (production) or **≈ $3,799/mo with NVMe
-ledgers** (perf‑config: swap the $810 line for $1,440). Only the two devices that need speed are on
-NVMe — the **bookie journal** (100 GB) and the **query‑broker spill** — while the **bulk ledger data
-sits on cheap HDD** and pub‑sub runs on cheap general‑purpose nodes. RF‑3 (3× bytes) is in the ledger
-sizing; queries add no line item (they run on the already‑provisioned NVMe query brokers at ~1 s each).
+- **Replication.** Pulsar's *default* data‑ledger quorum is **RF‑2** (E=2/Qw=2/Qa=2), which drops the
+  ledger line to **~$2,333/mo** and the total to **≈ $4,250/mo**. RF‑3 above is the conservative,
+  higher‑durability choice.
+- **Storage device.** NVMe is used only where latency matters — the **bookie journal** (100 GB) and
+  the **query‑broker spill**. The **bulk ledger is HDD**; putting 78 TB on NVMe (gp3) would cost
+  ~$6.2k/mo alone and is never necessary, because pruning means a query reads only the **1–9 %**
+  working set (§2) and hot pages sit in page cache on the query brokers.
 
 ### 4.2 Kafka → Spark → S3 → Iceberg → Spark (five components)
 
@@ -188,35 +186,40 @@ sizing; queries add no line item (they run on the already‑provisioned NVMe que
 
 | | StreamLake | Kafka+Spark+S3+Iceberg | Ratio |
 |---|---|---|---|
-| Monthly TCO — **production (HDD ledgers)** | **~$3,169** | ~$7,689 | **~2.4× cheaper** |
-| Monthly TCO — perf‑config (NVMe ledgers) | ~$3,799 | ~$7,689 | ~2.0× cheaper |
+| Monthly TCO — **RF‑3, all data on BookKeeper** | **~$5,420** | ~$7,689 | **~1.4× cheaper** |
+| Monthly TCO — RF‑2 (Pulsar default) | ~$4,250 | ~$7,689 | ~1.8× cheaper |
+| Object store required | **none** — BookKeeper is the store | S3 (+ Iceberg) | — |
 | Components to operate | **1** (Pulsar/BK) | 5 | — |
 | Query latency (selective join) | **~1 s** (measured) | seconds–minutes (cluster/shuffle/spin‑up) | — |
 | Data freshness at query time | **live** | after Kafka→S3 sink + compaction | — |
 | Data scanned per query | **1–9 %** (measured) | 2–6× more (modeled, §3) | — |
 
-The dominant competitor cost is **query‑side Spark compute** (spin‑up/shuffle for each query) and the
-**duplicated always‑on compute** across Kafka + two Spark roles. StreamLake collapses these into one
-always‑on cluster where the query is a marginal ~1 s of CPU. Moving the ledger device from NVMe to
-**HDD in production** cuts StreamLake storage further (the §2 perf numbers still hold — reads at query
-time are of the *pruned* 1–9 % working set, and hot pages sit in page cache / the query broker).
+StreamLake is **not** cheaper on storage — holding the full dataset at RF‑3 on HDD costs more per byte
+than S3's erasure‑coded object tier. The saving is everywhere else: it deletes the **query‑side Spark
+compute** (per‑query spin‑up/shuffle), the **duplicated always‑on compute** across Kafka + two Spark
+roles, the compaction jobs, and the object store itself — collapsing five systems into one where the
+query is a marginal ~1 s of CPU on an already‑running broker.
 
 ---
 
 ## 5. Where the competitor legitimately wins (don't oversell)
 
 - **Cold, rarely‑queried archival at PB scale.** S3 is serverless at rest (~$0.023/GB‑mo, ~1.4×
-  erasure overhead) while BookKeeper runs servers 24/7 and stores **3× bytes** at RF‑3. For data you
-  almost never read, S3 is decisively cheaper — hence StreamLake's own §7 **offloads cold ledgers to
-  object storage**. StreamLake's advantage is the **hot/warm, freshly‑queried tier**, not deep archive.
+  erasure overhead) while BookKeeper runs servers 24/7 and stores **2–3× bytes** at RF‑2/RF‑3. The §4
+  model holds the **entire dataset on BookKeeper** (no S3), which is the right call for a hot/warm,
+  freshly‑queried store — but for data you almost never read, S3 is decisively cheaper per byte. A
+  deployment that must keep *years* of cold history can still offload the long tail to object storage
+  via bookie affinity groups; the point is that S3 is then an **optional** archive, not a mandatory
+  part of the query path.
 - **Massive output / full‑table scans.** If a query emits billions of rows or scans the whole table,
   Spark's horizontal scale‑out wins. StreamLake competes on **reducing the data that reaches the
   join**, not on out‑scanning Spark on huge outputs.
 - **Mature ecosystem.** Iceberg has broad engine support (Trino, Flink, Snowflake, Dremio…). StreamLake
   is a single‑engine, fork‑local prototype.
 
-Tiering resolves most of this: NVMe hot / HDD (st1 ~$0.045/GB‑mo) warm / S3 cold via bookie affinity
-groups, so you pay 3× bytes only for the small hot set and object‑storage rates for the long tail.
+Within BookKeeper you still tier by device — NVMe journal + NVMe query‑broker spill for speed, cheap
+HDD (st1 ~$0.045/GB‑mo) for the bulk ledger — so you pay for fast media only on the small hot path,
+while the bulk retained data sits on HDD at RF‑2/RF‑3.
 
 ---
 
