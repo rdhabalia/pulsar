@@ -757,8 +757,7 @@ public class PerChannelBookieClient extends ChannelInboundHandlerAdapter {
      *          WriteFlags
      */
     void addEntry(final long ledgerId, byte[] masterKey, final long entryId, ReferenceCounted toSend, WriteCallback cb,
-                  Object ctx, final int options, boolean allowFastFail, final EnumSet<WriteFlag> writeFlags,
-                  final byte[] pageRanges) {
+                  Object ctx, final int options, boolean allowFastFail, final EnumSet<WriteFlag> writeFlags) {
         Object request = null;
         CompletionKey completionKey = null;
         Runnable cleanupActionFailedBeforeWrite = null;
@@ -812,11 +811,6 @@ public class PerChannelBookieClient extends ChannelInboundHandlerAdapter {
             if (!writeFlags.isEmpty()) {
                 // add flags only if needed, in order to be able to talk with old bookies
                 addRequestMsg.setWriteFlags(WriteFlag.getWriteFlagsValue(writeFlags));
-            }
-
-            // Streaming Lake: attach the opaque column-range blob so the bookie can index it.
-            if (pageRanges != null && pageRanges.length > 0) {
-                addRequestMsg.setPageRanges(pageRanges);
             }
 
             withRequestContext(addEntryRequest);
@@ -873,55 +867,6 @@ public class PerChannelBookieClient extends ChannelInboundHandlerAdapter {
         getListOfEntriesOfLedgerRequest.setGetListOfEntriesOfLedgerRequest().setLedgerId(ledgerId);
 
         writeAndFlush(channel, completionKey, getListOfEntriesOfLedgerRequest);
-    }
-
-    /**
-     * Streaming Lake: ask this bookie which pages (entryIds) of a ledger could match
-     * the predicate. The predicate is an opaque order-preserving range blob.
-     */
-    public void pagePrune(final long ledgerId, long startEntryId, long endEntryId, byte[] predicate,
-                          BookkeeperInternalCallbacks.PagePruneCallback cb) {
-        final long txnId = getTxnId();
-        final CompletionKey completionKey = new TxnCompletionKey(txnId, OperationType.PAGE_PRUNE);
-        completionObjects.put(completionKey, new PagePruneCompletion(completionKey, cb, ledgerId, this));
-
-        Request pagePruneRequest = new Request();
-        pagePruneRequest.setHeader()
-                .setVersion(ProtocolVersion.VERSION_THREE)
-                .setOperation(OperationType.PAGE_PRUNE)
-                .setTxnId(txnId);
-        PagePruneRequest req = pagePruneRequest.setPagePruneRequest()
-                .setLedgerId(ledgerId)
-                .setStartEntryId(startEntryId)
-                .setEndEntryId(endEntryId);
-        if (predicate != null) {
-            req.setPredicate(predicate);
-        }
-
-        writeAndFlush(channel, completionKey, pagePruneRequest);
-    }
-
-    /**
-     * Streaming Lake: read this bookie's raw per-page range blobs for [startEntryId, endEntryId] of
-     * a ledger, so an index-compaction consumer can merge them into segment summaries.
-     */
-    public void pageStats(final long ledgerId, long startEntryId, long endEntryId,
-                          BookkeeperInternalCallbacks.PageStatsCallback cb) {
-        final long txnId = getTxnId();
-        final CompletionKey completionKey = new TxnCompletionKey(txnId, OperationType.PAGE_STATS);
-        completionObjects.put(completionKey, new PageStatsCompletion(completionKey, cb, ledgerId, this));
-
-        Request pageStatsRequest = new Request();
-        pageStatsRequest.setHeader()
-                .setVersion(ProtocolVersion.VERSION_THREE)
-                .setOperation(OperationType.PAGE_STATS)
-                .setTxnId(txnId);
-        pageStatsRequest.setPageStatsRequest()
-                .setLedgerId(ledgerId)
-                .setStartEntryId(startEntryId)
-                .setEndEntryId(endEntryId);
-
-        writeAndFlush(channel, completionKey, pageStatsRequest);
     }
 
     /**

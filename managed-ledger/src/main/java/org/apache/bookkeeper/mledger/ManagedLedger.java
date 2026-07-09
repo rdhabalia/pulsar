@@ -204,26 +204,6 @@ public interface ManagedLedger {
     void asyncAddEntry(ByteBuf buffer, int numberOfMessages, AddEntryCallback callback, Object ctx);
 
     /**
-     * Append a new entry asynchronously, carrying a StreamLake column-range blob.
-     *
-     * <p>The {@code pageRanges} blob is an opaque, order-preserving per-column min/max summary
-     * of this entry (page). It is shipped to the bookie inside {@code addEntry} and indexed in
-     * the ledger-page-index, where {@code PAGE_PRUNE} later uses it. May be {@code null} for a
-     * normal write.
-     *
-     * @param buffer buffer with the data entry
-     * @param numberOfMessages numberOfMessages for data entry
-     * @param pageRanges opaque column-range blob, or {@code null}
-     * @param callback callback object
-     * @param ctx opaque context
-     */
-    default void asyncAddEntry(ByteBuf buffer, int numberOfMessages, byte[] pageRanges, AddEntryCallback callback,
-                               Object ctx) {
-        // Default: ignore the StreamLake page ranges. ManagedLedgerImpl overrides to honor them.
-        asyncAddEntry(buffer, numberOfMessages, callback, ctx);
-    }
-
-    /**
      * Open a ManagedCursor in this ManagedLedger.
      *
      * <p/>If the cursors doesn't exist, a new one will be created and its position will be at the end of the

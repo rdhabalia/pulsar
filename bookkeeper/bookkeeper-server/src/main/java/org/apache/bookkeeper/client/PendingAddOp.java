@@ -55,7 +55,6 @@ import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.WriteCallback;
 class PendingAddOp implements WriteCallback {
 
     ByteBuf payload;
-    byte[] pageRanges;
     ReferenceCounted toSend;
     AddCallbackWithLatency cb;
     Object ctx;
@@ -107,7 +106,6 @@ class PendingAddOp implements WriteCallback {
         op.allowFailFast = false;
         op.qwcLatency = 0;
         op.writeFlags = writeFlags;
-        op.pageRanges = null;
 
         if (op.addEntrySuccessBookies == null) {
             op.addEntrySuccessBookies = new HashSet<>();
@@ -125,12 +123,6 @@ class PendingAddOp implements WriteCallback {
      */
     PendingAddOp enableRecoveryAdd() {
         isRecoveryAdd = true;
-        return this;
-    }
-
-    /** Streaming Lake: opaque column-range blob to index on the bookie for this entry. */
-    PendingAddOp setPageRanges(byte[] pageRanges) {
-        this.pageRanges = pageRanges;
         return this;
     }
 
@@ -156,7 +148,7 @@ class PendingAddOp implements WriteCallback {
 
         clientCtx.getBookieClient().addEntry(ensemble.get(bookieIndex),
                                              lh.ledgerId, lh.ledgerKey, entryId, toSend, this, bookieIndex,
-                                             flags, allowFailFast, lh.writeFlags, pageRanges);
+                                             flags, allowFailFast, lh.writeFlags);
         ++pendingWriteRequests;
     }
 
@@ -548,7 +540,6 @@ class PendingAddOp implements WriteCallback {
         hasRun = false;
         allowFailFast = false;
         writeFlags = null;
-        pageRanges = null;
         addEntrySuccessBookies.clear();
         writeDelayedStartTime = -1;
 

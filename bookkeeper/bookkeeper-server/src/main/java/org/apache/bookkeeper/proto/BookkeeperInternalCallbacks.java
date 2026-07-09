@@ -29,7 +29,6 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import lombok.CustomLog;
-import org.apache.bookkeeper.bookie.storage.ldb.PageStatEntry;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookieInfoReader.BookieInfo;
 import org.apache.bookkeeper.client.LedgerEntry;
@@ -115,20 +114,6 @@ public class BookkeeperInternalCallbacks {
     }
 
     /**
-     * A callback interface for the Streaming Lake PAGE_PRUNE command.
-     */
-    public interface PagePruneCallback {
-        void pagePruneComplete(int rc, long ledgerId, java.util.List<Long> entryIds);
-    }
-
-    /**
-     * A callback interface for the Streaming Lake PAGE_STATS command.
-     */
-    public interface PageStatsCallback {
-        void pageStatsComplete(int rc, long ledgerId, java.util.List<PageStatEntry> stats);
-    }
-
-    /**
      * Handle the Response Code and transform it to a BKException.
      *
      * @param <T>
@@ -166,48 +151,6 @@ public class BookkeeperInternalCallbacks {
                 rc = BKException.Code.ReadException;
             }
             finish(rc, availabilityOfEntriesOfLedger, this);
-        }
-    }
-
-    /**
-     * Future wrapper for the Streaming Lake PAGE_PRUNE command.
-     */
-    public static class FuturePagePrune extends CompletableFuture<java.util.List<Long>>
-            implements PagePruneCallback {
-        private final long ledgerIdOfTheRequest;
-
-        FuturePagePrune(long ledgerId) {
-            this.ledgerIdOfTheRequest = ledgerId;
-        }
-
-        @Override
-        public void pagePruneComplete(int rc, long ledgerId, java.util.List<Long> entryIds) {
-            if (rc == BKException.Code.OK) {
-                complete(entryIds);
-            } else {
-                completeExceptionally(BKException.create(rc));
-            }
-        }
-    }
-
-    /**
-     * Future wrapper for the Streaming Lake PAGE_STATS command.
-     */
-    public static class FuturePageStats extends CompletableFuture<java.util.List<PageStatEntry>>
-            implements PageStatsCallback {
-        private final long ledgerIdOfTheRequest;
-
-        FuturePageStats(long ledgerId) {
-            this.ledgerIdOfTheRequest = ledgerId;
-        }
-
-        @Override
-        public void pageStatsComplete(int rc, long ledgerId, java.util.List<PageStatEntry> stats) {
-            if (rc == BKException.Code.OK) {
-                complete(stats);
-            } else {
-                completeExceptionally(BKException.create(rc));
-            }
         }
     }
 

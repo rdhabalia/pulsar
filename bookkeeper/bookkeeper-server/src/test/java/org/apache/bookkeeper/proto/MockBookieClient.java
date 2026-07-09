@@ -162,7 +162,7 @@ public class MockBookieClient implements BookieClient {
     @Override
     public void addEntry(BookieId addr, long ledgerId, byte[] masterKey,
                          long entryId, ReferenceCounted toSend, WriteCallback cb, Object ctx,
-                         int options, boolean allowFastFail, EnumSet<WriteFlag> writeFlags, byte[] pageRanges) {
+                         int options, boolean allowFastFail, EnumSet<WriteFlag> writeFlags) {
         toSend.retain();
         preWriteHook.runHook(addr, ledgerId, entryId)
                 .thenComposeAsync(
@@ -299,29 +299,6 @@ public class MockBookieClient implements BookieClient {
                         BKException.create(BKException.Code.IllegalOpException).fillInStackTrace())
         );
         return futureResult;
-    }
-
-    @Override
-    public CompletableFuture<List<Long>> pagePrune(BookieId address, long ledgerId,
-            long startEntryId, long endEntryId, byte[] predicate) {
-        CompletableFuture<List<Long>> future = new CompletableFuture<>();
-        executor.executeOrdered(address, () ->
-                future.completeExceptionally(
-                        BKException.create(BKException.Code.IllegalOpException).fillInStackTrace())
-        );
-        return future;
-    }
-
-    @Override
-    public CompletableFuture<List<org.apache.bookkeeper.bookie.storage.ldb.PageStatEntry>> pageStats(
-            BookieId address, long ledgerId, long startEntryId, long endEntryId) {
-        CompletableFuture<List<org.apache.bookkeeper.bookie.storage.ldb.PageStatEntry>> future =
-                new CompletableFuture<>();
-        executor.executeOrdered(address, () ->
-                future.completeExceptionally(
-                        BKException.create(BKException.Code.IllegalOpException).fillInStackTrace())
-        );
-        return future;
     }
 
     @Override

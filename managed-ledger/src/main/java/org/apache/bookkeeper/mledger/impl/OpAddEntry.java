@@ -65,8 +65,6 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
     @SuppressWarnings("unused")
     ByteBuf data;
     private int dataLength;
-    // StreamLake: opaque column-range blob to index on the bookie for this entry (page).
-    private byte[] pageRanges;
     private ManagedLedgerInterceptor.PayloadProcessorHandle payloadProcessorHandle = null;
 
     private static final AtomicReferenceFieldUpdater<OpAddEntry, OpAddEntry.State> STATE_UPDATER =
@@ -168,11 +166,7 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
                     }
                 }
             }
-            if (pageRanges != null) {
-                ledger.asyncAddEntry(duplicateBuffer, pageRanges, this, addOpCount);
-            } else {
-                ledger.asyncAddEntry(duplicateBuffer, this, addOpCount);
-            }
+            ledger.asyncAddEntry(duplicateBuffer, this, addOpCount);
         } else {
             log.warn().attr("managedLedger", ml.getName())
                     .attr("state", state)
@@ -409,11 +403,6 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
         return ctx;
     }
 
-    /** StreamLake: set the opaque column-range blob the bookie indexes for this page. */
-    public void setPageRanges(byte[] pageRanges) {
-        this.pageRanges = pageRanges;
-    }
-
     public void setNumberOfMessages(int numberOfMessages) {
         this.numberOfMessages = numberOfMessages;
     }
@@ -441,7 +430,6 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
         ledger = null;
         data = null;
         numberOfMessages = 0;
-        pageRanges = null;
         dataLength = -1;
         callback = null;
         ctx = null;

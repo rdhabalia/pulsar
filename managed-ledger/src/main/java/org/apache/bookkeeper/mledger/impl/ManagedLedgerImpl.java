@@ -846,12 +846,6 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     @Override
     public void asyncAddEntry(ByteBuf buffer, int numberOfMessages, AddEntryCallback callback, Object ctx) {
-        asyncAddEntry(buffer, numberOfMessages, null, callback, ctx);
-    }
-
-    @Override
-    public void asyncAddEntry(ByteBuf buffer, int numberOfMessages, byte[] pageRanges, AddEntryCallback callback,
-                              Object ctx) {
         log.debug().attr("size", buffer.readableBytes()).attr("state", state).log("asyncAddEntry");
 
         // retain buffer in this thread
@@ -861,9 +855,6 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         executor.execute(() -> {
             OpAddEntry addOperation = OpAddEntry.createNoRetainBuffer(this, buffer, numberOfMessages, callback, ctx,
                     currentLedgerTimeoutTriggered);
-            if (pageRanges != null) {
-                addOperation.setPageRanges(pageRanges);
-            }
             internalAsyncAddEntry(addOperation);
         });
     }

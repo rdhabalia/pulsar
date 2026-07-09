@@ -357,12 +357,6 @@ public class BookieRequestProcessor implements RequestProcessor {
                     case GET_LIST_OF_ENTRIES_OF_LEDGER:
                         processGetListOfEntriesOfLedgerProcessorV3(r, requestHandler);
                         break;
-                    case PAGE_PRUNE:
-                        processPagePruneRequestV3(r, requestHandler);
-                        break;
-                    case PAGE_STATS:
-                        processPageStatsRequestV3(r, requestHandler);
-                        break;
                     default:
                         log.info().attr("operationType", header.getOperation()).log("Unknown operation type");
                         Response response = new Response();
@@ -641,24 +635,6 @@ public class BookieRequestProcessor implements RequestProcessor {
             getListOfEntriesOfLedger.run();
         } else {
             readThreadPool.submit(getListOfEntriesOfLedger);
-        }
-    }
-
-    private void processPagePruneRequestV3(final Request r, final BookieRequestHandler requestHandler) {
-        PagePruneProcessorV3 pagePrune = new PagePruneProcessorV3(r, requestHandler, this);
-        if (null == readThreadPool) {
-            pagePrune.run();
-        } else {
-            readThreadPool.executeOrdered(r.getPagePruneRequest().getLedgerId(), pagePrune);
-        }
-    }
-
-    private void processPageStatsRequestV3(final Request r, final BookieRequestHandler requestHandler) {
-        PageStatsProcessorV3 pageStats = new PageStatsProcessorV3(r, requestHandler, this);
-        if (null == readThreadPool) {
-            pageStats.run();
-        } else {
-            readThreadPool.executeOrdered(r.getPageStatsRequest().getLedgerId(), pageStats);
         }
     }
 
