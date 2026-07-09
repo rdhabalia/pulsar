@@ -52,6 +52,11 @@ public final class StreamLakeScanPredicate {
             this.inValues = inValues;
         }
 
+        /** The schema column this predicate constrains. */
+        public int columnIndex() {
+            return columnIndex;
+        }
+
         boolean matches(StreamLakeBatchStats.ColumnStats cs) {
             if (cs == null || cs.min() == null) {
                 return true; // no stats for this column -> cannot exclude

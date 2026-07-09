@@ -120,7 +120,7 @@ public class StreamLakeSqlPlannerTest {
         addPage(pageIndex, 3, java.util.Collections.singletonList(new Object[]{5, 3, 50L}));
         catalog.upsert(new StreamLakeCatalog.LedgerInfo(DATA_LEDGER, 1L, DAY1, DAY1 + 3600_000, 5,
                 StreamLakeCatalog.State.CLOSED));
-        new StreamLakeSegmentBuilder(pageIndex, segStore, catalog, 2, 64, 0.01).buildForLedger(DATA_LEDGER);
+        new StreamLakeSegmentBuilder(pageIndex, segStore, catalog, 2L * 1024 * 1024, 0.01).buildForLedger(DATA_LEDGER);
 
         StreamLakePruner pruner = new StreamLakePruner(catalog, segStore, pageIndex);
         cachedEngine = new StreamLakeQueryExecutor(pruner, (lid, eid) -> pageBytes.get(eid));

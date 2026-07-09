@@ -19,17 +19,21 @@
 package org.apache.pulsar.broker.service.streaminglake;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.apache.pulsar.client.streaminglake.StreamLakeBatchStats;
+import org.apache.pulsar.client.streaminglake.StreamLakeColumnSegment;
 import org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate;
 
 /**
- * Hierarchical read-side pruning for a StreamLake scan (redesign): date -&gt; segment -&gt; page.
- * Given a time range and a {@link StreamLakeScanPredicate}, it (1) picks candidate data ledgers by
- * event-time from the {@link StreamLakeCatalog}, (2) skips whole segments whose merged stats can't
- * match ({@link StreamLakeSegmentStore}), and (3) keeps only the surviving pages by their per-page
- * footer ({@link StreamLakePageIndex}). The result is the set of data-ledger pages a scan must read;
- * surviving pages are still row-filtered on read (the pruning is conservative, never false-negative).
+ * Hierarchical read-side pruning for a StreamLake scan: date -&gt; page. Given a time range and a
+ * {@link StreamLakeScanPredicate}, it (1) picks candidate data ledgers by event-time from the
+ * {@link StreamLakeCatalog}, then for each ledger (2a) if it is <b>segmented</b>, prunes straight to
+ * the exact candidate pages from the column-oriented {@link StreamLakeSegmentStore} (ANDing each
+ * predicate column's surviving page positions -- no per-page footer read), or (2b) if it is not yet
+ * segmented (recent data), falls back to a per-page prune of the {@link StreamLakePageIndex} footers.
+ * The result is the set of data-ledger pages a scan must read; surviving pages are still row-filtered
+ * on read (the pruning is conservative, never false-negative).
  */
 public class StreamLakePruner {
 
@@ -76,12 +80,11 @@ public class StreamLakePruner {
         stats.candidateLedgers = candidates.size();
 
         for (long ledgerId : candidates) {
-            List<StreamLakePageIndex.PageFooter> footers = pageIndex.footersFor(ledgerId);
-            List<StreamLakeSegmentStore.Segment> segments = segmentStore.segmentsFor(ledgerId);
+            StreamLakeSegmentStore.LedgerSegment seg = segmentStore.segmentFor(ledgerId);
 
-            if (segments.isEmpty()) {
-                // not yet segmented: fall back to a full per-page prune of this ledger.
-                for (StreamLakePageIndex.PageFooter f : footers) {
+            if (seg == null) {
+                // Not segmented yet (recent data): fall back to a per-page footer prune of this ledger.
+                for (StreamLakePageIndex.PageFooter f : pageIndex.footersFor(ledgerId)) {
                     stats.pagesScanned++;
                     if (predicate.matches(StreamLakeBatchStats.decode(f.stats))) {
                         stats.pagesKept++;
@@ -91,40 +94,35 @@ public class StreamLakePruner {
                 continue;
             }
 
-            // segment tier: collect the entry ranges whose merged stats might match.
-            List<long[]> matchedRanges = new ArrayList<>();
-            for (StreamLakeSegmentStore.Segment seg : segments) {
-                stats.segmentsTotal++;
-                if (predicate.matches(seg.stats)) {
-                    matchedRanges.add(new long[]{seg.startEntry, seg.endEntry});
-                } else {
-                    stats.segmentsSkipped++;
+            // Segmented: prune to exact pages from the column segments alone (no page-footer read).
+            // Per predicate column, AND together each column segment's surviving page positions.
+            stats.segmentsTotal++;
+            int numPages = seg.numPages();
+            boolean[] surviving = new boolean[numPages];
+            Arrays.fill(surviving, true);
+            for (StreamLakeScanPredicate.ColumnPredicate cp : predicate.columns()) {
+                StreamLakeColumnSegment cseg = seg.columns.get(cp.columnIndex());
+                if (cseg == null) {
+                    continue; // this column has no segment stats -> cannot prune on it
+                }
+                boolean[] col = cseg.candidatePositions(cp);
+                for (int i = 0; i < numPages; i++) {
+                    surviving[i] &= col[i];
                 }
             }
-            if (matchedRanges.isEmpty()) {
-                continue; // every segment of this ledger was skipped
-            }
-            // page tier: only footers inside a surviving segment range.
-            for (StreamLakePageIndex.PageFooter f : footers) {
-                if (!inAnyRange(f.dataEntryId, matchedRanges)) {
-                    continue;
-                }
+            int kept = 0;
+            for (int i = 0; i < numPages; i++) {
                 stats.pagesScanned++;
-                if (predicate.matches(StreamLakeBatchStats.decode(f.stats))) {
+                if (surviving[i]) {
                     stats.pagesKept++;
-                    out.add(new PagePointer(ledgerId, f.dataEntryId));
+                    kept++;
+                    out.add(new PagePointer(ledgerId, seg.pageEntryIds[i]));
                 }
+            }
+            if (kept == 0) {
+                stats.segmentsSkipped++; // the whole segment was pruned out
             }
         }
         return out;
-    }
-
-    private static boolean inAnyRange(long entryId, List<long[]> ranges) {
-        for (long[] r : ranges) {
-            if (entryId >= r[0] && entryId <= r[1]) {
-                return true;
-            }
-        }
-        return false;
     }
 }

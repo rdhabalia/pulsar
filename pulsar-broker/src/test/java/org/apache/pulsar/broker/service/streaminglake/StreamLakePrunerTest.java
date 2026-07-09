@@ -21,7 +21,6 @@ package org.apache.pulsar.broker.service.streaminglake;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertTrue;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -114,7 +113,8 @@ public class StreamLakePrunerTest {
                 StreamLakeCatalog.State.CLOSED));
 
         // 2 pages per segment on ledger 100 -> segments [0-9|10-19] (entries 0-1) and [20-29|30-39] (2-3)
-        StreamLakeSegmentBuilder builder = new StreamLakeSegmentBuilder(pageIndex, segStore, catalog, 2, 64, 0.01);
+        StreamLakeSegmentBuilder builder = new StreamLakeSegmentBuilder(
+                pageIndex, segStore, catalog, 2L * 1024 * 1024, 0.01);
         builder.buildForLedger(100L);
         builder.buildForLedger(200L);
 
@@ -131,8 +131,9 @@ public class StreamLakePrunerTest {
         assertEquals(pages.get(0).ledgerId, 100L);
         assertEquals(pages.get(0).entryId, 2L);
         assertEquals(stats.candidateLedgers, 1, "ledger 200 pruned by date");
-        assertTrue(stats.segmentsSkipped >= 1, "the deptId 0-19 segment is skipped");
-        assertEquals(stats.pagesKept, 1);
+        assertEquals(stats.segmentsTotal, 1, "ledger 100's one segment was consulted");
+        assertEquals(stats.pagesScanned, 4, "all 4 pages checked against the column segment");
+        assertEquals(stats.pagesKept, 1, "3 pages pruned to the exact matching page");
     }
 
     @Test
@@ -146,7 +147,7 @@ public class StreamLakePrunerTest {
         }
         catalog.upsert(new StreamLakeCatalog.LedgerInfo(100L, 1L, DAY1, DAY1 + 3600_000, 40,
                 StreamLakeCatalog.State.CLOSED));
-        new StreamLakeSegmentBuilder(pageIndex, segStore, catalog, 2, 64, 0.01).buildForLedger(100L);
+        new StreamLakeSegmentBuilder(pageIndex, segStore, catalog, 2L * 1024 * 1024, 0.01).buildForLedger(100L);
 
         // deptId in [5, 35] -> all four pages overlap.
         StreamLakeScanPredicate pred = StreamLakeScanPredicate.builder()

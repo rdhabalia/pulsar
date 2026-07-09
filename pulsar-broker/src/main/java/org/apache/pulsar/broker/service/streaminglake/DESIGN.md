@@ -24,8 +24,9 @@ dropped. In the shipped design:
 * the **client** batches/encodes (broker/bookie do no columnar work);
 * page stats live in a **dedicated page‑index BookKeeper ledger chain** written by the broker — never
   in the bookie’s RocksDB, so there is **no copy‑then‑delete** and **no bookie range API**;
-* a **segment** is a *merged* summary of a run of pages (union min/max + union exact‑set → cap →
-  bloom), stored as one entry per page‑group — not per‑page arrays;
+* a **segment** is **column‑oriented**: per data ledger, one entry per indexed column holding that
+  column's **per‑page array** (min/max, plus a per‑page bloom for text), collapsing to one coarse stat
+  only past a size cap — so pruning lands on the exact page from the segment alone;
 * SQL is parsed by **Apache Calcite**; `ORDER BY … LIMIT` is a bounded top‑K heap.
 
 ---
@@ -312,22 +313,36 @@ entry on demand and returns `[(dataEntryId, footerBytes)]`. Production RF is `pa
 
 ### 2.4 Segment ledger chain — `StreamLakeSegmentStore`
 
-A chain of BK ledgers (ids in the znode). Entry:
+A chain of BK ledgers (ids in the znode). A data ledger's segment is **column‑oriented**: one page
+**directory** entry (position → data entryId) followed by one **column** entry per indexed column,
+each carrying that column's per‑page stats:
 
 ```
-'S'(1) | dataLedgerId:int64 | startEntry:int64 | endEntry:int64 | statsLen:int32 | <merged StreamLakeBatchStats>
+'D'(1) | dataLedgerId:int64 | numPages:int32 | pageEntryId:int64 x numPages
+'C'(1) | dataLedgerId:int64 | blobLen:int32  | StreamLakeColumnSegment.encode()
 ```
 
-Unlike the page index, **segments are held in memory** (`byLedger: dataLedgerId → [Segment]`) — they
-are small and are the hot pruning layer; replayed fully on `open()`. RF is `segment{…}Quorum`
-(default 5/5/3, tunable much higher for read scaling).
+`StreamLakeColumnSegment.encode()`:
+
+```
+columnIndex:int32 | type:int8 | collapsed:int8 | numPages:int32 |
+  if !collapsed: per page:  flags:int8 [minLen|min maxLen|max]? [bloomLen|bloom]?
+  if  collapsed: one stat:  flags:int8 [minLen|min maxLen|max]? [bloomLen|bloom]?
+```
+
+So a column keeps a **per‑page array** — numeric columns store `[min,max]` per page; text/bytes
+columns also store a per‑page **bloom** — until the array would exceed `segmentColumnMaxBytes`
+(default 2 MiB), at which point the column **collapses** to one whole‑segment stat. Segments are held
+in memory (`byLedger: dataLedgerId → LedgerSegment{pageEntryIds[], columns}`), replayed fully on
+`open()`. RF is `segment{…}Quorum` (default 5/5/3, tunable much higher for read scaling).
 
 ---
 
 ## 3. ASYNC SEGMENT BUILD (after a data ledger closes)
 
-A **segment** summarizes a contiguous run of a data ledger’s pages so a scan can skip whole entry
-ranges before touching per‑page footers.
+A **segment** is the column‑oriented, per‑page index for a data ledger: a scan prunes straight to the
+exact candidate pages from it, so once a ledger is segmented pruning no longer reads its per‑page
+footers at all.
 
 ### 3.1 Trigger
 
@@ -349,40 +364,41 @@ if (catalog.get(id).state == SEGMENTED) return;        // already done
 if (segmentStore.covers(id)) { catalog.markState(id, SEGMENTED); return; } // partial-crash recovery
 
 footers = pageIndex.footersFor(id);                    // METADATA only — never the data pages
-for (i = 0; i < footers.size(); i += pagesPerSegment) {
-    group  = footers[i .. i+pagesPerSegment];
-    parts  = group.map(f -> StreamLakeBatchStats.decode(f.stats));
-    merged = StreamLakeStatsMerger.merge(parts, setMaxCardinality, bloomFpp);   // (3.3)
-    segmentStore.appendSegment(new Segment(id, group.first.dataEntryId,
-                                           group.last.dataEntryId, merged));    // (3.4)
+pageEntryIds = footers.map(f -> f.dataEntryId);        // position i -> data entryId
+perPage      = footers.map(f -> StreamLakeBatchStats.decode(f.stats));
+for (col in the union of indexed columns) {            // one column segment per indexed column
+    perPageCol = perPage.map(stats -> stats.column(col));   // that column's per-page ColumnStats
+    columns.add(StreamLakeColumnSegment.build(col, type, perPageCol, segmentColumnMaxBytes, bloomFpp));
 }
+segmentStore.appendLedgerSegment(id, pageEntryIds, columns);   // (3.4) directory + column entries
 catalog.markState(id, SEGMENTED);                      // last -> the durability barrier
 ```
 
 Marking `SEGMENTED` **last** is the correctness barrier: a crash mid‑build leaves the ledger
-`CLOSED`, so it is simply retried; `covers()` skips already‑written segments on retry.
+`CLOSED`, so it is simply retried; `covers()` skips an already‑written segment on retry.
 
-### 3.3 Stats merge — `StreamLakeStatsMerger.merge()` (per column, no false negatives)
+### 3.3 Building one column — `StreamLakeColumnSegment.build()` (no false negatives)
 
-Group each column’s per‑page `ColumnStats`, then:
+Per indexed column, over the ledger's pages:
 
-* **min/max**: union always (`min = min(all mins)`, `max = max(all maxs)`) → range skip at the segment.
-* **exact sets**: if **every** contributing page had an exact set, union them:
-  * union size ≤ `setCap` → keep the **exact set** (segment still prunes equality with no false
-    positives);
-  * union size > `setCap` → promote to **one segment‑level bloom** (`distinctCount` = union size).
-* **high‑cardinality**: if any page already had a bloom (no set to union) → keep **min/max only**
-  (`distinctCount = -1`); equality pruning for that column stays precise at the **per‑page** bloom.
+* **min/max**: kept **per page** (`pMin[i], pMax[i]`) so a range/`BETWEEN`/`=` prunes to the exact page.
+* **membership** (text/bytes only): a **per‑page bloom** — built from the page's exact set (or reusing
+  its bloom) — so equality/`IN` prunes the exact page. Numeric columns rely on per‑page min/max.
+* **collapse**: if the column's per‑page array would exceed `segmentColumnMaxBytes`, collapse to one
+  whole‑segment stat — union min/max always, plus a union bloom when every page was low‑cardinality
+  (recoverable exact sets); otherwise min/max only. A small text column (`name`) stays per‑page; a
+  high‑cardinality one (`email`, whose per‑page blooms balloon) collapses. Never drops a matching page.
 
-This is the *“set(N) per page, bloom per segment; large fields → one coarse bloom”* rule from the
-brainstorm, made concrete — and it never drops a page that could match.
+This is the *“array of min/max for numbers, array of bloom(set) for text, and one coarse filter once
+it hits the cap”* design — made concrete.
 
-### 3.4 What a segment stores + `appendSegment()`
+### 3.4 What a segment stores + `appendLedgerSegment()`
 
-A `Segment = {dataLedgerId, startEntry, endEntry, StreamLakeBatchStats(merged)}` — the merged stats
-carry, per indexed column, `min/max` + (`exactSet` | `bloom` | neither). `appendSegment` encodes the
-entry (§2.4), rolls the head if needed, appends to the head BK ledger, and publishes it into the
-in‑memory `byLedger` map. The chain’s ids are recorded in the znode via `setSegmentLedgerIds`.
+A `LedgerSegment = {dataLedgerId, pageEntryIds[], Map<columnIndex, StreamLakeColumnSegment>}`.
+`appendLedgerSegment` writes the directory entry then one column entry per column (§2.4), rolling the
+head if needed, and publishes it into the in‑memory `byLedger` map. The chain's ids are recorded in
+the znode via `setSegmentLedgerIds`. **The directory is where a page's position maps to its data
+`entryId`** — so a candidate page position from the column arrays reads the right data‑ledger entry.
 
 ---
 
@@ -410,36 +426,38 @@ Double/Boolean/String)`).
 A conjunction of `ColumnPredicate{columnIndex, type, lo, loInclusive, hi, hiInclusive, inValues}`
 (all bounds order‑preserving encoded). Two evaluations:
 
-* `matches(stats)` — **prune** a unit (page footer or merged segment). Per column: false if
-  `lo > cs.max` or `hi < cs.min` (range miss), or if an `IN`/`=` set has **no** value with
-  `cs.mightContain(v)`. Conservative — **never a false negative**.
+* `matches(stats)` — **prune** a unit (a page footer). Per column: false if `lo > cs.max` or
+  `hi < cs.min` (range miss), or if an `IN`/`=` set has **no** value with `cs.mightContain(v)`.
+  Conservative — **never a false negative**.
 * `matchesRow(row)` — **exact** filter a decoded row: re‑encode the cell and check inclusive/exclusive
   bounds + membership.
 
-Builder: `.eq(idx,type,v)`, `.range(idx,type,lo,loIncl,hi,hiIncl)`, `.in(idx,type,values)`.
+Builder: `.eq(idx,type,v)`, `.range(idx,type,lo,loIncl,hi,hiIncl)`, `.in(idx,type,values)`. Each
+`ColumnPredicate` also drives per‑page segment pruning via `StreamLakeColumnSegment.candidatePositions`.
 
-### 4.3 Hierarchical pruning — `StreamLakePruner.prune(fromMs,toMs,predicate)`
+### 4.3 Pruning — `StreamLakePruner.prune(fromMs,toMs,predicate)`
 
-Top‑down, metadata‑only, conservative:
+Metadata‑only and conservative. Date → data ledgers, then straight to the exact pages of each ledger:
 
 ```
 candidates = catalog.candidateLedgers(fromMs, toMs)          // TIER 1: date -> data ledgers
 for each ledger:
-    segments = segmentStore.segmentsFor(ledger)
-    if segments empty:                                       // not segmented yet
-        for footer in pageIndex.footersFor(ledger):          //   full per-page prune
+    seg = segmentStore.segmentFor(ledger)
+    if seg == null:                                          // not segmented yet (recent data)
+        for footer in pageIndex.footersFor(ledger):          //   per-page footer prune (fallback)
             if predicate.matches(decode(footer)): keep (ledger, footer.dataEntryId)
         continue
-    matchedRanges = [ (seg.startEntry, seg.endEntry)         // TIER 2: segment -> [start,end]
-                      for seg in segments if predicate.matches(seg.stats) ]
-    if matchedRanges empty: continue                         //   whole ledger skipped
-    for footer in pageIndex.footersFor(ledger):              // TIER 3: page within surviving ranges
-        if inAnyRange(footer.dataEntryId, matchedRanges) and predicate.matches(decode(footer)):
-            keep PagePointer(ledger, footer.dataEntryId)
+    surviving = boolean[seg.numPages] all true               // TIER 2: exact-page prune from segment
+    for cp in predicate.columns():                           //   AND each column's candidate pages
+        cseg = seg.columns.get(cp.columnIndex())
+        if cseg != null: surviving &= cseg.candidatePositions(cp)   // per-page range/bloom test
+    for i where surviving[i]:                                //   position i -> data entryId
+        keep PagePointer(ledger, seg.pageEntryIds[i])
 ```
 
-Reads **only** metadata (catalog + segments in memory, page footers on demand). `Stats` counters
-record `candidateLedgers / segmentsTotal / segmentsSkipped / pagesScanned / pagesKept`.
+Once a ledger is **segmented**, pruning reads **only** the in‑memory column segments — no per‑page
+footer read — and lands directly on the candidate pages. `Stats` counters record
+`candidateLedgers / segmentsTotal / segmentsSkipped / pagesScanned / pagesKept`.
 
 ### 4.4 Scan → read → exact filter — `StreamLakeQueryExecutor`
 
@@ -482,12 +500,13 @@ old broker‑side read transcoder — deserialization is now client‑side.)
 
 1. Calcite → predicate `{deptId=1, salary≥300000}`, projection `[id,salary]`, sort `salary DESC`,
    limit 10, window `[MIN,MAX]`.
-2. Tier 1: all data ledgers (unbounded window).
-3. Tier 2: skip segments whose merged `deptId` set lacks `1` **or** `salary.max < 300000`.
-4. Tier 3: within survivors, keep pages whose footer `deptId` set contains `1` and `salary.max ≥
-   300000`.
-5. Read survivors’ Arrow, decode, keep rows with `deptId==1 && salary>=300000`.
-6. Top‑K (k=10, salary DESC); project to `[id,salary]`.
+2. Date prune: all data ledgers (unbounded window) are candidates.
+3. Exact‑page prune: for each segmented ledger, `deptId`'s per‑page min/max array keeps pages whose
+   `[min,max]` spans `1`, `salary`'s per‑page min/max array keeps pages with `max ≥ 300000`; AND the
+   two → the surviving page positions, mapped to data entryIds via the directory. (Unsegmented recent
+   ledgers fall back to a per‑page footer prune.)
+4. Read survivors’ Arrow, decode, keep rows with `deptId==1 && salary>=300000`.
+5. Top‑K (k=10, salary DESC); project to `[id,salary]`.
 
 ---
 
@@ -554,13 +573,23 @@ Iceberg+Spark, and 1 MiB pages waste ~128× less read IO than 128 MiB Parquet ro
     00000008 <min=100> 00000008 <max=900>
 ```
 
-**Segment ledger entry** merging pages 0..1023 of ledger 100:
+**Segment for ledger 100** (a directory + one entry per indexed column):
 
 ```
-0x53 ('S') | ...=100 | start=0 | end=1023 | statsLen=NN |
-  'SLS1' 01 00000002
-    col2 deptId: flags=min|set, set = union {1,2,3}          // still ≤ cap -> exact
-    col4 salary: flags=min-only, min=50, max=1_000_000, distinct=-1   // high-card -> min/max
+0x44 ('D') | dataLedgerId=100 | numPages=3 | entryId[0..2] = 0,1,2   // position -> data entryId
+
+0x43 ('C') | dataLedgerId=100 | blobLen=NN |                          // deptId (numeric, per-page)
+  columnIndex=2 type=INT32 collapsed=0 numPages=3
+    page0: flags=minmax min=1  max=1              // page 0 all dept 1
+    page1: flags=minmax min=2  max=2
+    page2: flags=minmax min=1  max=3
+
+0x43 ('C') | dataLedgerId=100 | blobLen=MM |                          // email (text -> per-page bloom)
+  columnIndex=3 type=STRING collapsed=0 numPages=3
+    page0: flags=minmax|bloom min=a@x max=b@x bloom(...)
+    page1: flags=minmax|bloom ...
+    page2: flags=minmax|bloom ...
+  // if this column's array exceeded segmentColumnMaxBytes: collapsed=1 with a single union stat
 ```
 
 **Catalog entry** (41 bytes) for a closed, segmented ledger:
@@ -594,7 +623,7 @@ rowCount=9000000 | state=2 (SEGMENTED)
 **Client (pulsar-client)** — `StreamLakeProducer`, `StreamLakeArrowBatchEncoder/Decoder`,
 `StreamLakeSchema`/`StreamLakeType`, `StreamLakeStatsBuilder`/`StreamLakeBatchStats`/`StreamLakeBloom`/
 `StreamLakeOrderPreserving`, `StreamLakeBatchPayload`, `StreamLakeConsumer`, `StreamLakeScanPredicate`,
-`StreamLakeStatsMerger`, `StreamLakeHashJoin`, `StreamLakeTopK`.
+`StreamLakeColumnSegment`, `StreamLakeHashJoin`, `StreamLakeTopK`.
 
 **Broker (pulsar-broker)** — `PersistentTopic` dumb‑pipe write + footer slice; metadata
 `StreamLakeMetaStore` / `StreamLakeCatalog` / `StreamLakePageIndex` / `StreamLakeSegmentStore`; build

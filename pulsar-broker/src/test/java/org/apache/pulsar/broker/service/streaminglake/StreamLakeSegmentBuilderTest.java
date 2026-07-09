@@ -21,6 +21,8 @@ package org.apache.pulsar.broker.service.streaminglake;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -29,8 +31,8 @@ import java.util.List;
 import org.apache.bookkeeper.client.PulsarMockBookKeeper;
 import org.apache.bookkeeper.common.util.OrderedExecutor;
 import org.apache.bookkeeper.mledger.ManagedLedger;
-import org.apache.pulsar.client.streaminglake.StreamLakeBatchStats;
-import org.apache.pulsar.client.streaminglake.StreamLakeOrderPreserving;
+import org.apache.pulsar.client.streaminglake.StreamLakeColumnSegment;
+import org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate;
 import org.apache.pulsar.client.streaminglake.StreamLakeSchema;
 import org.apache.pulsar.client.streaminglake.StreamLakeStatsBuilder;
 import org.apache.pulsar.client.streaminglake.StreamLakeType;
@@ -114,22 +116,36 @@ public class StreamLakeSegmentBuilderTest {
         catalog.upsert(new StreamLakeCatalog.LedgerInfo(DATA_LEDGER, 1L, 1000L, 2000L, 10,
                 StreamLakeCatalog.State.CLOSED));
 
-        // pagesPerSegment = 2 -> ceil(5/2) = 3 segments
         StreamLakeSegmentBuilder builder = new StreamLakeSegmentBuilder(
-                pageIndex, segStore, catalog, 2, 64, 0.01);
+                pageIndex, segStore, catalog, 2L * 1024 * 1024, 0.01);
         builder.buildForLedger(DATA_LEDGER);
 
-        List<StreamLakeSegmentStore.Segment> segments = segStore.segmentsFor(DATA_LEDGER);
-        assertEquals(segments.size(), 3, "ceil(5 pages / 2 per segment) = 3 segments");
-        assertEquals(segments.get(0).startEntry, 0L);
-        assertEquals(segments.get(0).endEntry, 1L);
-        assertEquals(segments.get(2).startEntry, 4L);
-        assertEquals(segments.get(2).endEntry, 4L, "last segment is the trailing page");
+        // One column-oriented segment per data ledger: a 5-page directory + per-column segments.
+        StreamLakeSegmentStore.LedgerSegment seg = segStore.segmentFor(DATA_LEDGER);
+        assertNotNull(seg);
+        assertEquals(seg.numPages(), 5);
+        assertEquals(seg.pageEntryIds[0], 0L);
+        assertEquals(seg.pageEntryIds[4], 4L, "position i maps to data entryId i");
+        assertTrue(seg.columns.containsKey(0), "deptId column segment");
+        assertTrue(seg.columns.containsKey(1), "email column segment");
 
-        // first segment merges deptId 0..3 (pages 0-1,2-3); membership preserved, no false negatives
-        StreamLakeBatchStats.ColumnStats dept0 = segments.get(0).stats.column(0);
-        assertTrue(dept0.mightContain(StreamLakeOrderPreserving.encode(StreamLakeType.INT32, 0)));
-        assertTrue(dept0.mightContain(StreamLakeOrderPreserving.encode(StreamLakeType.INT32, 3)));
+        // deptId column prunes to the exact page: deptId=0 is only on page 0 (dept 0-1).
+        StreamLakeColumnSegment deptSeg = seg.columns.get(0);
+        boolean[] pos0 = deptSeg.candidatePositions(StreamLakeScanPredicate.builder()
+                .eq(0, StreamLakeType.INT32, 0).build().columns().get(0));
+        assertTrue(pos0[0], "page 0 (dept 0-1) can contain 0");
+        assertFalse(pos0[1], "page 1 (dept 2-3) cannot contain 0");
+        // deptId=3 is only on page 1 (dept 2-3).
+        boolean[] pos3 = deptSeg.candidatePositions(StreamLakeScanPredicate.builder()
+                .eq(0, StreamLakeType.INT32, 3).build().columns().get(0));
+        assertTrue(pos3[1]);
+        assertFalse(pos3[0]);
+
+        // email (text) column keeps a per-page bloom: page 0's bloom contains e0@x.com.
+        StreamLakeColumnSegment emailSeg = seg.columns.get(1);
+        boolean[] emailPos = emailSeg.candidatePositions(StreamLakeScanPredicate.builder()
+                .eq(1, StreamLakeType.STRING, "e0@x.com").build().columns().get(0));
+        assertTrue(emailPos[0], "page 0 contains e0@x.com");
 
         // catalog transitioned to SEGMENTED and left the build queue
         assertEquals(catalog.get(DATA_LEDGER).state, StreamLakeCatalog.State.SEGMENTED);
@@ -150,12 +166,13 @@ public class StreamLakeSegmentBuilderTest {
                 StreamLakeCatalog.State.CLOSED));
 
         StreamLakeSegmentBuilder builder = new StreamLakeSegmentBuilder(
-                pageIndex, segStore, catalog, 8, 64, 0.01);
+                pageIndex, segStore, catalog, 2L * 1024 * 1024, 0.01);
         assertEquals(builder.buildAllClosed(), Arrays.asList(DATA_LEDGER));
-        assertEquals(segStore.segmentsFor(DATA_LEDGER).size(), 1);
+        assertNotNull(segStore.segmentFor(DATA_LEDGER));
 
-        // second pass: nothing left in the queue, no duplicate segments
+        // second pass: nothing left in the queue, no duplicate segment
         assertTrue(builder.buildAllClosed().isEmpty());
-        assertEquals(segStore.segmentsFor(DATA_LEDGER).size(), 1, "no duplicate segments on re-run");
+        assertNotNull(segStore.segmentFor(DATA_LEDGER));
+        assertEquals(segStore.segmentFor(DATA_LEDGER).numPages(), 3, "one segment, 3 pages");
     }
 }

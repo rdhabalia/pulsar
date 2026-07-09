@@ -66,6 +66,16 @@ public class StreamingLakeConfig {
     private int pagesPerSegment = 1024;
 
     /**
+     * Per-column size cap (bytes) for a segment's per-page stats array. When a column's per-page array
+     * (min/max, plus per-page bloom for text) would exceed this, that column collapses to a single
+     * whole-segment stat (union min/max + a union bloom when the pages were low-cardinality). Keeps a
+     * small text column (e.g. {@code name}) per-page while a high-cardinality one (e.g. {@code email})
+     * stays compact. Default 2 MiB.
+     */
+    @Builder.Default
+    private long segmentColumnMaxBytes = 2L * 1024 * 1024;
+
+    /**
      * Replication of the shared page-index ledger (hot write path): a modest RF-3 by default. Kept
      * lower than the segment RF because it is written on every batch; isolated onto the metadata
      * bookie pool (see {@code metadataBookieAffinityGroup}).
