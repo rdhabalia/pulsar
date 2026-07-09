@@ -91,7 +91,6 @@ import org.apache.pulsar.common.api.proto.CommandProducerSuccess;
 import org.apache.pulsar.common.api.proto.CommandReachedEndOfTopic;
 import org.apache.pulsar.common.api.proto.CommandSendError;
 import org.apache.pulsar.common.api.proto.CommandSendReceipt;
-import org.apache.pulsar.common.api.proto.CommandScanResponse;
 import org.apache.pulsar.common.api.proto.CommandSuccess;
 import org.apache.pulsar.common.api.proto.CommandTcClientConnectResponse;
 import org.apache.pulsar.common.api.proto.CommandTopicMigrated;
@@ -634,29 +633,6 @@ public class ClientCnx extends PulsarHandler {
     }
 
     @Override
-    protected void handleScanResponse(CommandScanResponse scanResponse) {
-        checkArgument(state == State.Ready);
-        long requestId = scanResponse.getRequestId();
-        @SuppressWarnings("unchecked")
-        CompletableFuture<byte[]> requestFuture =
-                (CompletableFuture<byte[]>) pendingRequests.remove(requestId);
-        if (requestFuture != null) {
-            if (scanResponse.hasError()) {
-                requestFuture.completeExceptionally(getPulsarClientException(scanResponse.getError(),
-                        scanResponse.hasMessage() ? scanResponse.getMessage() : null));
-            } else {
-                // A single response batch is delivered here; streaming consumers accumulate
-                // batches until is_last. The records bytes are copied out of the pooled command.
-                byte[] records = scanResponse.hasRecords() ? scanResponse.getRecords() : new byte[0];
-                requestFuture.complete(records);
-            }
-        } else {
-            duplicatedResponseCounter.incrementAndGet();
-            log.warn().attr("requestId", requestId).log("Received unknown scan request id from server");
-        }
-    }
-
-    @Override
     protected void handleGetLastMessageIdSuccess(CommandGetLastMessageIdResponse success) {
         checkArgument(state == State.Ready);
             log.debug().attr("requestId", success.getRequestId())
@@ -1156,14 +1132,6 @@ public class ClientCnx extends PulsarHandler {
     }
 
     CompletableFuture<ProducerResponse> sendRequestWithId(ByteBuf cmd, long requestId) {
-        return sendRequestAndHandleTimeout(cmd, requestId, RequestType.Command, true);
-    }
-
-    /**
-     * Streaming Lake: send a CommandScan and complete with the response records bytes
-     * (completed by {@link #handleScanResponse}).
-     */
-    public CompletableFuture<byte[]> sendScan(ByteBuf cmd, long requestId) {
         return sendRequestAndHandleTimeout(cmd, requestId, RequestType.Command, true);
     }
 

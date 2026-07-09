@@ -46,7 +46,6 @@ public class StreamLakePolicyTest extends StreamLakeRealBookieTestBase {
 
         StreamingLakeConfig cfg = StreamingLakeConfig.builder()
                 .enabled(true)
-                .pageSizeBytes(2 * 1024 * 1024)
                 .build();
         pulsar.getTopicPoliciesService().updateTopicPoliciesAsync(TopicName.get(topic), false, false,
                 policies -> policies.setStreamingLake(cfg)).get();

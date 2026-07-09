@@ -1062,31 +1062,6 @@ message CommandWatchTcAssignmentsClose {
     required uint64 watch_id = 1;
 }
 
-// Streaming Lake: a predicate-based scan over a topic and date range. The predicate
-// is an opaque order-preserving column-range blob (same format the bookie evaluates),
-// keeping the wire format independent of schema details.
-message CommandScan {
-    required uint64 request_id = 1;
-    required uint64 consumer_id = 2;
-    required string topic        = 3;
-    // inclusive date-range bounds (epoch millis); absent => unbounded
-    optional uint64 start_time   = 4;
-    optional uint64 end_time     = 5;
-    // serialized predicate column-range blob
-    optional bytes predicate     = 6;
-}
-
-message CommandScanResponse {
-    required uint64 request_id   = 1;
-    optional uint64 consumer_id  = 2;
-    // a batch of matching records (encoded); empty when is_last with no remaining rows
-    optional bytes records       = 3;
-    // true on the final response for this scan
-    optional bool is_last        = 4 [default = false];
-    optional ServerError error   = 5;
-    optional string message      = 6;
-}
-
 message CommandGetSchema {
     required uint64 request_id = 1;
     required string topic      = 2;
@@ -1355,10 +1330,6 @@ message BaseCommand {
         WATCH_TC_ASSIGNMENTS                  = 79;
         WATCH_TC_ASSIGNMENTS_UPDATE           = 80;
         WATCH_TC_ASSIGNMENTS_CLOSE            = 81;
-
-        // Streaming Lake: predicate-based scan over a date range.
-        SCAN                                  = 82;
-        SCAN_RESPONSE                         = 83;
     }
 
 
@@ -1458,7 +1429,4 @@ message BaseCommand {
     optional CommandWatchTcAssignments watchTcAssignments                             = 79;
     optional CommandWatchTcAssignmentsUpdate watchTcAssignmentsUpdate                 = 80;
     optional CommandWatchTcAssignmentsClose watchTcAssignmentsClose                   = 81;
-
-    optional CommandScan scan                                                         = 82;
-    optional CommandScanResponse scanResponse                                         = 83;
 }

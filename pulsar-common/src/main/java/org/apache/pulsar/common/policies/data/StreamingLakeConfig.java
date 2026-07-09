@@ -28,9 +28,11 @@ import lombok.NoArgsConstructor;
 /**
  * Per-topic Streaming Lake configuration.
  *
- * <p>When {@code enabled}, the broker batches messages into columnar pages, computes
- * order-preserving min/max ranges for the {@code indexedColumns}, and stores those
- * ranges in the BookKeeper page-range index so scans can be pruned at the bookie.
+ * <p>When {@code enabled}, the producer client encodes each batch as a columnar (Apache Arrow)
+ * payload with a trailing per-column stats footer; the broker slices that footer into a shared
+ * page-index ledger, a compaction pass merges page stats into segment summaries, and the query tier
+ * prunes date -&gt; segment -&gt; page before reading. The {@code indexedColumns} / {@code columns}
+ * define which columns emit pruning stats.
  */
 @Data
 @Builder
@@ -38,78 +40,26 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class StreamingLakeConfig {
 
-    /** Whether Streaming Lake (columnar pages + range index) is enabled for the topic. */
+    /** Whether Streaming Lake (client columnar pages + metadata prune index) is enabled for the topic. */
     @Builder.Default
     private boolean enabled = false;
 
     /**
-     * When true, the broker packs messages into columnar page entries (batched column-major
-     * storage) and transcodes them back on read. When false, each entry stays a normal message
-     * tagged with its own range (per-entry pruning).
-     */
-    @Builder.Default
-    private boolean batchingEnabled = false;
-
-    /**
      * When true, the <b>client</b> encodes each batch as a columnar (Arrow) payload with a trailing
      * stats footer, and the broker only slices that footer into the shared page-index ledger (it does
-     * not batch, encode, or compute ranges itself). This is the redesign write path; distinct from
-     * {@code batchingEnabled} (broker-side batching). Default false.
+     * not batch, encode, or compute ranges itself). This is the StreamLake write path. Default false.
      */
     @Builder.Default
     private boolean clientColumnarEnabled = false;
 
-    /** Target sealed-page size in bytes (default 2 MB). */
-    @Builder.Default
-    private int pageSizeBytes = 2 * 1024 * 1024;
-
-    /** Rows per granule (sub-page zone-map row group) for in-page granule pruning (default 256). */
-    @Builder.Default
-    private int granuleSize = 256;
-
     /**
-     * Max distinct values per column per granule stored as an <b>exact set index</b> (ClickHouse
-     * {@code set(N)}). When a granule's distinct count for a column is at most this, the page stores
-     * the exact set so equality/IN predicates prune the granule with <i>no false positives</i> (even
-     * when the value falls inside the granule's min/max). Above it, the granule falls back to
-     * min/max + bloom. Default 64.
+     * Max distinct values per column stored as an <b>exact set index</b> (ClickHouse {@code set(N)}).
+     * When a batch's distinct count for a column is at most this, the footer stores the exact set so
+     * equality/IN predicates prune with <i>no false positives</i> (even when the value falls inside
+     * the min/max). Above it, the column falls back to min/max + bloom. Default 64.
      */
     @Builder.Default
     private int setMaxCardinality = 64;
-
-    /**
-     * Column id to <b>sort rows by within each page</b> so the per-granule marks form a sparse
-     * primary index (ClickHouse MergeTree primary key). A predicate on this column then
-     * binary-searches the granule range instead of scanning every granule. 0 (default) = unsorted.
-     */
-    @Builder.Default
-    private int sortColumnId = 0;
-
-    /** Max messages packed into one page before it is sealed (default 1000). */
-    @Builder.Default
-    private int maxPageMessages = 1000;
-
-    /**
-     * When true, each page compresses its INT/LONG column blocks with the smallest of several
-     * lossless integer codecs (frame-of-reference, delta, dictionary, or raw) chosen per column.
-     * Purely a storage/transfer optimization: decoding reproduces the exact values, so scans,
-     * pruning and consumer delivery are unchanged. Default false (raw fixed-stride columns).
-     */
-    @Builder.Default
-    private boolean columnCompressionEnabled = false;
-
-    /** Grouping window: a partial page is sealed after this many ms (default 10). */
-    @Builder.Default
-    private long pageGroupingDelayMs = 10;
-
-    /**
-     * When true, the broker maintains a segment-level metadata index: a compaction pass merges each
-     * closed ledger's per-page stats into coarse segment summaries (min/max + exact set) stored in a
-     * per-topic index-ledger, so scans can skip whole segments before issuing a bookie page prune.
-     * Read-side only; default false.
-     */
-    @Builder.Default
-    private boolean segmentIndexEnabled = false;
 
     /** Pages summarized into one segment when building the segment index (default 1024). */
     @Builder.Default

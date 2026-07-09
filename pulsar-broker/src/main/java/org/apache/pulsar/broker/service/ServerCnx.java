@@ -133,7 +133,6 @@ import org.apache.pulsar.common.api.proto.CommandFlow;
 import org.apache.pulsar.common.api.proto.CommandGetLastMessageId;
 import org.apache.pulsar.common.api.proto.CommandGetOrCreateSchema;
 import org.apache.pulsar.common.api.proto.CommandGetSchema;
-import org.apache.pulsar.common.api.proto.CommandScan;
 import org.apache.pulsar.common.api.proto.CommandGetTopicsOfNamespace;
 import org.apache.pulsar.common.api.proto.CommandLookupTopic;
 import org.apache.pulsar.common.api.proto.CommandNewTxn;
@@ -3397,26 +3396,6 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         });
     }
 
-
-    @Override
-    protected void handleScan(CommandScan commandScan) {
-        checkArgument(state == State.Connected);
-        final long requestId = commandScan.getRequestId();
-        final long consumerId = commandScan.getConsumerId();
-        final String topic = commandScan.getTopic();
-        log.debug().attr("topic", topic).attr("requestId", requestId).attr("consumerId", consumerId)
-                .log("Received Streaming Lake scan request");
-        // Protocol handler is in place. Full execution -- date pruning via the
-        // DateIndexLedger, per-ledger bookie PAGE_PRUNE, candidate-page reads, columnar
-        // decode + exact row filter, and streamed CommandScanResponse batches -- runs
-        // against the topic's managed ledger and the broker's BookKeeper client, and is
-        // validated under a live cluster. Until that data path is enabled, respond
-        // explicitly rather than silently.
-        ctx.writeAndFlush(Commands.serializeWithSize(Commands.newScanResponse(
-                requestId, consumerId, null, true, ServerError.NotAllowedError,
-                "Streaming Lake scan execution is wired at the protocol level; data-path "
-                        + "execution pending runtime integration")));
-    }
 
     @Override
     protected void handleGetSchema(CommandGetSchema commandGetSchema) {

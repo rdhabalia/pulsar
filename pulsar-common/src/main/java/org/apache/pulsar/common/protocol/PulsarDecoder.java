@@ -81,8 +81,6 @@ import org.apache.pulsar.common.api.proto.CommandScalableTopicUpdate;
 import org.apache.pulsar.common.api.proto.CommandSeek;
 import org.apache.pulsar.common.api.proto.CommandSend;
 import org.apache.pulsar.common.api.proto.CommandSendError;
-import org.apache.pulsar.common.api.proto.CommandScan;
-import org.apache.pulsar.common.api.proto.CommandScanResponse;
 import org.apache.pulsar.common.api.proto.CommandSendReceipt;
 import org.apache.pulsar.common.api.proto.CommandSubscribe;
 import org.apache.pulsar.common.api.proto.CommandSuccess;
@@ -546,16 +544,6 @@ public abstract class PulsarDecoder extends ChannelInboundHandlerAdapter {
                 handleCommandWatchTcAssignmentsClose(cmd.getWatchTcAssignmentsClose());
                 break;
 
-            case SCAN:
-                checkArgument(cmd.hasScan());
-                handleScan(cmd.getScan());
-                break;
-
-            case SCAN_RESPONSE:
-                checkArgument(cmd.hasScanResponse());
-                handleScanResponse(cmd.getScanResponse());
-                break;
-
             default:
                 break;
             }
@@ -641,14 +629,6 @@ public abstract class PulsarDecoder extends ChannelInboundHandlerAdapter {
     }
 
     protected void handleAckResponse(CommandAckResponse ackResponse) {
-        throw new UnsupportedOperationException();
-    }
-
-    protected void handleScan(CommandScan scan) {
-        throw new UnsupportedOperationException();
-    }
-
-    protected void handleScanResponse(CommandScanResponse scanResponse) {
         throw new UnsupportedOperationException();
     }
 
