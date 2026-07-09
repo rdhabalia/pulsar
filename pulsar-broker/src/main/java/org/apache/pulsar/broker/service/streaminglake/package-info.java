@@ -21,7 +21,8 @@
  * layered on a Pulsar topic. The client encodes columnar (Apache Arrow) batches with a per-batch
  * stats footer; the broker persists them as normal entries and slices the footer into a durable
  * page-index ledger, a compaction pass merges page stats into segments, and the query tier prunes
- * (date &rarr; segment &rarr; page) and scans/joins. See {@code DESIGN.md} in this package for the
- * end-to-end design and byte-level formats.
+ * (date &rarr; segment &rarr; page) and scans/joins. See {@code streamLake/DESIGN.md} at the repo
+ * root for the end-to-end design and byte-level formats, and {@code streamLake/BENCHMARK.md} for the
+ * inner-join benchmark and cost model.
  */
 package org.apache.pulsar.broker.service.streaminglake;

@@ -138,16 +138,33 @@ US‑East‑1, list price (see §8 for sources + dates — **verify current pric
 
 ### 4.1 StreamLake (one system: Pulsar + BookKeeper does ingest, storage, **and** query)
 
+BookKeeper splits storage across two devices, so cost is modeled the way it is actually deployed:
+a **small, fast NVMe journal device** (write‑ahead log — ~100 GB is plenty; it is drained to the
+ledger device continuously) and a **large ledger/storage device** that holds the columnar data. At
+large scale the ledger device is **cheap HDD (st1)**; the perf numbers in §2 were taken on **NVMe**,
+so both are costed.
+
 | Component | Sizing | Monthly (list) |
 |---|---|---|
 | Brokers (pub‑sub + query tier) | 3 × r5.2xlarge @ $0.504/hr × 730 | **$1,104** |
-| Bookies (hot storage on NVMe) | 3 × i3en.2xlarge @ $0.904/hr × 730 (5 TB NVMe each) | **$1,980** |
+| Bookie compute | 3 × m5.2xlarge @ $0.384/hr × 730 | **$841** |
+| Bookie **journal** device | 3 × 100 GB NVMe (gp3) @ $0.08/GB‑mo | **$24** |
+| Bookie **ledger** device (hot set ≈ 6 TB logical × RF‑3 = 18 TB) | see device table below | **$810** (HDD) |
 | Cold offload (data > 7 d → S3) | ~19 TB × $0.023/GB‑mo | **$437** |
 | **Query compute** | **marginal** — runs on already‑provisioned brokers (~1.1 s/query) | **$0** |
-| **Total** | | **≈ $3,520/mo** |
+| **Total (production, HDD ledgers)** | | **≈ $3,216/mo** |
 
-Notes: RF‑3 is included in bookie sizing (3× bytes on NVMe for the hot tier). Queries add no
-separate line item — the 1,000/day run on the same brokers that serve pub‑sub, at ~1 s each.
+**Ledger‑device cost — HDD vs NVMe** (the 18 TB RF‑3 hot set; journal stays 100 GB NVMe either way):
+
+| Ledger/storage device | $/GB‑mo | 18 TB RF‑3 | Which config |
+|---|---|---|---|
+| **HDD (st1)** | $0.045 | **$810/mo** | **large‑scale production** (what we deploy) |
+| SSD (gp3, NVMe‑class) | $0.08 | **$1,440/mo** | matches the **§2 perf benchmark** config |
+
+So the StreamLake total is **≈ $3,216/mo with HDD ledgers** (production) or **≈ $3,846/mo with NVMe
+ledgers** (perf‑config: swap the $810 line for $1,440). The **journal stays a small 100 GB NVMe** in
+both — it never holds the bulk data, so NVMe cost there is negligible ($24/mo total). RF‑3 (3× bytes)
+is included in the ledger sizing; queries add no line item (they run on the same brokers at ~1 s each).
 
 ### 4.2 Kafka → Spark → S3 → Iceberg → Spark (five components)
 
@@ -164,7 +181,8 @@ separate line item — the 1,000/day run on the same brokers that serve pub‑su
 
 | | StreamLake | Kafka+Spark+S3+Iceberg | Ratio |
 |---|---|---|---|
-| Monthly TCO (reference workload) | **~$3,520** | ~$7,689 | **~2.2× cheaper** |
+| Monthly TCO — **production (HDD ledgers)** | **~$3,216** | ~$7,689 | **~2.4× cheaper** |
+| Monthly TCO — perf‑config (NVMe ledgers) | ~$3,846 | ~$7,689 | ~2.0× cheaper |
 | Components to operate | **1** (Pulsar/BK) | 5 | — |
 | Query latency (selective join) | **~1 s** (measured) | seconds–minutes (cluster/shuffle/spin‑up) | — |
 | Data freshness at query time | **live** | after Kafka→S3 sink + compaction | — |
@@ -172,7 +190,9 @@ separate line item — the 1,000/day run on the same brokers that serve pub‑su
 
 The dominant competitor cost is **query‑side Spark compute** (spin‑up/shuffle for each query) and the
 **duplicated always‑on compute** across Kafka + two Spark roles. StreamLake collapses these into one
-always‑on cluster where the query is a marginal ~1 s of CPU.
+always‑on cluster where the query is a marginal ~1 s of CPU. Moving the ledger device from NVMe to
+**HDD in production** cuts StreamLake storage further (the §2 perf numbers still hold — reads at query
+time are of the *pruned* 1–9 % working set, and hot pages sit in page cache / the query broker).
 
 ---
 
@@ -216,8 +236,30 @@ groups, so you pay 3× bytes only for the small hot set and object‑storage rat
 
 ## 7. Reproduce
 
+### 7.1 Tooling & source paths (use these for future testing)
+
+All paths are relative to the repo root (`pulsar/pulsar`, the directory that contains this
+`streamLake/` folder):
+
+| What | Path |
+|---|---|
+| **Benchmark harness** (the tool that produced §2) | `pulsar-broker/src/test/java/org/apache/pulsar/broker/service/streaminglake/StreamLakeJoinBenchmark.java` |
+| Join engine under test (`scanInnerJoin`, late materialization) | `pulsar-broker/src/main/java/org/apache/pulsar/broker/service/streaminglake/StreamLakeQueryExecutor.java` |
+| Hierarchical pruner (date → segment → page) | `pulsar-broker/.../streaminglake/StreamLakePruner.java` |
+| Off‑heap build table (spill file) | `pulsar-client/src/main/java/org/apache/pulsar/client/streaminglake/SpillingJoinTable.java` |
+| On‑heap build table + row codec | `pulsar-client/.../streaminglake/OnHeapJoinTable.java`, `StreamLakeRowCodec.java` |
+| Functional 2‑topic join unit test (smaller template) | `pulsar-broker/src/test/java/org/apache/pulsar/broker/service/streaminglake/StreamLakeJoinExecutorTest.java` |
+| Off‑heap spill scratch dir (git‑ignored) | `temp/` |
+| Printed report (Gradle captures test stdout here) | `pulsar-broker/build/test-results/test/TEST-org.apache.pulsar.broker.service.streaminglake.StreamLakeJoinBenchmark.xml` |
+
+The harness is a normal broker TestNG test, opt‑in via the `SL_BENCH_RUN` env var, so it never runs
+in a normal test suite. To add scenarios, tune the `SL_BENCH_*` env vars (§7.3) or extend the
+deterministic generator (`personRow` / `employeeRow` / `bucket`) in the harness.
+
+### 7.2 Run command
+
 ```bash
-cd pulsar/pulsar
+cd pulsar/pulsar   # repo root (contains this streamLake/ dir)
 # 10 GB / 2 days / 5‑min rollover, 8‑hour query window, OFF‑HEAP spill under pulsar/temp:
 SL_BENCH_RUN=true SL_BENCH_TOTALGB=10 SL_BENCH_DAYS=2 SL_BENCH_ROLLOVERMIN=5 \
 SL_BENCH_WINDOWHOURS=8 SL_BENCH_SPILLDIR="$PWD/temp" \
@@ -232,9 +274,10 @@ print(re.search(r'===== StreamLake.*?(?=\]\]>|</system-out>)', open(f).read(), r
 PY
 ```
 
-Config env vars (Gradle forwards the process environment to forked test JVMs; **`-D` is not
-forwarded**, and `--no-daemon --no-build-cache --rerun-tasks` are required so the run isn't served
-from cache):
+### 7.3 Config env vars
+
+Gradle forwards the process environment to forked test JVMs; **`-D` is not forwarded**, and
+`--no-daemon --no-build-cache --rerun-tasks` are required so the run isn't served from cache.
 
 | Env var | Default | Meaning |
 |---|---|---|
@@ -265,10 +308,11 @@ from cache):
 **Canonical list prices used in §4 (US‑East‑1, on‑demand, ~mid‑2024 — the AWS pricing tables render
 via JS and did not scrape; re‑confirm on the pricing pages):**
 - S3 Standard **$0.023/GB‑mo** (first 50 TB); GET **$0.0004**/1k, PUT **$0.005**/1k.
-- EBS **st1 (HDD) $0.045/GB‑mo**, **gp3 $0.08/GB‑mo**.
+- EBS **st1 (HDD, ledger device) $0.045/GB‑mo**, **gp3 (SSD/NVMe‑class) $0.08/GB‑mo**.
 - MSK broker storage **$0.10/GB‑mo**.
-- EC2 on‑demand: r5.2xlarge **$0.504/hr**, i3en.2xlarge **$0.904/hr**, kafka.m5.2xlarge **≈$0.84/hr**,
-  c4.2xlarge **$0.398/hr** (EC2) + **$0.105/hr** (EMR) — the last two verified from the EMR example.
+- EC2 on‑demand: r5.2xlarge **$0.504/hr** (broker), m5.2xlarge **$0.384/hr** (bookie compute),
+  kafka.m5.2xlarge **≈$0.84/hr**, c4.2xlarge **$0.398/hr** (EC2) + **$0.105/hr** (EMR) — the last
+  two verified from the EMR example.
 
 > No turnkey published study measures "fresh‑data selective inner‑join TCO" for either stack, so §4 is
 > modeled transparently rather than cited from a single source. Swap in your own instance types,
