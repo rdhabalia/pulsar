@@ -70,7 +70,6 @@ import org.apache.pulsar.broker.service.RedeliveryTrackerDisabled;
 import org.apache.pulsar.broker.service.SendMessageInfo;
 import org.apache.pulsar.broker.service.SharedConsumerAssignor;
 import org.apache.pulsar.broker.service.Subscription;
-import org.apache.pulsar.broker.service.streaminglake.StreamLakeTranscoder;
 import org.apache.pulsar.broker.transaction.exception.buffer.TransactionBufferException;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.SubType;
 import org.apache.pulsar.common.api.proto.MessageMetadata;
@@ -672,11 +671,6 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     @Override
     public final synchronized void readEntriesComplete(List<Entry> entries, Object ctx) {
-        if (topic.isStreamLakeBatched()) {
-            // Re-frame StreamLake columnar page entries into standard batch entries so consumers
-            // receive the original messages with native batch indices.
-            StreamLakeTranscoder.transcodeInPlace(entries);
-        }
         ReadType readType = (ReadType) ctx;
         if (readType == ReadType.Normal) {
             havePendingRead = false;

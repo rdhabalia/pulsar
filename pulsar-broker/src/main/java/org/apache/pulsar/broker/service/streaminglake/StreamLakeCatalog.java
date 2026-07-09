@@ -43,7 +43,7 @@ import org.slf4j.LoggerFactory;
  * <p>Backed by a single append-only BookKeeper ledger (latest entry per data ledger wins on replay)
  * whose id lives in the {@code /streamlake} node via {@link StreamLakeMetaStore#updateCatalogLedgerId}.
  * On load the ledger is replayed and rewritten into a fresh one (self-healing if the old was fenced),
- * mirroring {@link StreamLakeDateIndex}. Never throws on open -- falls back to an in-memory catalog.
+ * mirroring the durable date-index ledger. Never throws on open -- falls back to an in-memory catalog.
  */
 public class StreamLakeCatalog implements AutoCloseable {
 

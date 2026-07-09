@@ -143,11 +143,8 @@ import org.apache.pulsar.broker.service.TransportCnx;
 import org.apache.pulsar.broker.service.schema.BookkeeperSchemaStorage;
 import org.apache.pulsar.broker.service.schema.exceptions.IncompatibleSchemaException;
 import org.apache.pulsar.broker.service.schema.exceptions.NotExistSchemaException;
-import org.apache.pulsar.broker.service.streaminglake.StreamLakeBatcher;
-import org.apache.pulsar.broker.service.streaminglake.StreamLakeDateIndex;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeMetaStore;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakePageIndex;
-import org.apache.pulsar.broker.service.streaminglake.StreamLakeRangeBuilder;
 import org.apache.pulsar.broker.stats.ClusterReplicationMetrics;
 import org.apache.pulsar.broker.stats.NamespaceStats;
 import org.apache.pulsar.broker.stats.ReplicationMetrics;
@@ -186,7 +183,6 @@ import org.apache.pulsar.common.policies.data.ManagedLedgerInternalStats.LedgerI
 import org.apache.pulsar.common.policies.data.PersistentTopicInternalStats;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
-import org.apache.pulsar.common.policies.data.StreamingLakeConfig;
 import org.apache.pulsar.common.policies.data.SubscribeRate;
 import org.apache.pulsar.common.policies.data.TopicPolicies;
 import org.apache.pulsar.common.policies.data.TransactionBufferStats;
@@ -227,10 +223,6 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
 
     // Managed ledger associated with the topic
     protected final ManagedLedger ledger;
-
-    // StreamLake batched column-major storage (created lazily when the topic is a batched
-    // StreamLake topic).
-    private volatile StreamLakeBatcher streamLakeBatcher;
 
     // StreamLake client-columnar page index (created lazily when the topic uses the redesign path):
     // the broker slices each batch's stats footer into a shared page-index ledger.
@@ -726,52 +718,15 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
 
     private void asyncAddEntry(ByteBuf headersAndPayload, PublishContext publishContext) {
         if (isStreamLakeEnabled()) {
-            StreamingLakeConfig cfg = getStreamingLakeConfig();
-            if (cfg.isClientColumnarEnabled()) {
-                // Redesign path: the client already produced a columnar payload with a stats footer.
-                // Persist it as a normal entry; addComplete() slices the footer into the page index.
-                getOrCreateStreamLakePageIndex(); // ensure the field is set before addComplete runs
-                ledger.asyncAddEntry(headersAndPayload,
-                    (int) publishContext.getNumberOfMessages(), this, publishContext);
-                return;
-            }
-            if (cfg.isBatchingEnabled()) {
-                // StreamLake batched column-major storage: pack messages into a page entry.
-                getOrCreateStreamLakeBatcher(cfg).add(headersAndPayload, publishContext);
-                return;
-            }
-            // Per-entry mode: tag each entry with its own column-range blob for the bookie.
-            byte[] pageRanges = StreamLakeRangeBuilder.build(cfg, headersAndPayload);
+            // Redesign path: the client already produced a columnar payload with a stats footer.
+            // Persist it as a normal entry; addComplete() slices the footer into the page index.
+            getOrCreateStreamLakePageIndex(); // ensure the field is set before addComplete runs
             ledger.asyncAddEntry(headersAndPayload,
-                (int) publishContext.getNumberOfMessages(), pageRanges, this, publishContext);
+                (int) publishContext.getNumberOfMessages(), this, publishContext);
             return;
         }
         ledger.asyncAddEntry(headersAndPayload,
             (int) publishContext.getNumberOfMessages(), this, publishContext);
-    }
-
-    /** Per-ledger {minEventTime, maxEventTime} for StreamLake date-partition pruning. */
-    public java.util.Map<Long, long[]> getStreamLakeDateIndex() {
-        StreamLakeBatcher b = streamLakeBatcher;
-        return b != null ? b.getLedgerDateRanges() : java.util.Collections.emptyMap();
-    }
-
-    private StreamLakeBatcher getOrCreateStreamLakeBatcher(StreamingLakeConfig cfg) {
-        StreamLakeBatcher b = streamLakeBatcher;
-        if (b == null) {
-            synchronized (this) {
-                b = streamLakeBatcher;
-                if (b == null) {
-                    StreamLakeMetaStore metaStore = new StreamLakeMetaStore(
-                            brokerService.getPulsar().getLocalMetadataStore(), ledger);
-                    StreamLakeDateIndex dateIndex = StreamLakeDateIndex.open(
-                            brokerService.getPulsar().getBookKeeperClient(), ledger, metaStore);
-                    b = new StreamLakeBatcher(ledger, cfg, brokerService.getPulsar().getExecutor(), dateIndex);
-                    streamLakeBatcher = b;
-                }
-            }
-        }
-        return b;
     }
 
     /** The client-columnar page index for this topic, or {@code null} if not the redesign path. */

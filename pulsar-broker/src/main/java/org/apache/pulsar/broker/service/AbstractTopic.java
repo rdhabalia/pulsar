@@ -262,12 +262,6 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
         return cfg != null && cfg.isEnabled();
     }
 
-    /** Whether this StreamLake topic stores batched columnar pages (needs read-side transcoding). */
-    public boolean isStreamLakeBatched() {
-        StreamingLakeConfig cfg = getStreamingLakeConfig();
-        return cfg != null && cfg.isEnabled() && cfg.isBatchingEnabled();
-    }
-
     /** Whether this StreamLake topic uses the client-columnar redesign path (broker keeps a page index). */
     public boolean isStreamLakeClientColumnar() {
         StreamingLakeConfig cfg = getStreamingLakeConfig();
