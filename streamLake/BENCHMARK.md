@@ -138,33 +138,40 @@ US‑East‑1, list price (see §8 for sources + dates — **verify current pric
 
 ### 4.1 StreamLake (one system: Pulsar + BookKeeper does ingest, storage, **and** query)
 
-BookKeeper splits storage across two devices, so cost is modeled the way it is actually deployed:
-a **small, fast NVMe journal device** (write‑ahead log — ~100 GB is plenty; it is drained to the
-ledger device continuously) and a **large ledger/storage device** that holds the columnar data. At
-large scale the ledger device is **cheap HDD (st1)**; the perf numbers in §2 were taken on **NVMe**,
-so both are costed.
+StreamLake maps cleanly onto **cheap, role‑specific hardware**, and cost is modeled the way it is
+actually deployed:
+
+- **Pub‑sub brokers** — cheap, stateless serving nodes (no large local disk); they handle produce/
+  consume and dispatch.
+- **Query (StreamLake) brokers** — an **isolated** analytical tier with **local NVMe** for the
+  off‑heap join spill and page decode; this is the tier the §2 numbers ran on.
+- **Bookies** — a small, fast **NVMe journal device** (write‑ahead log, ~100 GB is plenty) + a large
+  **HDD (st1) ledger device** for the bulk columnar data. Perf (§2) was taken on NVMe, so an
+  all‑NVMe ledger variant is costed too.
 
 | Component | Sizing | Monthly (list) |
 |---|---|---|
-| Brokers (pub‑sub + query tier) | 3 × r5.2xlarge @ $0.504/hr × 730 | **$1,104** |
-| Bookie compute | 3 × m5.2xlarge @ $0.384/hr × 730 | **$841** |
-| Bookie **journal** device | 3 × 100 GB NVMe (gp3) @ $0.08/GB‑mo | **$24** |
-| Bookie **ledger** device (hot set ≈ 6 TB logical × RF‑3 = 18 TB) | see device table below | **$810** (HDD) |
+| **Pub‑sub brokers** (cheap, stateless) | 2 × m5.xlarge @ $0.192/hr × 730 | **$280** |
+| **Query brokers** (NVMe — runs the joins + off‑heap spill) | 2 × r5.2xlarge @ $0.504/hr × 730 + 256 GB NVMe each | **$777** |
+| **Bookie** compute | 3 × m5.2xlarge @ $0.384/hr × 730 | **$841** |
+| **Bookie journal** device (**NVMe**) | 3 × 100 GB NVMe (gp3) @ $0.08/GB‑mo | **$24** |
+| **Bookie ledger** device (**HDD**, hot ≈ 6 TB × RF‑3 = 18 TB) | 18 TB × $0.045/GB‑mo (st1) | **$810** |
 | Cold offload (data > 7 d → S3) | ~19 TB × $0.023/GB‑mo | **$437** |
-| **Query compute** | **marginal** — runs on already‑provisioned brokers (~1.1 s/query) | **$0** |
-| **Total (production, HDD ledgers)** | | **≈ $3,216/mo** |
+| **Query compute** | **marginal** — runs on the NVMe query brokers (~1.1 s/query) | **$0** |
+| **Total (production: cheap pub‑sub + NVMe query brokers + NVMe‑journal/HDD‑ledger bookies)** | | **≈ $3,169/mo** |
 
-**Ledger‑device cost — HDD vs NVMe** (the 18 TB RF‑3 hot set; journal stays 100 GB NVMe either way):
+**Ledger‑device cost — HDD vs NVMe** (the 18 TB RF‑3 hot set; the journal stays 100 GB NVMe either way):
 
 | Ledger/storage device | $/GB‑mo | 18 TB RF‑3 | Which config |
 |---|---|---|---|
 | **HDD (st1)** | $0.045 | **$810/mo** | **large‑scale production** (what we deploy) |
 | SSD (gp3, NVMe‑class) | $0.08 | **$1,440/mo** | matches the **§2 perf benchmark** config |
 
-So the StreamLake total is **≈ $3,216/mo with HDD ledgers** (production) or **≈ $3,846/mo with NVMe
-ledgers** (perf‑config: swap the $810 line for $1,440). The **journal stays a small 100 GB NVMe** in
-both — it never holds the bulk data, so NVMe cost there is negligible ($24/mo total). RF‑3 (3× bytes)
-is included in the ledger sizing; queries add no line item (they run on the same brokers at ~1 s each).
+So the StreamLake total is **≈ $3,169/mo with HDD ledgers** (production) or **≈ $3,799/mo with NVMe
+ledgers** (perf‑config: swap the $810 line for $1,440). Only the two devices that need speed are on
+NVMe — the **bookie journal** (100 GB) and the **query‑broker spill** — while the **bulk ledger data
+sits on cheap HDD** and pub‑sub runs on cheap general‑purpose nodes. RF‑3 (3× bytes) is in the ledger
+sizing; queries add no line item (they run on the already‑provisioned NVMe query brokers at ~1 s each).
 
 ### 4.2 Kafka → Spark → S3 → Iceberg → Spark (five components)
 
@@ -181,8 +188,8 @@ is included in the ledger sizing; queries add no line item (they run on the same
 
 | | StreamLake | Kafka+Spark+S3+Iceberg | Ratio |
 |---|---|---|---|
-| Monthly TCO — **production (HDD ledgers)** | **~$3,216** | ~$7,689 | **~2.4× cheaper** |
-| Monthly TCO — perf‑config (NVMe ledgers) | ~$3,846 | ~$7,689 | ~2.0× cheaper |
+| Monthly TCO — **production (HDD ledgers)** | **~$3,169** | ~$7,689 | **~2.4× cheaper** |
+| Monthly TCO — perf‑config (NVMe ledgers) | ~$3,799 | ~$7,689 | ~2.0× cheaper |
 | Components to operate | **1** (Pulsar/BK) | 5 | — |
 | Query latency (selective join) | **~1 s** (measured) | seconds–minutes (cluster/shuffle/spin‑up) | — |
 | Data freshness at query time | **live** | after Kafka→S3 sink + compaction | — |
@@ -310,9 +317,9 @@ via JS and did not scrape; re‑confirm on the pricing pages):**
 - S3 Standard **$0.023/GB‑mo** (first 50 TB); GET **$0.0004**/1k, PUT **$0.005**/1k.
 - EBS **st1 (HDD, ledger device) $0.045/GB‑mo**, **gp3 (SSD/NVMe‑class) $0.08/GB‑mo**.
 - MSK broker storage **$0.10/GB‑mo**.
-- EC2 on‑demand: r5.2xlarge **$0.504/hr** (broker), m5.2xlarge **$0.384/hr** (bookie compute),
-  kafka.m5.2xlarge **≈$0.84/hr**, c4.2xlarge **$0.398/hr** (EC2) + **$0.105/hr** (EMR) — the last
-  two verified from the EMR example.
+- EC2 on‑demand: m5.xlarge **$0.192/hr** (cheap pub‑sub broker), r5.2xlarge **$0.504/hr** (NVMe query
+  broker), m5.2xlarge **$0.384/hr** (bookie compute), kafka.m5.2xlarge **≈$0.84/hr**, c4.2xlarge
+  **$0.398/hr** (EC2) + **$0.105/hr** (EMR) — the last two verified from the EMR example.
 
 > No turnkey published study measures "fresh‑data selective inner‑join TCO" for either stack, so §4 is
 > modeled transparently rather than cited from a single source. Swap in your own instance types,
