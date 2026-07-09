@@ -15,6 +15,11 @@ filter, top‑K and inner‑join with SQL, while the pub/sub write path stays a 
 * **Query tier** does hierarchical pruning (date → segment → page) + late materialization + off‑heap
   hash join + bounded top‑K, driven by an **Apache Calcite** SQL frontend.
 
+> **Benchmark & cost model:** see `BENCHMARK.md` for a runnable inner‑join benchmark
+> (10 GB / 2 days / 5‑min ledgers, measured IO pruning + off‑heap spill) and a transparent TCO
+> comparison against Kafka + Spark + S3 + Iceberg.
+
+
 ### How this differs from the original brainstorm (what actually got built)
 
 The earlier design had the broker batch/encode and the **bookie** hold a RocksDB page index that the

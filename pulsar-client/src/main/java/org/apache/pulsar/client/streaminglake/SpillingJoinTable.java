@@ -122,6 +122,11 @@ public final class SpillingJoinTable implements StreamLakeJoinTable {
         return rows;
     }
 
+    /** Total bytes written to the spill file so far (build-side payload spilled off-heap). */
+    public long spilledBytes() {
+        return writeOffset;
+    }
+
     @Override
     public void close() {
         index.clear();

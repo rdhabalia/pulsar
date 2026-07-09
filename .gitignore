@@ -113,3 +113,6 @@ CLAUDE.md
 # "git config --global core.excludesfile $HOME/.gitignore_global"
 # and adding the AI tool directories/files to the ~/.gitignore_global file without modifying the
 # project's .gitignore file.
+# StreamLake benchmark off-heap spill scratch dir (never commit spill files)
+/pulsar-broker/temp/
+/temp/
