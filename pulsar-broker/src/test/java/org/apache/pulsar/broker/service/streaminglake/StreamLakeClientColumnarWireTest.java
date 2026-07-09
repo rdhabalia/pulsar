@@ -60,6 +60,8 @@ public class StreamLakeClientColumnarWireTest extends StreamLakeRealBookieTestBa
         StreamingLakeConfig cfg = StreamingLakeConfig.builder()
                 .enabled(true).clientColumnarEnabled(true)
                 .setMaxCardinality(64).bloomFpp(0.01)
+                // Single-bookie test ensemble: keep the page-index replication at 1/1/1.
+                .pageIndexEnsembleSize(1).pageIndexWriteQuorum(1).pageIndexAckQuorum(1)
                 .columns(Arrays.asList(
                         new StreamingLakeConfig.SchemaColumn(1, "id", "INT32", true),
                         new StreamingLakeConfig.SchemaColumn(2, "deptId", "INT32", true),

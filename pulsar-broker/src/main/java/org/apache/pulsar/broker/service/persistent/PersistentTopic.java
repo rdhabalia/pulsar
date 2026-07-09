@@ -183,6 +183,7 @@ import org.apache.pulsar.common.policies.data.ManagedLedgerInternalStats.LedgerI
 import org.apache.pulsar.common.policies.data.PersistentTopicInternalStats;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
+import org.apache.pulsar.common.policies.data.StreamingLakeConfig;
 import org.apache.pulsar.common.policies.data.SubscribeRate;
 import org.apache.pulsar.common.policies.data.TopicPolicies;
 import org.apache.pulsar.common.policies.data.TransactionBufferStats;
@@ -742,8 +743,14 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                 if (pi == null) {
                     StreamLakeMetaStore metaStore = new StreamLakeMetaStore(
                             brokerService.getPulsar().getLocalMetadataStore(), ledger);
+                    StreamingLakeConfig cfg = getStreamingLakeConfig();
+                    // Open the page-index ledger with the topic's configured replication: a high
+                    // ensemble spreads the hot pruning metadata across many bookies (read scaling),
+                    // while the ack quorum controls write latency (write to `ensemble`, wait for `ack`).
                     pi = StreamLakePageIndex.open(
-                            brokerService.getPulsar().getBookKeeperClient(), ledger, metaStore);
+                            brokerService.getPulsar().getBookKeeperClient(), ledger, metaStore,
+                            cfg.getPageIndexEnsembleSize(), cfg.getPageIndexWriteQuorum(),
+                            cfg.getPageIndexAckQuorum());
                     streamLakePageIndex = pi;
                 }
             }
@@ -793,33 +800,46 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         PublishContext publishContext = (PublishContext) ctx;
         Position position = pos;
 
-        // Message has been successfully persisted
-        messageDeduplication.recordMessagePersisted(publishContext, position);
-
         // in order to sync the max position when cursor read entries
         transactionBuffer.syncMaxReadPositionForNormalPublish(ledger.getLastConfirmedEntry(),
                 publishContext.isMarkerMessage());
         publishContext.setMetadataFromEntryData(entryData);
-        publishContext.completed(null, position.getLedgerId(), position.getEntryId());
-        decrementPendingWriteOpsAndCheck();
 
-        // Redesign path: slice the client's stats footer from the entry tail (no Arrow parse, no full
-        // copy) and append it to the shared page index off the hot path. Best-effort: a scan falls
-        // back to the message's own footer if this is missing.
+        // StreamLake durability barrier: the client's stats footer is the pruning metadata a scan
+        // relies on to avoid reading full data pages, so it must be durably in the page-index ledger
+        // BEFORE we ack the producer. The append honors the topic's configured page-index write/ack
+        // quorum (write to `ensemble` bookies, wait for `ackQuorum`); a high ensemble keeps this hot
+        // metadata on many bookies for read scaling. Only on success do we record the message as
+        // persisted (dedup) and complete the publish; a failure fails the publish (retriable) instead
+        // of acking, so a successful publish always implies the page is queryable. Run StreamLake
+        // topics with dedup enabled so a producer retry does not duplicate the persisted data entry.
         StreamLakePageIndex pageIndex = streamLakePageIndex;
         if (pageIndex != null && StreamLakeBatchPayload.hasFooter(entryData)) {
             byte[] footer = StreamLakeBatchPayload.statsFooter(entryData);
             long dataLedgerId = position.getLedgerId();
             long dataEntryId = position.getEntryId();
-            brokerService.getPulsar().getExecutor().execute(() -> {
+            // Serialize appends per topic (ordered by data entry) so segment grouping and dedup stay
+            // monotonic, and keep the blocking BK write off the managed-ledger callback thread.
+            brokerService.getTopicOrderedExecutor().executeOrdered(topic, () -> {
                 try {
                     pageIndex.appendFooter(dataLedgerId, dataEntryId, footer);
+                    messageDeduplication.recordMessagePersisted(publishContext, position);
+                    publishContext.completed(null, dataLedgerId, dataEntryId);
                 } catch (Exception e) {
                     log.warn().exceptionMessage(e).log("StreamLake page-index footer append failed for "
-                            + topic + " at " + dataLedgerId + ":" + dataEntryId);
+                            + topic + " at " + dataLedgerId + ":" + dataEntryId + "; failing publish");
+                    publishContext.completed(new PersistenceException(e), -1, -1);
+                } finally {
+                    decrementPendingWriteOpsAndCheck();
                 }
             });
+            return;
         }
+
+        // Message has been successfully persisted
+        messageDeduplication.recordMessagePersisted(publishContext, position);
+        publishContext.completed(null, position.getLedgerId(), position.getEntryId());
+        decrementPendingWriteOpsAndCheck();
     }
 
     @Override

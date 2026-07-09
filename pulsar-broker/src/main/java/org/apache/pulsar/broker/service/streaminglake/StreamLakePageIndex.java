@@ -118,6 +118,16 @@ public class StreamLakePageIndex implements AutoCloseable {
         return open(bk, ml, metaStore, maxHeadBytes, 1, 1, 1);
     }
 
+    /**
+     * Open with an explicit replication but the default head size. The page index is the hot pruning
+     * metadata, so production runs a high {@code ensembleSize} (many bookies for read scaling) with a
+     * smaller {@code ackQuorum} (write to many, wait for a few) on the isolated metadata bookie pool.
+     */
+    public static StreamLakePageIndex open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
+            int ensembleSize, int writeQuorum, int ackQuorum) {
+        return open(bk, ml, metaStore, DEFAULT_MAX_HEAD_BYTES, ensembleSize, writeQuorum, ackQuorum);
+    }
+
     /** Open with an explicit replication (production: RF-3 on the isolated metadata bookie pool). */
     public static StreamLakePageIndex open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
             long maxHeadBytes, int ensembleSize, int writeQuorum, int ackQuorum) {

@@ -8,8 +8,9 @@ filter, top‑K and inner‑join with SQL, while the pub/sub write path stays a 
 * **Client** does the heavy work: batch rows → **Apache Arrow** columnar encoding → per‑batch pruning
   stats (min/max + exact‑set/bloom) → frame into one message.
 * **Broker** is a *dumb pipe*: persist the client’s payload as a normal managed‑ledger entry, then
-  (off the ack path) slice the trailing stats footer and append it to a **page‑index ledger**. It
-  never parses Arrow, never computes ranges, never asks the bookie to evaluate predicates.
+  slice the trailing stats footer and append it to a **page‑index ledger** — a **durability barrier**
+  before the producer ack (a successful publish guarantees the page is prunable). It never parses
+  Arrow, never computes ranges, never asks the bookie to evaluate predicates.
 * **Bookie** is *pure storage*: normal ledger entries only. No RocksDB page index, no predicate RPC.
 * **Query tier** does hierarchical pruning (date → segment → page) + late materialization + off‑heap
   hash join + bounded top‑K, driven by an **Apache Calcite** SQL frontend.
@@ -174,28 +175,58 @@ if (isStreamLakeEnabled()) {
 }
 ```
 
-After the entry is durable, `addComplete` (already off the ack‑critical path) slices the footer and
-appends it **asynchronously** on the broker executor:
+After the data entry is durable, `addComplete` slices the footer and appends it to the page‑index
+ledger as a **durability barrier — the producer is acked only after the page‑index write succeeds**
+(the pruning metadata is guaranteed present, so a successful publish is always queryable/prunable).
+The append runs on a **per‑topic ordered executor** (appends stay in data‑entry order — the segment
+builder groups consecutive pages — and dedup stays monotonic), off the managed‑ledger callback thread:
 
 ```java
 if (pageIndex != null && StreamLakeBatchPayload.hasFooter(entryData)) {
-    byte[] footer  = StreamLakeBatchPayload.statsFooter(entryData);   // tail slice, no Arrow parse
-    long   ledger  = position.getLedgerId();
-    long   entry   = position.getEntryId();
-    executor.execute(() -> pageIndex.appendFooter(ledger, entry, footer));  // (1.8)
+    byte[] footer = StreamLakeBatchPayload.statsFooter(entryData);   // tail slice, no Arrow parse
+    long   lid    = position.getLedgerId();
+    long   eid    = position.getEntryId();
+    brokerService.getTopicOrderedExecutor().executeOrdered(topic, () -> {
+        try {
+            pageIndex.appendFooter(lid, eid, footer);                // (1.8) durable, honors ack quorum
+            messageDeduplication.recordMessagePersisted(publishContext, position);
+            publishContext.completed(null, lid, eid);                // ack AFTER the page-index write
+        } catch (Exception e) {
+            publishContext.completed(new PersistenceException(e), -1, -1);  // fail (retriable)
+        } finally {
+            decrementPendingWriteOpsAndCheck();
+        }
+    });
+    return;
 }
 ```
 
-Best‑effort: if a footer append is lost, a scan falls back to the message’s own footer.
+On failure the publish is **failed (retriable)**, not acked, and dedup is *not* recorded — so a
+producer retry is reprocessed (run StreamLake topics with **producer dedup enabled** so the retry
+does not duplicate the already‑persisted data entry). The message still embeds its own footer, so the
+page‑index is additionally rebuildable by a background reconciler as a belt‑and‑suspenders.
 
 ### 1.8 Page‑index ledger append — `StreamLakePageIndex.appendFooter()`
 
 ```java
 byte[] entry = encode(dataLedgerId, dataEntryId, footer);   // 'F'|dataLid(8)|dataEid(8)|footer
 ensureHeadFor(entry.length);                                 // roll head if > maxHeadBytes (4 MiB)
-long piEntryId = addToHead(entry);                           // append to head BK ledger
+long piEntryId = addToHead(entry);                           // append to head BK ledger (see below)
 refsByDataLedger.get(dataLedgerId).add(new Ref(head.getId(), piEntryId, dataEntryId));  // in-mem
 ```
+
+`addToHead` does a synchronous `head.addEntry(entry)` — a BK write that returns once **`ackQuorum`**
+bookies ack (writing to all **`ensembleSize`**); a fenced/closed head is transparently rolled and
+retried once. The head ledger is created with the topic’s configured replication:
+
+```java
+bk.createLedger(ensembleSize, writeQuorum, ackQuorum, CRC32, PASSWORD)
+```
+
+from `StreamingLakeConfig.pageIndex{EnsembleSize,WriteQuorum,AckQuorum}` (default **3/3/2**). A **high
+ensemble** spreads this hot pruning metadata across many bookies for read scaling; a **smaller ack
+quorum** (write to many, wait for a few) keeps publish latency low. Segment ledgers use the separate
+`segment{…}Quorum` (default 5/5/3, tunable much higher).
 
 **Memory‑light:** only lightweight references `dataLedgerId → [(piLedgerId, piEntryId, dataEntryId)]`
 live in the broker; the footer *bodies* stay in the ledger and are read on demand by `footersFor()`.
