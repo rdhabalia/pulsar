@@ -370,6 +370,11 @@ The Apache Software License, Version 2.0
     - org.apache.arrow-arrow-memory-unsafe-19.0.0.jar
     - org.apache.arrow-arrow-vector-19.0.0.jar
     - com.google.flatbuffers-flatbuffers-java-24.3.25.jar
+ * Apache Calcite (StreamLake SQL query frontend)
+    - org.apache.calcite-calcite-core-1.42.0.jar
+    - org.apache.calcite-calcite-linq4j-1.42.0.jar
+    - org.apache.calcite.avatica-avatica-core-1.28.0.jar
+    - org.apache.calcite.avatica-avatica-metrics-1.28.0.jar
     - org.apache.bookkeeper-statelib-4.18.0.jar
     - org.apache.bookkeeper-stream-storage-api-4.18.0.jar
     - org.apache.bookkeeper-stream-storage-common-4.18.0.jar

@@ -31,6 +31,8 @@ dependencies {
     api(project(":pulsar-broker-common"))
     api(project(":pulsar-client-original"))
     implementation(project(":pulsar-client-admin-original"))
+    // Apache Calcite: SQL frontend for StreamLake (parse + filter/projection pushdown to the scan).
+    implementation(libs.calcite.core)
     api(project(":pulsar-websocket"))
     implementation(project(":pulsar-cli-utils"))
     implementation(project(":pulsar-transaction:pulsar-transaction-common"))

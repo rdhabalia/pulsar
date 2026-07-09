@@ -36,14 +36,19 @@ public final class StreamLakeScanPredicate {
         final int columnIndex;
         final StreamLakeType type;
         final byte[] lo;
+        final boolean loInclusive;
         final byte[] hi;
+        final boolean hiInclusive;
         final List<byte[]> inValues;
 
-        ColumnPredicate(int columnIndex, StreamLakeType type, byte[] lo, byte[] hi, List<byte[]> inValues) {
+        ColumnPredicate(int columnIndex, StreamLakeType type, byte[] lo, boolean loInclusive,
+                byte[] hi, boolean hiInclusive, List<byte[]> inValues) {
             this.columnIndex = columnIndex;
             this.type = type;
             this.lo = lo;
+            this.loInclusive = loInclusive;
             this.hi = hi;
+            this.hiInclusive = hiInclusive;
             this.inValues = inValues;
         }
 
@@ -78,11 +83,17 @@ public final class StreamLakeScanPredicate {
                 return false;
             }
             byte[] v = StreamLakeOrderPreserving.encode(type, rowValue);
-            if (lo != null && Arrays.compareUnsigned(v, lo) < 0) {
-                return false;
+            if (lo != null) {
+                int c = Arrays.compareUnsigned(v, lo);
+                if (loInclusive ? c < 0 : c <= 0) {
+                    return false;
+                }
             }
-            if (hi != null && Arrays.compareUnsigned(v, hi) > 0) {
-                return false;
+            if (hi != null) {
+                int c = Arrays.compareUnsigned(v, hi);
+                if (hiInclusive ? c > 0 : c >= 0) {
+                    return false;
+                }
             }
             if (inValues != null && !inValues.isEmpty()) {
                 boolean any = false;
@@ -138,18 +149,29 @@ public final class StreamLakeScanPredicate {
     public static final class Builder {
         private final List<ColumnPredicate> columns = new ArrayList<>();
 
-        /** A closed/open range on a column; pass null for an unbounded side. */
+        /** A closed range on a column (both bounds inclusive); pass null for an unbounded side. */
         public Builder range(int columnIndex, StreamLakeType type, Object loInclusive, Object hiInclusive) {
-            byte[] lo = loInclusive == null ? null : StreamLakeOrderPreserving.encode(type, loInclusive);
-            byte[] hi = hiInclusive == null ? null : StreamLakeOrderPreserving.encode(type, hiInclusive);
-            columns.add(new ColumnPredicate(columnIndex, type, lo, hi, null));
+            return range(columnIndex, type, loInclusive, true, hiInclusive, true);
+        }
+
+        /**
+         * A range on a column with explicit bound inclusivity; pass null for an unbounded side.
+         * Lets SQL {@code <}/{@code >} translate to exclusive bounds while {@code <=}/{@code >=}/BETWEEN
+         * stay inclusive.
+         */
+        public Builder range(int columnIndex, StreamLakeType type, Object lo, boolean loInclusive,
+                Object hi, boolean hiInclusive) {
+            byte[] loBytes = lo == null ? null : StreamLakeOrderPreserving.encode(type, lo);
+            byte[] hiBytes = hi == null ? null : StreamLakeOrderPreserving.encode(type, hi);
+            columns.add(new ColumnPredicate(columnIndex, type, loBytes, loInclusive, hiBytes, hiInclusive, null));
             return this;
         }
 
         /** An equality predicate ({@code column = value}). */
         public Builder eq(int columnIndex, StreamLakeType type, Object value) {
             byte[] v = StreamLakeOrderPreserving.encode(type, value);
-            columns.add(new ColumnPredicate(columnIndex, type, v, v, java.util.Collections.singletonList(v)));
+            columns.add(new ColumnPredicate(columnIndex, type, v, true, v, true,
+                    java.util.Collections.singletonList(v)));
             return this;
         }
 
@@ -168,7 +190,7 @@ public final class StreamLakeScanPredicate {
                     hi = e;
                 }
             }
-            columns.add(new ColumnPredicate(columnIndex, type, lo, hi, encoded));
+            columns.add(new ColumnPredicate(columnIndex, type, lo, true, hi, true, encoded));
             return this;
         }
 

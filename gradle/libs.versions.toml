@@ -39,6 +39,8 @@ log4j2 = "2.26.0"
 lombok = "1.18.42"
 # Apache Arrow (StreamLake columnar client encoding)
 arrow = "19.0.0"
+# Apache Calcite (StreamLake SQL frontend)
+calcite = "1.42.0"
 # OpenTelemetry
 opentelemetry = "1.62.0"
 opentelemetry-alpha = "1.62.0-alpha"
@@ -210,6 +212,8 @@ jackson-jakarta-rs-json-provider = { module = "com.fasterxml.jackson.jakarta.rs:
 # Apache Arrow (StreamLake columnar client encoding)
 arrow-vector = { module = "org.apache.arrow:arrow-vector", version.ref = "arrow" }
 arrow-memory-unsafe = { module = "org.apache.arrow:arrow-memory-unsafe", version.ref = "arrow" }
+# Apache Calcite (StreamLake SQL frontend)
+calcite-core = { module = "org.apache.calcite:calcite-core", version.ref = "calcite" }
 # Netty
 netty-bom = { module = "io.netty:netty-bom", version.ref = "netty" }
 netty-common = { module = "io.netty:netty-common", version.ref = "netty" }

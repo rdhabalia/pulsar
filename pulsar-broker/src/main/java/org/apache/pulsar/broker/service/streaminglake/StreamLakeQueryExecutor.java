@@ -19,10 +19,12 @@
 package org.apache.pulsar.broker.service.streaminglake;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import org.apache.pulsar.client.streaminglake.StreamLakeArrowBatchDecoder;
 import org.apache.pulsar.client.streaminglake.StreamLakeHashJoin;
 import org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate;
+import org.apache.pulsar.client.streaminglake.StreamLakeSchema;
 import org.apache.pulsar.client.streaminglake.StreamLakeTopK;
 
 /**
@@ -75,6 +77,39 @@ public class StreamLakeQueryExecutor {
         StreamLakeTopK topK = new StreamLakeTopK(k, sortColumn, descending);
         topK.offerAll(scan(fromMs, toMs, predicate));
         return topK.results();
+    }
+
+    /**
+     * Execute a SQL query end to end: parse it with Apache Calcite (via {@link StreamLakeSqlPlanner}),
+     * push the WHERE/time predicates into the prune+scan, apply ORDER BY/LIMIT (bounded top-K) and the
+     * SELECT projection. {@code timeColumn} (nullable) names the event-time column whose predicates
+     * drive the [fromMs, toMs] date-prune window rather than the row filter.
+     */
+    public List<Object[]> executeSql(String sql, StreamLakeSchema schema, String timeColumn)
+            throws Exception {
+        StreamLakeSqlPlanner.Plan plan = StreamLakeSqlPlanner.plan(sql, schema, timeColumn);
+        List<Object[]> rows;
+        if (plan.sortColumn() >= 0 && plan.limit() > 0) {
+            rows = scanTopK(plan.fromMs(), plan.toMs(), plan.predicate(), plan.limit(),
+                    plan.sortColumn(), plan.descending());
+        } else {
+            rows = new ArrayList<>(scan(plan.fromMs(), plan.toMs(), plan.predicate()));
+            if (plan.sortColumn() >= 0) {
+                final int sc = plan.sortColumn();
+                Comparator<Object[]> order = Comparator.comparing(
+                        r -> asComparable(r[sc]), Comparator.nullsFirst(Comparator.naturalOrder()));
+                rows.sort(plan.descending() ? order.reversed() : order);
+            }
+            if (plan.limit() > 0 && rows.size() > plan.limit()) {
+                rows = new ArrayList<>(rows.subList(0, plan.limit()));
+            }
+        }
+        return plan.project(rows);
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Comparable<Object> asComparable(Object v) {
+        return (Comparable) v;
     }
 
     /**
