@@ -351,15 +351,24 @@ footers at all.
 ### 3.1 Trigger
 
 When a data ledger rolls **closed**, the broker marks it `CLOSED` in the catalog. Building is
-**out‑of‑band** (off the write path): the owning broker enqueues the closed ledger — design: publish a
-`{topic}` message onto an internal **sharded system topic** (shard by topic → parallel across topics,
-ordered per topic). A **segment‑build consumer** (a query‑tier broker, **failover** subscription per
-shard) picks it up and runs the builder.
+**out‑of‑band** (off the write path). The **implemented (W0)** trigger runs on the **owning broker**:
+`PersistentTopic.addComplete` detects a data‑ledger id change between consecutive persisted entries
+(the previous ledger has rolled and all its pages are durable), records the closed ledger's event‑time
+bounds in the catalog (`CLOSED`), and dispatches `buildForLedger` on the broker executor (off the ack
+path) — see `StreamLakeSegmentService`. A ledger is also registered `OPEN` on its first entry so recent
+data is queryable via the per‑page fallback before it is segmented.
 
-> Status: the builder + its work queue (`buildForLedger` / `buildAllClosed()` over
-> `catalog.closedUnsegmented()`) are implemented and tested. Wiring the system‑topic trigger consumer
-> into broker startup is the remaining integration point (today the builder is invoked directly / in
-> tests). The catalog `state` machine already makes it idempotent and crash‑safe.
+> A future scale‑out (design): instead of building on the owning broker, publish a `{topic}` message
+> onto an internal **sharded system topic** (shard by topic → parallel across topics, ordered per
+> topic) and have a **segment‑build consumer** on a query‑tier broker (**failover** subscription per
+> shard) run the builder — moving segment CPU off the pub‑sub broker.
+
+> Status: **auto segment‑build on ledger close is implemented and tested end‑to‑end on a real bookie**
+> (`StreamLakeAutoSegmentBuildTest`): the owning broker builds the catalog + segments as ledgers roll,
+> with crash recovery via `buildAllClosed()` over `catalog.closedUnsegmented()` on open. The catalog
+> `state` machine makes it idempotent and crash‑safe. Event time = broker **ingest** (persist) time of
+> the first/last entry; a designated time‑column source is a future enhancement. Moving the trigger to
+> the sharded system‑topic consumer (above) is the remaining scale‑out step.
 
 ### 3.2 `StreamLakeSegmentBuilder.buildForLedger(dataLedgerId)` (idempotent)
 

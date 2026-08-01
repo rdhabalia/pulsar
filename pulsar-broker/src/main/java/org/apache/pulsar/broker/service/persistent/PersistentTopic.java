@@ -145,6 +145,7 @@ import org.apache.pulsar.broker.service.schema.exceptions.IncompatibleSchemaExce
 import org.apache.pulsar.broker.service.schema.exceptions.NotExistSchemaException;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeMetaStore;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakePageIndex;
+import org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentService;
 import org.apache.pulsar.broker.stats.ClusterReplicationMetrics;
 import org.apache.pulsar.broker.stats.NamespaceStats;
 import org.apache.pulsar.broker.stats.ReplicationMetrics;
@@ -228,6 +229,11 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     // StreamLake client-columnar page index (created lazily when the topic uses the redesign path):
     // the broker slices each batch's stats footer into a shared page-index ledger.
     private volatile StreamLakePageIndex streamLakePageIndex;
+
+    // StreamLake read-side builder (created lazily alongside the page index): on data-ledger close it
+    // registers the ledger's event-time in the catalog and rolls its page-index footers into column
+    // segments -- the metadata a query prunes on (the page index alone is not reachable by a scan).
+    private volatile StreamLakeSegmentService streamLakeSegmentService;
 
     // Subscriptions to this topic
     private final Map<String, PersistentSubscription> subscriptions = new ConcurrentHashMap<>();
@@ -722,6 +728,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             // Redesign path: the client already produced a columnar payload with a stats footer.
             // Persist it as a normal entry; addComplete() slices the footer into the page index.
             getOrCreateStreamLakePageIndex(); // ensure the field is set before addComplete runs
+            getOrCreateStreamLakeSegmentService(); // catalog + segment builder for the query tier
             ledger.asyncAddEntry(headersAndPayload,
                 (int) publishContext.getNumberOfMessages(), this, publishContext);
             return;
@@ -756,6 +763,33 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             }
         }
         return pi;
+    }
+
+    /** The read-side segment/catalog builder for this topic, or {@code null} if not the redesign path. */
+    public StreamLakeSegmentService getStreamLakeSegmentService() {
+        return streamLakeSegmentService;
+    }
+
+    private StreamLakeSegmentService getOrCreateStreamLakeSegmentService() {
+        StreamLakeSegmentService svc = streamLakeSegmentService;
+        if (svc == null) {
+            synchronized (this) {
+                svc = streamLakeSegmentService;
+                if (svc == null) {
+                    StreamLakeMetaStore metaStore = new StreamLakeMetaStore(
+                            brokerService.getPulsar().getLocalMetadataStore(), ledger);
+                    StreamingLakeConfig cfg = getStreamingLakeConfig();
+                    // Reuse the topic's page index (segment build reads its footers); the heavy build
+                    // runs on the broker executor, off the producer ack path.
+                    svc = StreamLakeSegmentService.open(
+                            brokerService.getPulsar().getBookKeeperClient(), ledger, metaStore,
+                            getOrCreateStreamLakePageIndex(), cfg,
+                            brokerService.getPulsar().getExecutor());
+                    streamLakeSegmentService = svc;
+                }
+            }
+        }
+        return svc;
     }
 
     public void asyncReadEntry(Position position, AsyncCallbacks.ReadEntryCallback callback, Object ctx) {
@@ -818,11 +852,21 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             byte[] footer = StreamLakeBatchPayload.statsFooter(entryData);
             long dataLedgerId = position.getLedgerId();
             long dataEntryId = position.getEntryId();
+            // Ingest (persist) time is this ledger's event-time key for date pruning; captured now so
+            // it is stable when the ordered task runs. numMessages feeds catalog row-count accounting.
+            final StreamLakeSegmentService segmentService = streamLakeSegmentService;
+            final long ingestTimeMs = Clock.systemUTC().millis();
+            final long numMessages = publishContext.getNumberOfMessages();
             // Serialize appends per topic (ordered by data entry) so segment grouping and dedup stay
             // monotonic, and keep the blocking BK write off the managed-ledger callback thread.
             brokerService.getTopicOrderedExecutor().executeOrdered(topic, () -> {
                 try {
                     pageIndex.appendFooter(dataLedgerId, dataEntryId, footer);
+                    // Register/roll the ledger for the query tier (cheap; heavy build is dispatched
+                    // async). Runs after the footer append so a closed ledger's footers are durable.
+                    if (segmentService != null) {
+                        segmentService.onEntryPersisted(dataLedgerId, dataEntryId, ingestTimeMs, numMessages);
+                    }
                     messageDeduplication.recordMessagePersisted(publishContext, position);
                     publishContext.completed(null, dataLedgerId, dataEntryId);
                 } catch (Exception e) {
