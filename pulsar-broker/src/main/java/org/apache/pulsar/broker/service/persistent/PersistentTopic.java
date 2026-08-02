@@ -145,6 +145,7 @@ import org.apache.pulsar.broker.service.schema.exceptions.IncompatibleSchemaExce
 import org.apache.pulsar.broker.service.schema.exceptions.NotExistSchemaException;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeMetaStore;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakePageIndex;
+import org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuildQueue;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentService;
 import org.apache.pulsar.broker.stats.ClusterReplicationMetrics;
 import org.apache.pulsar.broker.stats.NamespaceStats;
@@ -780,12 +781,23 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                     StreamLakeMetaStore metaStore = new StreamLakeMetaStore(
                             brokerService.getPulsar().getLocalMetadataStore(), ledger);
                     StreamingLakeConfig cfg = getStreamingLakeConfig();
+                    // Phase F: when async build is enabled, closed-ledger builds are published to a
+                    // per-namespace system topic and built by a failover consumer (off this broker);
+                    // otherwise the build runs inline on the broker executor. Either way it is off the
+                    // producer ack path. A dispatch failure falls back to an inline build.
+                    StreamLakeSegmentService.SegmentBuildDispatcher dispatcher = null;
+                    if (cfg.isAsyncSegmentBuildViaSystemTopic()) {
+                        final String dataTopic = topic;
+                        StreamLakeSegmentBuildQueue queue = brokerService.getStreamLakeSegmentBuildQueue(
+                                TopicName.get(topic).getNamespaceObject());
+                        dispatcher = ledgerId -> queue.publish(dataTopic, ledgerId);
+                    }
                     // Reuse the topic's page index (segment build reads its footers); the heavy build
                     // runs on the broker executor, off the producer ack path.
                     svc = StreamLakeSegmentService.open(
                             brokerService.getPulsar().getBookKeeperClient(), ledger, metaStore,
                             getOrCreateStreamLakePageIndex(), cfg,
-                            brokerService.getPulsar().getExecutor());
+                            brokerService.getPulsar().getExecutor(), dispatcher);
                     streamLakeSegmentService = svc;
                 }
             }

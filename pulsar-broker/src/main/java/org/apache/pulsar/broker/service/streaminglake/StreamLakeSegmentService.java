@@ -19,6 +19,7 @@
 package org.apache.pulsar.broker.service.streaminglake;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.mledger.ManagedLedger;
@@ -57,11 +58,33 @@ public final class StreamLakeSegmentService implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(StreamLakeSegmentService.class);
 
+    /**
+     * Dispatches a closed data ledger's segment build off the owning broker (Phase F). Returns a future
+     * that completes when the build request is durably enqueued; a failure triggers an inline fallback
+     * build so a segment is never lost.
+     */
+    @FunctionalInterface
+    public interface SegmentBuildDispatcher {
+        CompletableFuture<Void> dispatch(long dataLedgerId);
+    }
+
     private final String topicName;
     private final StreamLakeCatalog catalog;
     private final StreamLakeSegmentStore segmentStore;
     private final StreamLakeSegmentBuilder builder;
     private final Executor buildExecutor;
+    private final SegmentBuildDispatcher dispatcher;
+
+    private StreamLakeSegmentService(String topicName, StreamLakeCatalog catalog,
+            StreamLakeSegmentStore segmentStore, StreamLakeSegmentBuilder builder, Executor buildExecutor,
+            SegmentBuildDispatcher dispatcher) {
+        this.topicName = topicName;
+        this.catalog = catalog;
+        this.segmentStore = segmentStore;
+        this.builder = builder;
+        this.buildExecutor = buildExecutor;
+        this.dispatcher = dispatcher;
+    }
 
     // Mutated only on the topic ordered executor (single-threaded per topic); guarded for visibility.
     private long currentLedgerId = -1;
@@ -69,21 +92,17 @@ public final class StreamLakeSegmentService implements AutoCloseable {
     private long maxEventTime = Long.MIN_VALUE;
     private long rowCount;
 
-    private StreamLakeSegmentService(String topicName, StreamLakeCatalog catalog,
-            StreamLakeSegmentStore segmentStore, StreamLakeSegmentBuilder builder, Executor buildExecutor) {
-        this.topicName = topicName;
-        this.catalog = catalog;
-        this.segmentStore = segmentStore;
-        this.builder = builder;
-        this.buildExecutor = buildExecutor;
-    }
-
     /**
      * Open the catalog + segment store for a topic, wire a segment builder, and asynchronously drain
      * any closed-but-unsegmented ledgers left by a previous run (crash recovery). Never throws.
+     *
+     * @param dispatcher when non-null, closed-ledger builds are published to a system topic and built by
+     *                   an async consumer (Phase F); when null, they are built inline on
+     *                   {@code buildExecutor}. A dispatch failure falls back to an inline build.
      */
     public static StreamLakeSegmentService open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
-            StreamLakePageIndex pageIndex, StreamingLakeConfig cfg, Executor buildExecutor) {
+            StreamLakePageIndex pageIndex, StreamingLakeConfig cfg, Executor buildExecutor,
+            SegmentBuildDispatcher dispatcher) {
         StreamLakeSegmentStore segmentStore = StreamLakeSegmentStore.open(bk, ml, metaStore,
                 1L << 30, cfg.getSegmentMaxEntriesPerLedger(), cfg.getSegmentEnsembleSize(),
                 cfg.getSegmentWriteQuorum(), cfg.getSegmentAckQuorum(), cfg.getSegmentCacheMaxEntries());
@@ -91,7 +110,7 @@ public final class StreamLakeSegmentService implements AutoCloseable {
         StreamLakeSegmentBuilder builder = new StreamLakeSegmentBuilder(pageIndex, segmentStore, catalog,
                 cfg.getSegmentColumnMaxBytes(), cfg.getBloomFpp());
         StreamLakeSegmentService service = new StreamLakeSegmentService(ml.getName(), catalog, segmentStore,
-                builder, buildExecutor);
+                builder, buildExecutor, dispatcher);
         buildExecutor.execute(() -> {
             try {
                 // Recover any ledger that closed but never got segmented last run.
@@ -164,14 +183,28 @@ public final class StreamLakeSegmentService implements AutoCloseable {
                     topicName, ledgerId, e.toString());
             return;
         }
-        buildExecutor.execute(() -> {
-            try {
-                builder.buildForLedger(ledgerId);
-            } catch (Exception e) {
-                log.warn("StreamLake segment build failed for {} ledger {}: {}",
-                        topicName, ledgerId, e.toString());
-            }
-        });
+        if (dispatcher != null) {
+            // Phase F: hand the build to a system-topic consumer (off this broker). If the dispatch
+            // itself fails (e.g. system topic unavailable) fall back to an inline build so a segment is
+            // never lost.
+            dispatcher.dispatch(ledgerId).exceptionally(ex -> {
+                log.warn("StreamLake async segment-build dispatch failed for {} ledger {}: {}; "
+                        + "building inline", topicName, ledgerId, ex.toString());
+                buildExecutor.execute(() -> buildInline(ledgerId));
+                return null;
+            });
+        } else {
+            buildExecutor.execute(() -> buildInline(ledgerId));
+        }
+    }
+
+    private void buildInline(long ledgerId) {
+        try {
+            builder.buildForLedger(ledgerId);
+        } catch (Exception e) {
+            log.warn("StreamLake segment build failed for {} ledger {}: {}",
+                    topicName, ledgerId, e.toString());
+        }
     }
 
     private void resetTracking() {

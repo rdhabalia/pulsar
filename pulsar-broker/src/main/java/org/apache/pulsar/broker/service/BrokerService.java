@@ -247,6 +247,11 @@ public class BrokerService implements Closeable {
     private final Map<String, ConfigField> dynamicConfigurationMap;
     private final Map<String, Consumer<?>> configRegisteredListeners = new ConcurrentHashMap<>();
 
+    // Per-namespace StreamLake async segment-build pipelines (Phase F), created on demand for topics
+    // configured with asyncSegmentBuildViaSystemTopic; closed on broker shutdown.
+    private final Map<NamespaceName, org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuildQueue>
+            streamLakeBuildQueues = new ConcurrentHashMap<>();
+
     private final ConcurrentLinkedQueue<TopicLoadingContext> pendingTopicLoadingQueue;
 
     private AuthorizationService authorizationService;
@@ -940,6 +945,9 @@ public class BrokerService implements Closeable {
             // unregister non-static metrics collectors
             pendingTopicLoadRequests.unregister();
             pendingLookupRequests.unregister();
+
+            // close StreamLake async segment-build pipelines (producers + consumers)
+            closeStreamLakeBuildQueues();
 
             // unloads all namespaces gracefully without disrupting mutually
             unloadNamespaceBundlesGracefully();
@@ -2461,6 +2469,39 @@ public class BrokerService implements Closeable {
         } else {
             return Optional.empty();
         }
+    }
+
+    /**
+     * Get (creating on first use) the per-namespace StreamLake async segment-build pipeline (Phase F).
+     * The consumer resolves a data topic's segment builder from the locally-owned topic reference, so a
+     * request for a topic not owned here is redelivered until its owner handles it.
+     */
+    public org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuildQueue
+            getStreamLakeSegmentBuildQueue(NamespaceName ns) {
+        return streamLakeBuildQueues.computeIfAbsent(ns, n ->
+                org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuildQueue.create(
+                        pulsar, n, this::resolveStreamLakeBuilder));
+    }
+
+    private org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuilder
+            resolveStreamLakeBuilder(String dataTopic) {
+        Optional<Topic> ref = getTopicReference(dataTopic);
+        if (ref.isEmpty() || !(ref.get() instanceof PersistentTopic)) {
+            return null;
+        }
+        var svc = ((PersistentTopic) ref.get()).getStreamLakeSegmentService();
+        return svc == null ? null : svc.builder();
+    }
+
+    private void closeStreamLakeBuildQueues() {
+        streamLakeBuildQueues.values().forEach(q -> {
+            try {
+                q.close();
+            } catch (Exception e) {
+                log.warn().exception(e).log("Failed to close StreamLake segment-build queue");
+            }
+        });
+        streamLakeBuildQueues.clear();
     }
 
     public void updateRates() {

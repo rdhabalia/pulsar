@@ -93,6 +93,17 @@ public class StreamingLakeConfig {
     private int queryReadConcurrency = 16;
 
     /**
+     * When true, a closed data ledger's segment is built <b>asynchronously off the owning broker</b>:
+     * the broker publishes a {@code {dataTopic, dataLedgerId}} build request to a per-namespace system
+     * topic ({@code __streamlake_segment_build}) and a StreamLake consumer on a failover subscription
+     * builds the segment and acks. When false (default) the owning broker builds inline on its shared
+     * executor (still off the producer ack path). The system-topic path decouples build load from the
+     * pub-sub broker and lets a dedicated query/builder tier own segment creation.
+     */
+    @Builder.Default
+    private boolean asyncSegmentBuildViaSystemTopic = false;
+
+    /**
      * Max segments held resident per topic. Segments are loaded on demand from their catalog offset and
      * cached in a bounded LRU, so query-tier memory is O(cache) rather than O(all data ledgers).
      * Default 512.
