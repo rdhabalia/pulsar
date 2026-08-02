@@ -18,9 +18,14 @@
  */
 package org.apache.pulsar.broker.service.streaminglake;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import org.apache.pulsar.client.streaminglake.StreamLakeArrowBatchDecoder;
 import org.apache.pulsar.client.streaminglake.StreamLakeHashJoin;
 import org.apache.pulsar.client.streaminglake.StreamLakeJoinTable;
@@ -49,10 +54,26 @@ public class StreamLakeQueryExecutor {
 
     private final StreamLakePruner pruner;
     private final PageReader pageReader;
+    private final Executor readExecutor;
+    private final int readConcurrency;
 
+    /** Serial reader (no page read-ahead). */
     public StreamLakeQueryExecutor(StreamLakePruner pruner, PageReader pageReader) {
+        this(pruner, pageReader, null, 1);
+    }
+
+    /**
+     * @param readExecutor  pool page reads are dispatched to for parallel prefetch (null = serial)
+     * @param readConcurrency max in-flight page reads (&le;1 = serial). Decoding stays single-threaded
+     *                        and in page order, so results are identical to a serial scan; only the
+     *                        (BookKeeper) reads overlap.
+     */
+    public StreamLakeQueryExecutor(StreamLakePruner pruner, PageReader pageReader,
+            Executor readExecutor, int readConcurrency) {
         this.pruner = pruner;
         this.pageReader = pageReader;
+        this.readExecutor = readExecutor;
+        this.readConcurrency = readConcurrency;
     }
 
     /** Scan a topic: prune to candidate pages, read them, and exactly row-filter by the predicate. */
@@ -60,14 +81,13 @@ public class StreamLakeQueryExecutor {
         List<StreamLakePruner.PagePointer> pages = pruner.prune(fromMs, toMs, predicate);
         List<Object[]> rows = new ArrayList<>();
         try (StreamLakeArrowBatchDecoder decoder = new StreamLakeArrowBatchDecoder()) {
-            for (StreamLakePruner.PagePointer p : pages) {
-                byte[] arrow = pageReader.readArrowBatch(p.ledgerId, p.entryId);
+            forEachPage(pages, (p, arrow) -> {
                 for (Object[] row : decoder.decodeRows(arrow)) {
                     if (predicate.matchesRow(row)) {
                         rows.add(row);
                     }
                 }
-            }
+            });
         }
         return rows;
     }
@@ -172,8 +192,7 @@ public class StreamLakeQueryExecutor {
         int[] predicateColumns = predicateColumns(predicate);
         List<StreamLakePruner.PagePointer> pages = pruner.prune(fromMs, toMs, predicate);
         try (StreamLakeArrowBatchDecoder decoder = new StreamLakeArrowBatchDecoder()) {
-            for (StreamLakePruner.PagePointer p : pages) {
-                byte[] arrow = pageReader.readArrowBatch(p.ledgerId, p.entryId);
+            forEachPage(pages, (p, arrow) -> {
                 try (StreamLakeArrowBatchDecoder.Batch batch = decoder.open(arrow)) {
                     int cols = batch.columnCount();
                     for (int r = 0; r < batch.rowCount(); r++) {
@@ -182,8 +201,63 @@ public class StreamLakeQueryExecutor {
                         }
                     }
                 }
-            }
+            });
         }
+    }
+
+    /** Consumes a page's (pointer, Arrow bytes) in page order; runs on the calling thread. */
+    private interface PageConsumer {
+        void accept(StreamLakePruner.PagePointer page, byte[] arrow) throws Exception;
+    }
+
+    /**
+     * Read the pruned pages and hand each (in page order) to {@code consumer}. With a read executor and
+     * {@code readConcurrency > 1} this keeps up to {@code readConcurrency} page reads in flight (a
+     * bounded sliding window) while the consumer decodes/filters the head page on the calling thread --
+     * so the (slow) BookKeeper reads overlap but decoding stays single-threaded and ordered. Otherwise
+     * it reads serially.
+     */
+    private void forEachPage(List<StreamLakePruner.PagePointer> pages, PageConsumer consumer)
+            throws Exception {
+        if (readExecutor == null || readConcurrency <= 1 || pages.size() <= 1) {
+            for (StreamLakePruner.PagePointer p : pages) {
+                consumer.accept(p, pageReader.readArrowBatch(p.ledgerId, p.entryId));
+            }
+            return;
+        }
+        int window = Math.min(readConcurrency, pages.size());
+        ArrayDeque<CompletableFuture<byte[]>> inFlight = new ArrayDeque<>(window);
+        int next = 0;
+        for (; next < window; next++) {
+            inFlight.add(submitRead(pages.get(next)));
+        }
+        for (int i = 0; i < pages.size(); i++) {
+            byte[] arrow;
+            try {
+                arrow = inFlight.poll().get();
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause() instanceof CompletionException ? e.getCause().getCause()
+                        : e.getCause();
+                if (cause instanceof Exception) {
+                    throw (Exception) cause;
+                }
+                throw new RuntimeException(cause);
+            }
+            if (next < pages.size()) {
+                inFlight.add(submitRead(pages.get(next++)));
+            }
+            consumer.accept(pages.get(i), arrow);
+        }
+    }
+
+    private CompletableFuture<byte[]> submitRead(StreamLakePruner.PagePointer p) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return pageReader.readArrowBatch(p.ledgerId, p.entryId);
+            } catch (Exception e) {
+                throw new CompletionException(e);
+            }
+        }, readExecutor);
     }
 
     // Evaluate the predicate by materializing only its columns into a sparse full-width row.

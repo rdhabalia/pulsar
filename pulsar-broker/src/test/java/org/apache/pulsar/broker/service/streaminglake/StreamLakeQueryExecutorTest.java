@@ -143,4 +143,57 @@ public class StreamLakeQueryExecutorTest {
         assertEquals(top.size(), 1);
         assertEquals(top.get(0)[2], 900L);
     }
+
+    @Test
+    public void parallelReadsMatchSerial() throws Exception {
+        StreamLakeMetaStore ms = metaStore();
+        StreamLakePageIndex pageIndex = StreamLakePageIndex.open(bk, ml, ms);
+        StreamLakeSegmentStore segStore = StreamLakeSegmentStore.open(bk, ml, ms);
+        StreamLakeCatalog catalog = StreamLakeCatalog.open(bk, ml, ms);
+
+        // Many pages so a read-ahead window (concurrency 4) actually overlaps reads.
+        int pages = 20;
+        for (int p = 0; p < pages; p++) {
+            List<Object[]> rows = new ArrayList<>();
+            for (int r = 0; r < 5; r++) {
+                int id = p * 5 + r;
+                rows.add(new Object[]{id, id % 3, 100L + id});
+            }
+            addPage(pageIndex, p, rows);
+        }
+        catalog.upsert(new StreamLakeCatalog.LedgerInfo(DATA_LEDGER, 1L, DAY1, DAY1 + 3600_000, pages * 5,
+                StreamLakeCatalog.State.CLOSED));
+        new StreamLakeSegmentBuilder(pageIndex, segStore, catalog, 2L * 1024 * 1024, 0.01)
+                .buildForLedger(DATA_LEDGER);
+
+        StreamLakePruner pruner = new StreamLakePruner(catalog, segStore, pageIndex);
+        // A reader that sleeps a touch so serial vs parallel timing differs but results must not.
+        StreamLakeQueryExecutor.PageReader reader = (lid, eid) -> {
+            try {
+                Thread.sleep(2);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            return pageBytes.get(eid);
+        };
+        StreamLakeScanPredicate pred = StreamLakeScanPredicate.builder()
+                .eq(1, StreamLakeType.INT32, 1).build();
+
+        StreamLakeQueryExecutor serial = new StreamLakeQueryExecutor(pruner, reader);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            StreamLakeQueryExecutor parallel = new StreamLakeQueryExecutor(pruner, reader, pool, 4);
+            List<Object[]> a = serial.scan(DAY1, DAY1 + 1000, pred);
+            List<Object[]> b = parallel.scan(DAY1, DAY1 + 1000, pred);
+            assertEquals(b.size(), a.size(), "parallel scan returns the same row count as serial");
+            // ids appear in page order in both; compare the id column element-wise.
+            for (int i = 0; i < a.size(); i++) {
+                assertEquals(b.get(i)[0], a.get(i)[0], "row " + i + " id must match (page order preserved)");
+                assertEquals(b.get(i)[1], 1, "only deptId 1 rows survive");
+            }
+            assertTrue(a.size() > 4, "predicate should keep enough rows to span the read-ahead window");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
 }

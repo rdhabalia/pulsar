@@ -263,6 +263,6 @@ public class StreamLakeDemoRunnerTest extends StreamLakeRealBookieTestBase {
                 throw new RuntimeException(e);
             }
         };
-        return new StreamLakeQueryExecutor(pruner, reader);
+        return new StreamLakeQueryExecutor(pruner, reader, pulsar.getExecutor(), 16);
     }
 }
