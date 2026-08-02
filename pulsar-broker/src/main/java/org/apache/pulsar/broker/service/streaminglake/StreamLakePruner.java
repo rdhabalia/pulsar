@@ -20,7 +20,9 @@ package org.apache.pulsar.broker.service.streaminglake;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import org.apache.pulsar.client.streaminglake.StreamLakeBatchStats;
 import org.apache.pulsar.client.streaminglake.StreamLakeColumnSegment;
 import org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate;
@@ -104,14 +106,34 @@ public class StreamLakePruner {
             int numPages = seg.numPages();
             boolean[] surviving = new boolean[numPages];
             Arrays.fill(surviving, true);
+            boolean anyCollapsed = false;
             for (StreamLakeScanPredicate.ColumnPredicate cp : predicate.columns()) {
                 StreamLakeColumnSegment cseg = seg.columns.get(cp.columnIndex());
                 if (cseg == null) {
                     continue; // this column has no segment stats -> cannot prune on it
                 }
+                anyCollapsed |= cseg.collapsed();
                 boolean[] col = cseg.candidatePositions(cp);
                 for (int i = 0; i < numPages; i++) {
                     surviving[i] &= col[i];
+                }
+            }
+            // Precision recheck: when a predicate column collapsed (its per-page granularity was lost to
+            // a whole-segment stat), consult the data ledger's exact page-index range and drop pages the
+            // exact footer (incl. set(N)) rejects. Always safe -- the footer test is never a false negative.
+            if (anyCollapsed && info.pageIndexLedgerId >= 0) {
+                Map<Long, byte[]> statsByEntry = new HashMap<>();
+                for (StreamLakePageIndex.PageFooter f : pageIndex.readRange(info.pageIndexLedgerId,
+                        info.pageIndexStartEntry, info.pageIndexEndEntry)) {
+                    statsByEntry.put(f.dataEntryId, f.stats);
+                }
+                for (int i = 0; i < numPages; i++) {
+                    if (surviving[i]) {
+                        byte[] fs = statsByEntry.get(seg.pageEntryIds[i]);
+                        if (fs != null && !predicate.matches(StreamLakeBatchStats.decode(fs))) {
+                            surviving[i] = false;
+                        }
+                    }
                 }
             }
             int kept = 0;

@@ -190,6 +190,43 @@ public class StreamLakePageIndex implements AutoCloseable {
         return out;
     }
 
+    /**
+     * Read a contiguous footer range (a segmented data ledger's page‑index range from its catalog
+     * offset) directly from BookKeeper, without resident refs — the on‑demand precise tier used to
+     * recover exact set(N)/collapsed‑column precision at query time. Returns {@code [(dataEntryId,
+     * footerBytes)]} in entry order.
+     */
+    public synchronized List<PageFooter> readRange(long piLedgerId, long startEntry, long endEntry)
+            throws Exception {
+        if (piLedgerId < 0 || startEntry < 0 || endEntry < startEntry) {
+            return Collections.emptyList();
+        }
+        LedgerHandle lh;
+        if (head != null && head.getId() == piLedgerId) {
+            lh = head;
+        } else {
+            lh = readHandles.get(piLedgerId);
+            if (lh == null) {
+                lh = bk.openLedger(piLedgerId, BookKeeper.DigestType.CRC32, PASSWORD);
+                readHandles.put(piLedgerId, lh);
+            }
+        }
+        List<PageFooter> out = new ArrayList<>();
+        Enumeration<LedgerEntry> en = lh.readEntries(startEntry, endEntry);
+        while (en.hasMoreElements()) {
+            byte[] data = en.nextElement().getEntry();
+            if (data.length < HEADER || data[0] != ENTRY_FOOTER) {
+                continue;
+            }
+            ByteBuffer bb = ByteBuffer.wrap(data);
+            bb.get();           // type
+            bb.getLong();       // dataLedgerId
+            long dataEntryId = bb.getLong();
+            out.add(new PageFooter(dataEntryId, footerBody(data)));
+        }
+        return out;
+    }
+
     /** Whether any footer has been recorded for a data ledger. */
     public synchronized boolean covers(long dataLedgerId) {
         List<Ref> refs = refsByDataLedger.get(dataLedgerId);
