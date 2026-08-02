@@ -60,6 +60,7 @@ public class StreamLakeSegmentStore implements AutoCloseable {
     private static final byte ENTRY_COLUMN = (byte) 'C';
     private static final long DEFAULT_MAX_HEAD_BYTES = 4L * 1024 * 1024;
     private static final int DEFAULT_CACHE_MAX_ENTRIES = 512;
+    private static final int DEFAULT_MAX_ENTRIES_PER_LEDGER = 200_000;
 
     /** A data ledger's segment: the page directory (position -&gt; entryId) + per-column segments. */
     public static final class LedgerSegment {
@@ -83,6 +84,7 @@ public class StreamLakeSegmentStore implements AutoCloseable {
     private final ManagedLedger ml;
     private final StreamLakeMetaStore metaStore;
     private final long maxHeadBytes;
+    private final int maxEntriesPerLedger;
     private final int ensembleSize;
     private final int writeQuorum;
     private final int ackQuorum;
@@ -93,14 +95,17 @@ public class StreamLakeSegmentStore implements AutoCloseable {
     private final List<Long> chain = new ArrayList<>();
     private LedgerHandle head;
     private long headBytes;
+    private int headEntryCount;
 
     private StreamLakeSegmentStore(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
-                                   long maxHeadBytes, int ensembleSize, int writeQuorum, int ackQuorum,
-                                   int cacheMaxEntries) {
+                                   long maxHeadBytes, int maxEntriesPerLedger, int ensembleSize,
+                                   int writeQuorum, int ackQuorum, int cacheMaxEntries) {
         this.bk = bk;
         this.ml = ml;
         this.metaStore = metaStore;
         this.maxHeadBytes = maxHeadBytes > 0 ? maxHeadBytes : DEFAULT_MAX_HEAD_BYTES;
+        this.maxEntriesPerLedger = maxEntriesPerLedger > 0 ? maxEntriesPerLedger
+                : DEFAULT_MAX_ENTRIES_PER_LEDGER;
         this.ensembleSize = ensembleSize;
         this.writeQuorum = writeQuorum;
         this.ackQuorum = ackQuorum;
@@ -128,16 +133,24 @@ public class StreamLakeSegmentStore implements AutoCloseable {
                 DEFAULT_CACHE_MAX_ENTRIES);
     }
 
-    /**
-     * Open with an explicit replication and segment cache size. Segments are <b>not</b> replayed into
-     * memory on open -- they are loaded on demand via their catalog offset ({@link #load}) and held in
-     * a bounded LRU, so resident memory does not grow with the number of data ledgers. The chain is
-     * loaded only for write-head/GC management.
-     */
     public static StreamLakeSegmentStore open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
             long maxHeadBytes, int ensembleSize, int writeQuorum, int ackQuorum, int cacheMaxEntries) {
+        return open(bk, ml, metaStore, maxHeadBytes, DEFAULT_MAX_ENTRIES_PER_LEDGER, ensembleSize,
+                writeQuorum, ackQuorum, cacheMaxEntries);
+    }
+
+    /**
+     * Open with an explicit replication, entry-based roll threshold and segment cache size. One segment
+     * ledger holds many data ledgers' segments (rolls at {@code maxEntriesPerLedger}); segments are
+     * <b>not</b> replayed into memory on open -- they are loaded on demand via their catalog offset
+     * ({@link #load}) into a bounded LRU, so resident memory does not grow with the number of data
+     * ledgers. The chain is loaded only for write-head/GC management.
+     */
+    public static StreamLakeSegmentStore open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
+            long maxHeadBytes, int maxEntriesPerLedger, int ensembleSize, int writeQuorum, int ackQuorum,
+            int cacheMaxEntries) {
         StreamLakeSegmentStore store = new StreamLakeSegmentStore(bk, ml, metaStore, maxHeadBytes,
-                ensembleSize, writeQuorum, ackQuorum, cacheMaxEntries);
+                maxEntriesPerLedger, ensembleSize, writeQuorum, ackQuorum, cacheMaxEntries);
         try {
             store.chain.addAll(metaStore.read().segmentLedgerIds);
         } catch (Exception e) {
@@ -161,15 +174,17 @@ public class StreamLakeSegmentStore implements AutoCloseable {
             total += colEntries[c].length;
         }
         // Keep the whole segment in one ledger so its offset is a single contiguous range.
-        ensureHeadFor((int) Math.min(Integer.MAX_VALUE, total));
+        ensureHeadFor((int) Math.min(Integer.MAX_VALUE, total), 1 + columns.size());
         long segmentLedgerId = head.getId();
         long startEntry = addToHead(dir);
         headBytes += dir.length;
+        headEntryCount++;
         Map<Integer, StreamLakeColumnSegment> cols = new HashMap<>();
         long endEntry = startEntry;
         for (int c = 0; c < columns.size(); c++) {
             endEntry = addToHead(colEntries[c]);
             headBytes += colEntries[c].length;
+            headEntryCount++;
             cols.put(columns.get(c).columnIndex(), columns.get(c));
         }
         cache.put(dataLedgerId, new LedgerSegment(dataLedgerId, pageEntryIds, cols));
@@ -268,8 +283,14 @@ public class StreamLakeSegmentStore implements AutoCloseable {
         return bb.array();
     }
 
-    private void ensureHeadFor(int entryLen) throws Exception {
-        if (head == null || (headBytes > 0 && headBytes + entryLen > maxHeadBytes)) {
+    private void ensureHeadFor(int entryLen, int entriesToAdd) throws Exception {
+        if (head == null) {
+            rotateHead();
+            return;
+        }
+        boolean overBytes = headBytes > 0 && headBytes + entryLen > maxHeadBytes;
+        boolean overEntries = headEntryCount > 0 && headEntryCount + entriesToAdd > maxEntriesPerLedger;
+        if (overBytes || overEntries) {
             rotateHead();
         }
     }
@@ -288,6 +309,7 @@ public class StreamLakeSegmentStore implements AutoCloseable {
         metaStore.setSegmentLedgerIds(chain);
         head = fresh;
         headBytes = 0;
+        headEntryCount = 0;
     }
 
     private long addToHead(byte[] entry) throws Exception {

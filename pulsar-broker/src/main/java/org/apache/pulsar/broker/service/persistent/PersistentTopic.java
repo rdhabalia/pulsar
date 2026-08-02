@@ -756,6 +756,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                     // while the ack quorum controls write latency (write to `ensemble`, wait for `ack`).
                     pi = StreamLakePageIndex.open(
                             brokerService.getPulsar().getBookKeeperClient(), ledger, metaStore,
+                            1L << 30, cfg.getPageIndexMaxEntriesPerLedger(),
                             cfg.getPageIndexEnsembleSize(), cfg.getPageIndexWriteQuorum(),
                             cfg.getPageIndexAckQuorum());
                     streamLakePageIndex = pi;

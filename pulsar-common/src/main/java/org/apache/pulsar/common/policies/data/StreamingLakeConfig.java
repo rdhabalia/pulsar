@@ -76,6 +76,23 @@ public class StreamingLakeConfig {
     private long segmentColumnMaxBytes = 2L * 1024 * 1024;
 
     /**
+     * Max entries (page footers) per page-index ledger before it rolls, so one page-index ledger holds
+     * <b>many whole data ledgers</b> (not one per data ledger). The roll is taken at a data-ledger
+     * boundary once this threshold is crossed, so each data ledger's footers stay contiguous in one
+     * ledger (a single {@code (piLedgerId, start, end)} range). Default 1,000,000.
+     */
+    @Builder.Default
+    private int pageIndexMaxEntriesPerLedger = 1_000_000;
+
+    /** Max entries per segment ledger before it rolls (holds many data ledgers' segments). Default 200,000. */
+    @Builder.Default
+    private int segmentMaxEntriesPerLedger = 200_000;
+
+    /** Concurrency for reading pruned pages (and segment/page-index ranges) during a query. Default 16. */
+    @Builder.Default
+    private int queryReadConcurrency = 16;
+
+    /**
      * Max segments held resident per topic. Segments are loaded on demand from their catalog offset and
      * cached in a bounded LRU, so query-tier memory is O(cache) rather than O(all data ledgers).
      * Default 512.

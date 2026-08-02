@@ -56,7 +56,6 @@ import org.slf4j.LoggerFactory;
 public final class StreamLakeSegmentService implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(StreamLakeSegmentService.class);
-    private static final long SEGMENT_MAX_HEAD_BYTES = 4L * 1024 * 1024;
 
     private final String topicName;
     private final StreamLakeCatalog catalog;
@@ -86,8 +85,8 @@ public final class StreamLakeSegmentService implements AutoCloseable {
     public static StreamLakeSegmentService open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
             StreamLakePageIndex pageIndex, StreamingLakeConfig cfg, Executor buildExecutor) {
         StreamLakeSegmentStore segmentStore = StreamLakeSegmentStore.open(bk, ml, metaStore,
-                SEGMENT_MAX_HEAD_BYTES, cfg.getSegmentEnsembleSize(), cfg.getSegmentWriteQuorum(),
-                cfg.getSegmentAckQuorum(), cfg.getSegmentCacheMaxEntries());
+                1L << 30, cfg.getSegmentMaxEntriesPerLedger(), cfg.getSegmentEnsembleSize(),
+                cfg.getSegmentWriteQuorum(), cfg.getSegmentAckQuorum(), cfg.getSegmentCacheMaxEntries());
         StreamLakeCatalog catalog = StreamLakeCatalog.open(bk, ml, metaStore);
         StreamLakeSegmentBuilder builder = new StreamLakeSegmentBuilder(pageIndex, segmentStore, catalog,
                 cfg.getSegmentColumnMaxBytes(), cfg.getBloomFpp());

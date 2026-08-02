@@ -58,6 +58,7 @@ public class StreamLakePageIndex implements AutoCloseable {
     private static final byte ENTRY_FOOTER = (byte) 'F';
     private static final int HEADER = 1 + 8 + 8; // type + dataLedgerId + dataEntryId
     private static final long DEFAULT_MAX_HEAD_BYTES = 4L * 1024 * 1024;
+    private static final int DEFAULT_MAX_ENTRIES = 1_000_000;
 
     /** One stored footer: the data-ledger entry it describes, and its stats-footer bytes. */
     public static final class PageFooter {
@@ -87,6 +88,7 @@ public class StreamLakePageIndex implements AutoCloseable {
     private final ManagedLedger ml;
     private final StreamLakeMetaStore metaStore;
     private final long maxHeadBytes;
+    private final int maxEntriesPerLedger;
     private final int ensembleSize;
     private final int writeQuorum;
     private final int ackQuorum;
@@ -96,13 +98,17 @@ public class StreamLakePageIndex implements AutoCloseable {
     private final Map<Long, LedgerHandle> readHandles = new HashMap<>();
     private LedgerHandle head;
     private long headBytes;
+    private int headEntryCount;
+    private long headDataLedger = -1; // the data ledger the head is currently accumulating footers for
 
     private StreamLakePageIndex(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
-                                long maxHeadBytes, int ensembleSize, int writeQuorum, int ackQuorum) {
+                                long maxHeadBytes, int maxEntriesPerLedger,
+                                int ensembleSize, int writeQuorum, int ackQuorum) {
         this.bk = bk;
         this.ml = ml;
         this.metaStore = metaStore;
         this.maxHeadBytes = maxHeadBytes > 0 ? maxHeadBytes : DEFAULT_MAX_HEAD_BYTES;
+        this.maxEntriesPerLedger = maxEntriesPerLedger > 0 ? maxEntriesPerLedger : DEFAULT_MAX_ENTRIES;
         this.ensembleSize = ensembleSize;
         this.writeQuorum = writeQuorum;
         this.ackQuorum = ackQuorum;
@@ -131,8 +137,19 @@ public class StreamLakePageIndex implements AutoCloseable {
     /** Open with an explicit replication (production: RF-3 on the isolated metadata bookie pool). */
     public static StreamLakePageIndex open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
             long maxHeadBytes, int ensembleSize, int writeQuorum, int ackQuorum) {
+        return open(bk, ml, metaStore, maxHeadBytes, DEFAULT_MAX_ENTRIES, ensembleSize, writeQuorum, ackQuorum);
+    }
+
+    /**
+     * Open with an explicit replication and a max-entries-per-ledger roll threshold. One page-index
+     * ledger holds many whole data ledgers; it rolls at a data-ledger boundary once it crosses
+     * {@code maxEntriesPerLedger} (the byte cap is a hard safety guard), so each data ledger's footers
+     * stay contiguous in one ledger.
+     */
+    public static StreamLakePageIndex open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
+            long maxHeadBytes, int maxEntriesPerLedger, int ensembleSize, int writeQuorum, int ackQuorum) {
         StreamLakePageIndex idx = new StreamLakePageIndex(bk, ml, metaStore, maxHeadBytes,
-                ensembleSize, writeQuorum, ackQuorum);
+                maxEntriesPerLedger, ensembleSize, writeQuorum, ackQuorum);
         try {
             idx.chain.addAll(metaStore.read().pageIndexLedgerIds);
             idx.replay();
@@ -144,17 +161,19 @@ public class StreamLakePageIndex implements AutoCloseable {
 
     /**
      * Durably append a batch's stats footer, keyed by the data-ledger entry it describes. The footer
-     * is sliced by the caller from the message payload (never parsed). Rolls the head ledger first
-     * when it would exceed {@code maxHeadBytes}.
+     * is sliced by the caller from the message payload (never parsed). Rolls the head ledger at a
+     * data-ledger boundary once it crosses {@code maxEntriesPerLedger} (or the byte safety cap).
      */
     public synchronized void appendFooter(long dataLedgerId, long dataEntryId, byte[] footer)
             throws Exception {
         byte[] entry = encode(dataLedgerId, dataEntryId, footer);
-        ensureHeadFor(entry.length);
+        ensureHeadFor(entry.length, dataLedgerId);
         long piEntryId = addToHead(entry);
         refsByDataLedger.computeIfAbsent(dataLedgerId, k -> new ArrayList<>())
                 .add(new Ref(head.getId(), piEntryId, dataEntryId));
         headBytes += entry.length;
+        headEntryCount++;
+        headDataLedger = dataLedgerId;
     }
 
     /** The stored footers for a data ledger, ordered by data-entry, read on demand from the chain. */
@@ -271,10 +290,18 @@ public class StreamLakePageIndex implements AutoCloseable {
 
     // ---------------------------------------------------------------- write ledger chain
 
-    private void ensureHeadFor(int entryLen) throws Exception {
+    private void ensureHeadFor(int entryLen, long dataLedgerId) throws Exception {
         if (head == null) {
             rotateHead();
-        } else if (headBytes > 0 && headBytes + entryLen > maxHeadBytes) {
+            return;
+        }
+        boolean boundary = headDataLedger != dataLedgerId;   // a new data ledger is starting
+        boolean overEntries = headEntryCount >= maxEntriesPerLedger;
+        boolean overBytes = headBytes > 0 && headBytes + entryLen > maxHeadBytes;
+        // Roll at a data-ledger boundary once over the entry threshold (keeps each ledger's footers
+        // contiguous so its page-index range is a single (piLedgerId, start, end)); the byte cap is a
+        // hard safety guard that can split a very large data ledger.
+        if ((boundary && overEntries) || overBytes) {
             rotateHead();
         }
     }
@@ -287,6 +314,7 @@ public class StreamLakePageIndex implements AutoCloseable {
         metaStore.setPageIndexLedgerIds(chain);
         head = fresh;
         headBytes = 0;
+        headEntryCount = 0;
     }
 
     private long addToHead(byte[] entry) throws Exception {
