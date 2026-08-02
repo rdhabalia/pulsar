@@ -89,6 +89,7 @@ public class StreamLakeDemoRunnerTest extends StreamLakeRealBookieTestBase {
     }
 
     private static StreamingLakeConfig config(List<StreamingLakeConfig.SchemaColumn> cols) {
+        boolean asyncBuild = "true".equalsIgnoreCase(System.getenv("SL_DEMO_ASYNC_BUILD"));
         return StreamingLakeConfig.builder()
                 .enabled(true).clientColumnarEnabled(true).setMaxCardinality(64).bloomFpp(0.01)
                 // single-bookie demo: RF 1/1/1 for every StreamLake ledger
@@ -96,6 +97,8 @@ public class StreamLakeDemoRunnerTest extends StreamLakeRealBookieTestBase {
                 .segmentEnsembleSize(1).segmentWriteQuorum(1).segmentAckQuorum(1)
                 // small rollovers so multiple page-index / segment ledgers form (demonstrates the layout)
                 .pageIndexMaxEntriesPerLedger(500).segmentMaxEntriesPerLedger(50)
+                // SL_DEMO_ASYNC_BUILD=true routes segment builds through the system topic (Phase F).
+                .asyncSegmentBuildViaSystemTopic(asyncBuild)
                 .columns(cols).build();
     }
 
@@ -222,10 +225,30 @@ public class StreamLakeDemoRunnerTest extends StreamLakeRealBookieTestBase {
     private void appendLedgerReport(StringBuilder rpt, String label, PersistentTopic pt) throws Exception {
         StreamLakeMetaStore ms = new StreamLakeMetaStore(pulsar.getLocalMetadataStore(), pt.getManagedLedger());
         StreamLakeMetaStore.Record rec = ms.read();
-        long dataLedgers = pt.getStreamLakeSegmentService().catalog().all().size();
-        rpt.append(String.format("%s ledgers: data=%,d  pageIndex=%,d  segment=%,d  catalog=%s%n",
-                label, dataLedgers, rec.pageIndexLedgerIds.size(), rec.segmentLedgerIds.size(),
-                rec.catalogLedgerId));
+        java.util.Map<Long, StreamLakeCatalog.LedgerInfo> catalog =
+                pt.getStreamLakeSegmentService().catalog().all();
+        long segmented = catalog.values().stream()
+                .filter(i -> i.state == StreamLakeCatalog.State.SEGMENTED).count();
+        rpt.append(String.format("%n%s metadata  (ZK node /streamlake/%s):%n",
+                label, pt.getManagedLedger().getName()));
+        rpt.append(String.format("  catalogLedgerId   = %s%n", rec.catalogLedgerId));
+        rpt.append(String.format("  pageIndexLedgerIds= %s%n", rec.pageIndexLedgerIds));
+        rpt.append(String.format("  segmentLedgerIds  = %s%n", rec.segmentLedgerIds));
+        rpt.append(String.format("  data ledgers: %,d total, %,d SEGMENTED%n", catalog.size(), segmented));
+        catalog.values().stream()
+                .sorted(java.util.Comparator.comparingLong(i -> i.dataLedgerId))
+                .limit(8)
+                .forEach(i -> rpt.append(String.format(
+                        "    data-ledger %d  %-9s pages=%,d%s%n",
+                        i.dataLedgerId, i.state, i.rowCount,
+                        i.hasSegment()
+                                ? String.format("  seg=%d[%d..%d]  pi=%d[%d..%d]",
+                                        i.segmentLedgerId, i.segmentStartEntry, i.segmentEndEntry,
+                                        i.pageIndexLedgerId, i.pageIndexStartEntry, i.pageIndexEndEntry)
+                                : "  (open: not yet segmented)")));
+        if (catalog.size() > 8) {
+            rpt.append(String.format("    … and %,d more data ledgers%n", catalog.size() - 8));
+        }
     }
 
     private StreamLakeQueryExecutor executor(PersistentTopic pt) {
