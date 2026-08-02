@@ -41,12 +41,15 @@ for f in "$bkconf" "$conf"; do
   set_key "$f" ledgerStorageClass "org.apache.bookkeeper.bookie.storage.ldb.DbLedgerStorage"
 done
 
-# --- broker: enable StreamLake query role + local scratch dir + topic-level policies ---
+# --- broker: enable topic-level policies + system topics (StreamLake tuning is TOPIC-POLICY level,
+#     applied per topic via StreamingLakeConfig -- not broker-global keys; see demo.md §7) ---
 set_key "$conf" systemTopicEnabled            "true"
 set_key "$conf" topicLevelPoliciesEnabled     "true"
 set_key "$conf" brokerDeleteInactiveTopicsEnabled "false"
-set_key "$conf" streamingLakeQueryLocalDir    "$SL_QUERY_LOCAL_DIR"   # (broker config; see demo.md §7)
-set_key "$conf" streamingLakeSegmentCacheMaxEntries "$SL_SEGMENT_CACHE"
+# NOTE: the StreamLake query-broker local scratch dir ($SL_QUERY_LOCAL_DIR) is created above and is
+# reserved for the dedicated query-executor tier (storage engine still under discussion, see demo.md
+# §7 "Deferred"); it is NOT yet a wired broker ServiceConfiguration key, so we do not write it into
+# standalone.conf. Segment cache size etc. are StreamingLakeConfig (topic policy) fields.
 
 echo "Configured:"
 echo "  journal (NVMe)   : $SL_JOURNAL_DIR"
