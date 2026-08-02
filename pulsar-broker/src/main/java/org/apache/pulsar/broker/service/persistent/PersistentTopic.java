@@ -146,6 +146,7 @@ import org.apache.pulsar.broker.service.schema.exceptions.NotExistSchemaExceptio
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeMetaStore;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakePageIndex;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuildQueue;
+import org.apache.pulsar.broker.service.streaminglake.StreamLakeQueryService;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentService;
 import org.apache.pulsar.broker.stats.ClusterReplicationMetrics;
 import org.apache.pulsar.broker.stats.NamespaceStats;
@@ -235,6 +236,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     // registers the ledger's event-time in the catalog and rolls its page-index footers into column
     // segments -- the metadata a query prunes on (the page index alone is not reachable by a scan).
     private volatile StreamLakeSegmentService streamLakeSegmentService;
+    private volatile StreamLakeQueryService streamLakeQueryService;
 
     // Subscriptions to this topic
     private final Map<String, PersistentSubscription> subscriptions = new ConcurrentHashMap<>();
@@ -803,6 +805,35 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             }
         }
         return svc;
+    }
+
+    /**
+     * The broker-hosted query service for this StreamLake topic (built on demand), or {@code null} if
+     * the topic is not a client-columnar StreamLake topic. It owns the pruner + parallel page reader so
+     * the query coordinator (and, through it, the admin/REST layer) can run scans/joins without any
+     * caller assembling the read path.
+     */
+    public StreamLakeQueryService getStreamLakeQueryService() {
+        if (!isStreamLakeClientColumnar()) {
+            return null;
+        }
+        StreamLakeQueryService qs = streamLakeQueryService;
+        if (qs == null) {
+            synchronized (this) {
+                qs = streamLakeQueryService;
+                if (qs == null) {
+                    StreamingLakeConfig cfg = getStreamingLakeConfig();
+                    org.apache.pulsar.client.streaminglake.StreamLakeSchema schema =
+                            org.apache.pulsar.client.streaminglake.StreamLakeTopicSchema.fromConfig(cfg)
+                                    .schema();
+                    qs = StreamLakeQueryService.create(ledger, getOrCreateStreamLakeSegmentService(),
+                            getOrCreateStreamLakePageIndex(), schema,
+                            brokerService.getPulsar().getExecutor(), cfg.getQueryReadConcurrency());
+                    streamLakeQueryService = qs;
+                }
+            }
+        }
+        return qs;
     }
 
     public void asyncReadEntry(Position position, AsyncCallbacks.ReadEntryCallback callback, Object ctx) {
