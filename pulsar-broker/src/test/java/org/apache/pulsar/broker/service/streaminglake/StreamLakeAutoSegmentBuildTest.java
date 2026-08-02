@@ -131,15 +131,20 @@ public class StreamLakeAutoSegmentBuildTest extends StreamLakeRealBookieTestBase
                 assertNotNull(info, "closed ledger " + closed + " should be in the catalog");
                 assertEquals(info.state, StreamLakeCatalog.State.SEGMENTED,
                         "closed ledger " + closed + " should be auto-segmented");
-                assertTrue(svc.segmentStore().covers(closed),
-                        "segment store should cover closed ledger " + closed);
+                assertTrue(info.hasSegment(),
+                        "catalog should carry the segment offset for closed ledger " + closed);
             }
         });
 
-        // Each closed data ledger's segment has one page per data entry it held.
+        // Each closed data ledger's segment loads on demand from its catalog offset with one page per
+        // data entry it held.
         for (long closed : closedLedgers) {
             long pagesInLedger = Arrays.stream(pageLedger).filter(l -> l == closed).count();
-            assertEquals(svc.segmentStore().segmentFor(closed).numPages(), (int) pagesInLedger,
+            StreamLakeCatalog.LedgerInfo info = svc.catalog().get(closed);
+            StreamLakeSegmentStore.LedgerSegment seg = svc.segmentStore().load(closed,
+                    info.segmentLedgerId, info.segmentStartEntry, info.segmentEndEntry);
+            assertNotNull(seg, "segment should load on demand for closed ledger " + closed);
+            assertEquals(seg.numPages(), (int) pagesInLedger,
                     "segment page count must match the ledger's entry count");
         }
 

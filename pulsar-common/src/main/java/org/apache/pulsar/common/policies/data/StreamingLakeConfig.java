@@ -76,6 +76,14 @@ public class StreamingLakeConfig {
     private long segmentColumnMaxBytes = 2L * 1024 * 1024;
 
     /**
+     * Max segments held resident per topic. Segments are loaded on demand from their catalog offset and
+     * cached in a bounded LRU, so query-tier memory is O(cache) rather than O(all data ledgers).
+     * Default 512.
+     */
+    @Builder.Default
+    private int segmentCacheMaxEntries = 512;
+
+    /**
      * Replication of the shared page-index ledger (hot write path): a modest RF-3 by default. Kept
      * lower than the segment RF because it is written on every batch; isolated onto the metadata
      * bookie pool (see {@code metadataBookieAffinityGroup}).

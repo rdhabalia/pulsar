@@ -121,7 +121,7 @@ public class StreamLakeSegmentBuilderTest {
         builder.buildForLedger(DATA_LEDGER);
 
         // One column-oriented segment per data ledger: a 5-page directory + per-column segments.
-        StreamLakeSegmentStore.LedgerSegment seg = segStore.segmentFor(DATA_LEDGER);
+        StreamLakeSegmentStore.LedgerSegment seg = loadSegment(catalog, segStore, DATA_LEDGER);
         assertNotNull(seg);
         assertEquals(seg.numPages(), 5);
         assertEquals(seg.pageEntryIds[0], 0L);
@@ -168,11 +168,19 @@ public class StreamLakeSegmentBuilderTest {
         StreamLakeSegmentBuilder builder = new StreamLakeSegmentBuilder(
                 pageIndex, segStore, catalog, 2L * 1024 * 1024, 0.01);
         assertEquals(builder.buildAllClosed(), Arrays.asList(DATA_LEDGER));
-        assertNotNull(segStore.segmentFor(DATA_LEDGER));
+        assertNotNull(loadSegment(catalog, segStore, DATA_LEDGER));
 
         // second pass: nothing left in the queue, no duplicate segment
         assertTrue(builder.buildAllClosed().isEmpty());
-        assertNotNull(segStore.segmentFor(DATA_LEDGER));
-        assertEquals(segStore.segmentFor(DATA_LEDGER).numPages(), 3, "one segment, 3 pages");
+        assertNotNull(loadSegment(catalog, segStore, DATA_LEDGER));
+        assertEquals(loadSegment(catalog, segStore, DATA_LEDGER).numPages(), 3, "one segment, 3 pages");
+    }
+
+    /** Load a data ledger's segment on demand via its catalog offset (the new read path). */
+    private static StreamLakeSegmentStore.LedgerSegment loadSegment(StreamLakeCatalog catalog,
+            StreamLakeSegmentStore segStore, long dataLedgerId) throws Exception {
+        StreamLakeCatalog.LedgerInfo info = catalog.get(dataLedgerId);
+        return segStore.load(dataLedgerId, info.segmentLedgerId, info.segmentStartEntry,
+                info.segmentEndEntry);
     }
 }

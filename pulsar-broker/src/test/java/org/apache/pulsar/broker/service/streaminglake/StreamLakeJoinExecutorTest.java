@@ -126,15 +126,20 @@ public class StreamLakeJoinExecutorTest {
         return new StreamLakeQueryExecutor(pruner, (lid, eid) -> pageBytes.get(eid));
     }
 
+    private final java.util.concurrent.atomic.AtomicInteger topicSeq =
+            new java.util.concurrent.atomic.AtomicInteger();
+
     private StreamLakeQueryExecutor personExecutor() throws Exception {
-        return executorFor("tenant/ns/persistent/person", personSchema(), 100L, Arrays.asList(
+        return executorFor("tenant/ns/persistent/person-" + topicSeq.incrementAndGet(),
+                personSchema(), 100L, Arrays.asList(
                 Arrays.asList(new Object[]{1, "alice", 40}, new Object[]{2, "bob", 50}),
                 Arrays.asList(new Object[]{3, "carol", 60}, new Object[]{4, "dave", 70}),
                 java.util.Collections.singletonList(new Object[]{5, "eve", 80})));
     }
 
     private StreamLakeQueryExecutor employeeExecutor() throws Exception {
-        return executorFor("tenant/ns/persistent/employee", employeeSchema(), 200L, Arrays.asList(
+        return executorFor("tenant/ns/persistent/employee-" + topicSeq.incrementAndGet(),
+                employeeSchema(), 200L, Arrays.asList(
                 Arrays.asList(new Object[]{10, 1, 100L}, new Object[]{11, 2, 200L}),
                 Arrays.asList(new Object[]{12, 3, 300L}, new Object[]{13, 4, 400L}),
                 java.util.Collections.singletonList(new Object[]{14, 6, 500L})));

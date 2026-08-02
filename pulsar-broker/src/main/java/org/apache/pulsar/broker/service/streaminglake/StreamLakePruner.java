@@ -80,7 +80,11 @@ public class StreamLakePruner {
         stats.candidateLedgers = candidates.size();
 
         for (long ledgerId : candidates) {
-            StreamLakeSegmentStore.LedgerSegment seg = segmentStore.segmentFor(ledgerId);
+            StreamLakeCatalog.LedgerInfo info = catalog.get(ledgerId);
+            StreamLakeSegmentStore.LedgerSegment seg = (info != null && info.hasSegment())
+                    ? segmentStore.load(ledgerId, info.segmentLedgerId, info.segmentStartEntry,
+                            info.segmentEndEntry)
+                    : null;
 
             if (seg == null) {
                 // Not segmented yet (recent data): fall back to a per-page footer prune of this ledger.

@@ -289,17 +289,24 @@ Example (decoded):
 
 ### 2.2 Catalog ledger — `StreamLakeCatalog`
 
-One append‑only BK ledger (id in the znode). Fixed‑size entry (`ENTRY_SIZE = 8+8+8+8+8+1 = 41`):
+One append‑only BK ledger (id in the znode). The catalog is the resident **manifest**: per data ledger
+it holds the event‑time bounds/state **and the offsets** that let a query seek that ledger's segment
+(and its page‑index range) on demand without replaying any chain. Fixed‑size entry
+(`ENTRY_SIZE = 8×5 + 1 + 8×6 = 89`):
 
 ```
-dataLedgerId:int64 | createTs:int64 | minEventTime:int64 | maxEventTime:int64 | rowCount:int64 | state:int8
-state: 0=OPEN 1=CLOSED 2=SEGMENTED
+dataLedgerId:int64 | createTs:int64 | minEventTime:int64 | maxEventTime:int64 | rowCount:int64 | state:int8 |
+  segmentLedgerId:int64 | segmentStartEntry:int64 | segmentEndEntry:int64 |
+  pageIndexLedgerId:int64 | pageIndexStartEntry:int64 | pageIndexEndEntry:int64
+state: 0=OPEN 1=CLOSED 2=SEGMENTED ;  offsets = -1 until the ledger is segmented
 ```
 
 `open()` → `loadAndRotate()`: open the old ledger, replay entries (**latest wins** per
 `dataLedgerId`), write survivors into a **fresh** ledger, point the znode at it, delete the old
 (self‑heals a fenced ledger). Reads: `candidateLedgers(fromMs,toMs)` = ledgers whose `[minEt,maxEt]`
-intersects the window; `closedUnsegmented()` = the segment‑build queue.
+intersects the window; `markSegmented(id, segOffset, piRange)` records the offsets; `closedUnsegmented()`
+= the segment‑build queue. **The catalog is the only always‑resident tier** — small (one ~89‑byte entry
+per data ledger), and it is the date‑partition index plus the pointer to every other tier.
 
 ### 2.3 Page‑index ledger chain — `StreamLakePageIndex`
 
@@ -336,9 +343,15 @@ columnIndex:int32 | type:int8 | collapsed:int8 | numPages:int32 |
 
 So a column keeps a **per‑page array** — numeric columns store `[min,max]` per page; text/bytes
 columns also store a per‑page **bloom** — until the array would exceed `segmentColumnMaxBytes`
-(default 2 MiB), at which point the column **collapses** to one whole‑segment stat. Segments are held
-in memory (`byLedger: dataLedgerId → LedgerSegment{pageEntryIds[], columns}`), replayed fully on
-`open()`. RF is `segment{…}Quorum` (default 5/5/3, tunable much higher for read scaling).
+(default 2 MiB), at which point the column **collapses** to one whole‑segment stat. A segment is a
+**contiguous entry range in one ledger**; `appendLedgerSegment()` returns `[segmentLedgerId,
+startEntry, endEntry]`, which the catalog stores so a query seeks the segment directly. Segments are
+**loaded on demand** (`load(dataLedgerId, segLedgerId, start, end)`) into a **bounded LRU**
+(`segmentCacheMaxEntries`, default 512) — **not** replayed en masse on open — so resident memory is
+`O(cache)`, independent of the number of data ledgers. Once a data ledger is segmented, its resident
+page‑index refs are dropped (`releaseRefs`) so `refsByDataLedger` stays bounded to open/unsegmented
+ledgers (also re‑applied after a reopen). RF is `segment{…}Quorum` (default 5/5/3, tunable much higher
+for read scaling).
 
 ---
 
@@ -453,10 +466,13 @@ Builder: `.eq(idx,type,v)`, `.range(idx,type,lo,loIncl,hi,hiIncl)`, `.in(idx,typ
 Metadata‑only and conservative. Date → data ledgers, then straight to the exact pages of each ledger:
 
 ```
-candidates = catalog.candidateLedgers(fromMs, toMs)          // TIER 1: date -> data ledgers
+candidates = catalog.candidateLedgers(fromMs, toMs)          // TIER 1: date -> data ledgers (resident catalog)
 for each ledger:
-    seg = segmentStore.segmentFor(ledger)
-    if seg == null:                                          // not segmented yet (recent data)
+    info = catalog.get(ledger)
+    seg  = info.hasSegment()                                  //   load the segment on demand via its
+         ? segmentStore.load(ledger, info.segmentOffset)      //   catalog offset (bounded LRU)
+         : null
+    if seg == null:                                           // not segmented yet (recent data)
         for footer in pageIndex.footersFor(ledger):          //   per-page footer prune (fallback)
             if predicate.matches(decode(footer)): keep (ledger, footer.dataEntryId)
         continue
@@ -683,6 +699,7 @@ query tier. Defaults in parentheses.
 | `setMaxCardinality` | 64 | Per‑column exact‑set cap in a batch footer; above it the column uses a bloom. |
 | `bloomFpp` | 0.01 | Target bloom false‑positive probability for high‑cardinality columns. |
 | `segmentColumnMaxBytes` | 2 MiB | Per‑column cap on a segment's per‑page array before it collapses to one coarse stat. |
+| `segmentCacheMaxEntries` | 512 | Max segments held resident per topic (loaded on demand from the catalog offset into a bounded LRU) — query‑tier memory is `O(cache)`, not `O(all data ledgers)`. |
 | `pageIndexEnsembleSize` / `pageIndexWriteQuorum` / `pageIndexAckQuorum` | 3 / 3 / 2 | Replication of the page‑index ledger (hot metadata): write to `ensemble` bookies, ack after `ackQuorum`. Raise `ensemble` for read scaling. |
 | `segmentEnsembleSize` / `segmentWriteQuorum` / `segmentAckQuorum` | 5 / 5 / 3 | Replication of the segment ledgers (read‑heavy pruning tier); tune much higher for read scaling. |
 | `metadataBookieAffinityGroup` | "" | Bookie affinity group isolating StreamLake metadata ledgers off the pub/sub pool. |

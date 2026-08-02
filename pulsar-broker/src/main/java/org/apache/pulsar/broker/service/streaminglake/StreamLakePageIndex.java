@@ -177,6 +177,38 @@ public class StreamLakePageIndex implements AutoCloseable {
         return refs != null && !refs.isEmpty();
     }
 
+    /** Number of data ledgers with resident footer refs (observability/tests). */
+    public synchronized int residentRefLedgerCount() {
+        return refsByDataLedger.size();
+    }
+
+    /**
+     * The contiguous page-index entry range for a data ledger as {@code [piLedgerId, startEntry,
+     * endEntry]}, so a query can seek its exact footers on demand. Returns {@code [-1,-1,-1]} when the
+     * data ledger has no footers or its footers span more than one page-index ledger (then the caller
+     * falls back to {@link #footersFor}).
+     */
+    public synchronized long[] getFooterRange(long dataLedgerId) {
+        List<Ref> refs = refsByDataLedger.get(dataLedgerId);
+        if (refs == null || refs.isEmpty()) {
+            return new long[]{-1, -1, -1};
+        }
+        Ref first = refs.get(0);
+        Ref last = refs.get(refs.size() - 1);
+        if (first.piLedgerId != last.piLedgerId) {
+            return new long[]{-1, -1, -1};
+        }
+        return new long[]{first.piLedgerId, first.piEntryId, last.piEntryId};
+    }
+
+    /**
+     * Drop the resident footer refs for a data ledger once it is segmented (its footers are now reached
+     * via the segment's stored page-index range), so resident refs stay bounded to open ledgers.
+     */
+    public synchronized void releaseRefs(long dataLedgerId) {
+        refsByDataLedger.remove(dataLedgerId);
+    }
+
     /** Force the current head to roll (e.g. on data-ledger close), so the next append opens a fresh one. */
     public synchronized void rollHead() throws Exception {
         if (head != null) {

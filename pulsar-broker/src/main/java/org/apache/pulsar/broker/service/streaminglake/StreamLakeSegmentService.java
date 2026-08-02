@@ -87,7 +87,7 @@ public final class StreamLakeSegmentService implements AutoCloseable {
             StreamLakePageIndex pageIndex, StreamingLakeConfig cfg, Executor buildExecutor) {
         StreamLakeSegmentStore segmentStore = StreamLakeSegmentStore.open(bk, ml, metaStore,
                 SEGMENT_MAX_HEAD_BYTES, cfg.getSegmentEnsembleSize(), cfg.getSegmentWriteQuorum(),
-                cfg.getSegmentAckQuorum());
+                cfg.getSegmentAckQuorum(), cfg.getSegmentCacheMaxEntries());
         StreamLakeCatalog catalog = StreamLakeCatalog.open(bk, ml, metaStore);
         StreamLakeSegmentBuilder builder = new StreamLakeSegmentBuilder(pageIndex, segmentStore, catalog,
                 cfg.getSegmentColumnMaxBytes(), cfg.getBloomFpp());
@@ -95,9 +95,18 @@ public final class StreamLakeSegmentService implements AutoCloseable {
                 builder, buildExecutor);
         buildExecutor.execute(() -> {
             try {
+                // Recover any ledger that closed but never got segmented last run.
                 List<Long> built = builder.buildAllClosed();
                 if (!built.isEmpty()) {
                     log.info("StreamLake recovered {} unsegmented ledger(s) for {}", built.size(), ml.getName());
+                }
+                // Reopen replays every footer into the page index; drop the resident refs for ledgers
+                // that are already segmented (reachable via their catalog offset) so resident memory
+                // stays bounded to open/unsegmented ledgers.
+                for (StreamLakeCatalog.LedgerInfo info : catalog.all().values()) {
+                    if (info.hasSegment()) {
+                        pageIndex.releaseRefs(info.dataLedgerId);
+                    }
                 }
             } catch (RuntimeException e) {
                 log.warn("StreamLake segment recovery failed for {}: {}", ml.getName(), e.toString());

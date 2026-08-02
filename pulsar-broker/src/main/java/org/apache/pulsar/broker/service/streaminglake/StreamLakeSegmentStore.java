@@ -20,11 +20,10 @@ package org.apache.pulsar.broker.service.streaminglake;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerEntry;
 import org.apache.bookkeeper.client.LedgerHandle;
@@ -47,8 +46,11 @@ import org.slf4j.LoggerFactory;
  *   'D' | dataLedgerId(8) | numPages(4) | pageEntryId(8) x numPages
  *   'C' | dataLedgerId(8) | blobLen(4)  | StreamLakeColumnSegment.encode()
  * </pre>
- * Segments are kept in memory (small, hot pruning layer); replayed on {@link #open}. A fenced/closed
- * head rolls to a fresh ledger.
+ * A segment is a contiguous entry range in one ledger; {@link #appendLedgerSegment} returns that range
+ * as {@code [segmentLedgerId, startEntry, endEntry]} for the catalog to point at. Segments are
+ * <b>not</b> replayed en masse on open -- they are {@link #load loaded on demand} via their catalog
+ * offset into a bounded LRU, so resident memory is O(cache) rather than O(all data ledgers). A
+ * fenced/closed write head rolls to a fresh ledger.
  */
 public class StreamLakeSegmentStore implements AutoCloseable {
 
@@ -57,6 +59,7 @@ public class StreamLakeSegmentStore implements AutoCloseable {
     private static final byte ENTRY_DIRECTORY = (byte) 'D';
     private static final byte ENTRY_COLUMN = (byte) 'C';
     private static final long DEFAULT_MAX_HEAD_BYTES = 4L * 1024 * 1024;
+    private static final int DEFAULT_CACHE_MAX_ENTRIES = 512;
 
     /** A data ledger's segment: the page directory (position -&gt; entryId) + per-column segments. */
     public static final class LedgerSegment {
@@ -84,13 +87,16 @@ public class StreamLakeSegmentStore implements AutoCloseable {
     private final int writeQuorum;
     private final int ackQuorum;
 
-    private final Map<Long, LedgerSegment> byLedger = new HashMap<>();
+    // Bounded LRU of loaded segments (keyed by data ledger id): segments are read on demand via their
+    // catalog offset, not replayed en masse, so resident memory is O(cache) not O(all data ledgers).
+    private final Map<Long, LedgerSegment> cache;
     private final List<Long> chain = new ArrayList<>();
     private LedgerHandle head;
     private long headBytes;
 
     private StreamLakeSegmentStore(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
-                                   long maxHeadBytes, int ensembleSize, int writeQuorum, int ackQuorum) {
+                                   long maxHeadBytes, int ensembleSize, int writeQuorum, int ackQuorum,
+                                   int cacheMaxEntries) {
         this.bk = bk;
         this.ml = ml;
         this.metaStore = metaStore;
@@ -98,6 +104,13 @@ public class StreamLakeSegmentStore implements AutoCloseable {
         this.ensembleSize = ensembleSize;
         this.writeQuorum = writeQuorum;
         this.ackQuorum = ackQuorum;
+        int cap = cacheMaxEntries > 0 ? cacheMaxEntries : DEFAULT_CACHE_MAX_ENTRIES;
+        this.cache = new LinkedHashMap<Long, LedgerSegment>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<Long, LedgerSegment> eldest) {
+                return size() > cap;
+            }
+        };
     }
 
     public static StreamLakeSegmentStore open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore) {
@@ -109,45 +122,110 @@ public class StreamLakeSegmentStore implements AutoCloseable {
         return open(bk, ml, metaStore, maxHeadBytes, 1, 1, 1);
     }
 
-    /** Open with an explicit replication (production: higher RF for read-scalable pruning). */
     public static StreamLakeSegmentStore open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
             long maxHeadBytes, int ensembleSize, int writeQuorum, int ackQuorum) {
+        return open(bk, ml, metaStore, maxHeadBytes, ensembleSize, writeQuorum, ackQuorum,
+                DEFAULT_CACHE_MAX_ENTRIES);
+    }
+
+    /**
+     * Open with an explicit replication and segment cache size. Segments are <b>not</b> replayed into
+     * memory on open -- they are loaded on demand via their catalog offset ({@link #load}) and held in
+     * a bounded LRU, so resident memory does not grow with the number of data ledgers. The chain is
+     * loaded only for write-head/GC management.
+     */
+    public static StreamLakeSegmentStore open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
+            long maxHeadBytes, int ensembleSize, int writeQuorum, int ackQuorum, int cacheMaxEntries) {
         StreamLakeSegmentStore store = new StreamLakeSegmentStore(bk, ml, metaStore, maxHeadBytes,
-                ensembleSize, writeQuorum, ackQuorum);
+                ensembleSize, writeQuorum, ackQuorum, cacheMaxEntries);
         try {
             store.chain.addAll(metaStore.read().segmentLedgerIds);
-            store.replay();
         } catch (Exception e) {
             log.warn("StreamLake segment store falling back to empty for {}: {}", ml.getName(), e.toString());
         }
         return store;
     }
 
-    /** Durably append a data ledger's segment (page directory + per-column segments) and publish it. */
-    public synchronized void appendLedgerSegment(long dataLedgerId, long[] pageEntryIds,
+    /**
+     * Durably append a data ledger's segment (page directory + per-column segments) as a contiguous run
+     * of entries in one segment ledger, and return its offset {@code [segmentLedgerId, startEntry,
+     * endEntry]} so the catalog can point a query straight at it.
+     */
+    public synchronized long[] appendLedgerSegment(long dataLedgerId, long[] pageEntryIds,
             List<StreamLakeColumnSegment> columns) throws Exception {
         byte[] dir = encodeDirectory(dataLedgerId, pageEntryIds);
-        ensureHeadFor(dir.length);
-        addToHead(dir);
+        byte[][] colEntries = new byte[columns.size()][];
+        long total = dir.length;
+        for (int c = 0; c < columns.size(); c++) {
+            colEntries[c] = encodeColumn(dataLedgerId, columns.get(c));
+            total += colEntries[c].length;
+        }
+        // Keep the whole segment in one ledger so its offset is a single contiguous range.
+        ensureHeadFor((int) Math.min(Integer.MAX_VALUE, total));
+        long segmentLedgerId = head.getId();
+        long startEntry = addToHead(dir);
         headBytes += dir.length;
         Map<Integer, StreamLakeColumnSegment> cols = new HashMap<>();
-        for (StreamLakeColumnSegment cseg : columns) {
-            byte[] entry = encodeColumn(dataLedgerId, cseg);
-            ensureHeadFor(entry.length);
-            addToHead(entry);
-            headBytes += entry.length;
-            cols.put(cseg.columnIndex(), cseg);
+        long endEntry = startEntry;
+        for (int c = 0; c < columns.size(); c++) {
+            endEntry = addToHead(colEntries[c]);
+            headBytes += colEntries[c].length;
+            cols.put(columns.get(c).columnIndex(), columns.get(c));
         }
-        byLedger.put(dataLedgerId, new LedgerSegment(dataLedgerId, pageEntryIds, cols));
+        cache.put(dataLedgerId, new LedgerSegment(dataLedgerId, pageEntryIds, cols));
+        return new long[]{segmentLedgerId, startEntry, endEntry};
     }
 
-    /** The segment for a data ledger, or {@code null} when it is not yet segmented. */
-    public synchronized LedgerSegment segmentFor(long dataLedgerId) {
-        return byLedger.get(dataLedgerId);
-    }
-
-    public synchronized boolean covers(long dataLedgerId) {
-        return byLedger.containsKey(dataLedgerId);
+    /**
+     * Load a data ledger's segment on demand from its catalog offset (a contiguous entry range in a
+     * segment ledger), caching it in the bounded LRU. Returns {@code null} if the range can't be read.
+     */
+    public synchronized LedgerSegment load(long dataLedgerId, long segmentLedgerId, long startEntry,
+            long endEntry) throws Exception {
+        LedgerSegment cached = cache.get(dataLedgerId);
+        if (cached != null) {
+            return cached;
+        }
+        if (segmentLedgerId < 0 || startEntry < 0 || endEntry < startEntry) {
+            return null;
+        }
+        LedgerHandle lh = bk.openLedger(segmentLedgerId, BookKeeper.DigestType.CRC32, PASSWORD);
+        try {
+            long[] pageEntryIds = null;
+            Map<Integer, StreamLakeColumnSegment> cols = new HashMap<>();
+            java.util.Enumeration<LedgerEntry> en = lh.readEntries(startEntry, endEntry);
+            while (en.hasMoreElements()) {
+                byte[] data = en.nextElement().getEntry();
+                ByteBuffer bb = ByteBuffer.wrap(data);
+                byte type = bb.get();
+                bb.getLong(); // dataLedgerId (already known)
+                if (type == ENTRY_DIRECTORY) {
+                    int numPages = bb.getInt();
+                    pageEntryIds = new long[numPages];
+                    for (int i = 0; i < numPages; i++) {
+                        pageEntryIds[i] = bb.getLong();
+                    }
+                } else if (type == ENTRY_COLUMN) {
+                    int blobLen = bb.getInt();
+                    byte[] blob = new byte[blobLen];
+                    bb.get(blob);
+                    StreamLakeColumnSegment cseg = StreamLakeColumnSegment.decode(blob);
+                    cols.put(cseg.columnIndex(), cseg);
+                }
+            }
+            if (pageEntryIds == null) {
+                return null;
+            }
+            LedgerSegment seg = new LedgerSegment(dataLedgerId, pageEntryIds, cols);
+            cache.put(dataLedgerId, seg);
+            return seg;
+        } finally {
+            try {
+                lh.close();
+            } catch (Exception ignore) {
+                // best-effort
+            }
+        }
     }
 
     @Override
@@ -162,56 +240,12 @@ public class StreamLakeSegmentStore implements AutoCloseable {
         }
     }
 
-    // ---------------------------------------------------------------- replay
-
-    private void replay() {
-        for (long ledgerId : chain) {
-            try {
-                LedgerHandle lh = bk.openLedger(ledgerId, BookKeeper.DigestType.CRC32, PASSWORD);
-                long lac = lh.getLastAddConfirmed();
-                if (lac >= 0) {
-                    Enumeration<LedgerEntry> en = lh.readEntries(0, lac);
-                    while (en.hasMoreElements()) {
-                        parse(en.nextElement().getEntry());
-                    }
-                }
-                lh.close();
-            } catch (BKException.BKNoSuchLedgerExistsException
-                    | BKException.BKNoSuchLedgerExistsOnMetadataServerException e) {
-                // a chain entry was already GC'd; skip it
-            } catch (Exception e) {
-                log.warn("StreamLake segment store replay skipped ledger {} for {}: {}",
-                        ledgerId, ml.getName(), e.toString());
-            }
-        }
+    /** Number of segments currently resident in the bounded LRU cache (observability/tests). */
+    public synchronized int cachedSegmentCount() {
+        return cache.size();
     }
 
-    private void parse(byte[] data) {
-        if (data.length < 1 + 8) {
-            return;
-        }
-        ByteBuffer bb = ByteBuffer.wrap(data);
-        byte type = bb.get();
-        long dataLedgerId = bb.getLong();
-        if (type == ENTRY_DIRECTORY) {
-            int numPages = bb.getInt();
-            long[] pageEntryIds = new long[numPages];
-            for (int i = 0; i < numPages; i++) {
-                pageEntryIds[i] = bb.getLong();
-            }
-            // A directory opens (or replaces, on a re-segment) a data ledger's segment.
-            byLedger.put(dataLedgerId, new LedgerSegment(dataLedgerId, pageEntryIds, new HashMap<>()));
-        } else if (type == ENTRY_COLUMN) {
-            int blobLen = bb.getInt();
-            byte[] blob = new byte[blobLen];
-            bb.get(blob);
-            LedgerSegment seg = byLedger.get(dataLedgerId);
-            if (seg != null) { // directory precedes its columns
-                StreamLakeColumnSegment cseg = StreamLakeColumnSegment.decode(blob);
-                seg.columns.put(cseg.columnIndex(), cseg);
-            }
-        }
-    }
+    // ---------------------------------------------------------------- write ledger chain
 
     private static byte[] encodeDirectory(long dataLedgerId, long[] pageEntryIds) {
         ByteBuffer bb = ByteBuffer.allocate(1 + 8 + 4 + pageEntryIds.length * 8);
@@ -233,8 +267,6 @@ public class StreamLakeSegmentStore implements AutoCloseable {
         bb.put(blob);
         return bb.array();
     }
-
-    // ---------------------------------------------------------------- write ledger chain
 
     private void ensureHeadFor(int entryLen) throws Exception {
         if (head == null || (headBytes > 0 && headBytes + entryLen > maxHeadBytes)) {
@@ -258,13 +290,13 @@ public class StreamLakeSegmentStore implements AutoCloseable {
         headBytes = 0;
     }
 
-    private void addToHead(byte[] entry) throws Exception {
+    private long addToHead(byte[] entry) throws Exception {
         try {
-            head.addEntry(entry);
+            return head.addEntry(entry);
         } catch (Exception e) {
             head = null;
             rotateHead();
-            head.addEntry(entry);
+            return head.addEntry(entry);
         }
     }
 }

@@ -62,14 +62,11 @@ public class StreamLakeSegmentBuilder {
         if (info != null && info.state == StreamLakeCatalog.State.SEGMENTED) {
             return; // idempotent
         }
-        if (segmentStore.covers(dataLedgerId)) {
-            catalog.markState(dataLedgerId, StreamLakeCatalog.State.SEGMENTED);
-            return;
-        }
 
         List<StreamLakePageIndex.PageFooter> footers = pageIndex.footersFor(dataLedgerId);
         if (footers.isEmpty()) {
             catalog.markState(dataLedgerId, StreamLakeCatalog.State.SEGMENTED);
+            pageIndex.releaseRefs(dataLedgerId);
             return;
         }
 
@@ -98,8 +95,13 @@ public class StreamLakeSegmentBuilder {
                     segmentColumnMaxBytes, bloomFpp));
         }
 
-        segmentStore.appendLedgerSegment(dataLedgerId, pageEntryIds, columns);
-        catalog.markState(dataLedgerId, StreamLakeCatalog.State.SEGMENTED);
+        // Capture the data ledger's page-index range (for on-demand exact-set precision) before it is
+        // evicted, then record the segment offset + page-index range in the catalog manifest.
+        long[] piRange = pageIndex.getFooterRange(dataLedgerId);
+        long[] segOffset = segmentStore.appendLedgerSegment(dataLedgerId, pageEntryIds, columns);
+        catalog.markSegmented(dataLedgerId, segOffset[0], segOffset[1], segOffset[2],
+                piRange[0], piRange[1], piRange[2]);
+        pageIndex.releaseRefs(dataLedgerId);
         log.info("StreamLake built segment for data ledger {} ({} pages, {} columns)",
                 dataLedgerId, numPages, columns.size());
     }

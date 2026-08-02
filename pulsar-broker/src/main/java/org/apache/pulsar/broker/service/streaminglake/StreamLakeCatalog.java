@@ -49,7 +49,8 @@ public class StreamLakeCatalog implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(StreamLakeCatalog.class);
     private static final byte[] PASSWORD = "streamlake-catalog".getBytes();
-    private static final int ENTRY_SIZE = 8 + 8 + 8 + 8 + 8 + 1; // id, createTs, minEt, maxEt, rows, state
+    // id, createTs, minEt, maxEt, rows, state, + segment offset (ledgerId,start,end) + page-index range.
+    private static final int ENTRY_SIZE = 8 + 8 + 8 + 8 + 8 + 1 + 8 + 8 + 8 + 8 + 8 + 8;
 
     /** Lifecycle of a data ledger in the StreamLake catalog. */
     public enum State {
@@ -61,7 +62,7 @@ public class StreamLakeCatalog implements AutoCloseable {
         }
     }
 
-    /** The catalog record for one data ledger. */
+    /** The catalog record (manifest) for one data ledger. */
     public static final class LedgerInfo {
         public final long dataLedgerId;
         public final long createTs;
@@ -69,19 +70,56 @@ public class StreamLakeCatalog implements AutoCloseable {
         public final long maxEventTime;
         public final long rowCount;
         public final State state;
+        // Segment offset: where this data ledger's segment lives (a contiguous entry range in a
+        // segment ledger), so a query loads exactly that segment on demand -- no chain replay. -1 = none.
+        public final long segmentLedgerId;
+        public final long segmentStartEntry;
+        public final long segmentEndEntry;
+        // Page-index range: this data ledger's footers as a contiguous entry range in a page-index
+        // ledger, for on-demand exact-set/collapsed-column precision at query time. -1 = none.
+        public final long pageIndexLedgerId;
+        public final long pageIndexStartEntry;
+        public final long pageIndexEndEntry;
 
         public LedgerInfo(long dataLedgerId, long createTs, long minEventTime, long maxEventTime,
                           long rowCount, State state) {
+            this(dataLedgerId, createTs, minEventTime, maxEventTime, rowCount, state,
+                    -1, -1, -1, -1, -1, -1);
+        }
+
+        public LedgerInfo(long dataLedgerId, long createTs, long minEventTime, long maxEventTime,
+                          long rowCount, State state, long segmentLedgerId, long segmentStartEntry,
+                          long segmentEndEntry, long pageIndexLedgerId, long pageIndexStartEntry,
+                          long pageIndexEndEntry) {
             this.dataLedgerId = dataLedgerId;
             this.createTs = createTs;
             this.minEventTime = minEventTime;
             this.maxEventTime = maxEventTime;
             this.rowCount = rowCount;
             this.state = state;
+            this.segmentLedgerId = segmentLedgerId;
+            this.segmentStartEntry = segmentStartEntry;
+            this.segmentEndEntry = segmentEndEntry;
+            this.pageIndexLedgerId = pageIndexLedgerId;
+            this.pageIndexStartEntry = pageIndexStartEntry;
+            this.pageIndexEndEntry = pageIndexEndEntry;
+        }
+
+        /** True when the segment offset is set (the data ledger has been segmented). */
+        public boolean hasSegment() {
+            return segmentLedgerId >= 0;
         }
 
         LedgerInfo withState(State newState) {
-            return new LedgerInfo(dataLedgerId, createTs, minEventTime, maxEventTime, rowCount, newState);
+            return new LedgerInfo(dataLedgerId, createTs, minEventTime, maxEventTime, rowCount, newState,
+                    segmentLedgerId, segmentStartEntry, segmentEndEntry,
+                    pageIndexLedgerId, pageIndexStartEntry, pageIndexEndEntry);
+        }
+
+        LedgerInfo segmented(long segLedgerId, long segStart, long segEnd,
+                             long piLedgerId, long piStart, long piEnd) {
+            return new LedgerInfo(dataLedgerId, createTs, minEventTime, maxEventTime, rowCount,
+                    State.SEGMENTED, segLedgerId, segStart, segEnd, piLedgerId, piStart, piEnd);
         }
     }
 
@@ -123,6 +161,23 @@ public class StreamLakeCatalog implements AutoCloseable {
                     Long.MAX_VALUE, Long.MIN_VALUE, 0, state);
         } else {
             cur = cur.withState(state);
+        }
+        infos.put(dataLedgerId, cur);
+        appendDurably(cur);
+    }
+
+    /**
+     * Mark a data ledger SEGMENTED and record where its segment (and page-index range) live, so a
+     * query loads exactly that segment on demand without replaying the whole segment chain.
+     */
+    public synchronized void markSegmented(long dataLedgerId, long segLedgerId, long segStart, long segEnd,
+            long piLedgerId, long piStart, long piEnd) {
+        LedgerInfo cur = infos.get(dataLedgerId);
+        if (cur == null) {
+            cur = new LedgerInfo(dataLedgerId, System.currentTimeMillis(), Long.MAX_VALUE, Long.MIN_VALUE,
+                    0, State.SEGMENTED, segLedgerId, segStart, segEnd, piLedgerId, piStart, piEnd);
+        } else {
+            cur = cur.segmented(segLedgerId, segStart, segEnd, piLedgerId, piStart, piEnd);
         }
         infos.put(dataLedgerId, cur);
         appendDurably(cur);
@@ -234,7 +289,9 @@ public class StreamLakeCatalog implements AutoCloseable {
     private static byte[] encode(LedgerInfo i) {
         ByteBuffer bb = ByteBuffer.allocate(ENTRY_SIZE);
         bb.putLong(i.dataLedgerId).putLong(i.createTs).putLong(i.minEventTime)
-                .putLong(i.maxEventTime).putLong(i.rowCount).put((byte) i.state.ordinal());
+                .putLong(i.maxEventTime).putLong(i.rowCount).put((byte) i.state.ordinal())
+                .putLong(i.segmentLedgerId).putLong(i.segmentStartEntry).putLong(i.segmentEndEntry)
+                .putLong(i.pageIndexLedgerId).putLong(i.pageIndexStartEntry).putLong(i.pageIndexEndEntry);
         return bb.array();
     }
 
@@ -246,6 +303,13 @@ public class StreamLakeCatalog implements AutoCloseable {
         long maxEt = bb.getLong();
         long rows = bb.getLong();
         State state = State.of(bb.get() & 0xFF);
-        return new LedgerInfo(id, createTs, minEt, maxEt, rows, state);
+        long segLedgerId = bb.getLong();
+        long segStart = bb.getLong();
+        long segEnd = bb.getLong();
+        long piLedgerId = bb.getLong();
+        long piStart = bb.getLong();
+        long piEnd = bb.getLong();
+        return new LedgerInfo(id, createTs, minEt, maxEt, rows, state,
+                segLedgerId, segStart, segEnd, piLedgerId, piStart, piEnd);
     }
 }
