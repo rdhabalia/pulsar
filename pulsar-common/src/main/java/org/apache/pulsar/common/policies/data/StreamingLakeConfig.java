@@ -185,6 +185,31 @@ public class StreamingLakeConfig {
     @Builder.Default
     private String joinSpillDir = "";
 
+    /**
+     * Join-strategy selection threshold (bytes): if the smaller pruned side's estimated size is within
+     * this budget it is broadcast (built in one hash table, streaming the other side); otherwise the
+     * planner switches to a <b>partitioned (Grace) hash join</b> that hash-partitions BOTH sides to disk
+     * and joins partition-by-partition (bounded memory). Also sets the per-partition target, so the
+     * partition count is {@code ceil(buildBytes / budget)}. Default 256 MiB.
+     */
+    @Builder.Default
+    private long joinBuildMemoryBudget = 256L * 1024 * 1024;
+
+    /**
+     * Upper bound on the number of on-disk partitions the Grace hash join creates (it opens 2N spill
+     * files at once). The computed {@code ceil(buildBytes/budget)} is capped to this. Default 256.
+     */
+    @Builder.Default
+    private int joinMaxPartitions = 256;
+
+    /**
+     * Runaway-query guard: if the estimated result-row count exceeds this, the query is rejected before
+     * execution (e.g. a many-to-many join on a hot key whose output is quadratic). 0 (default) disables
+     * the guard.
+     */
+    @Builder.Default
+    private long runawayResultRows = 0;
+
     /** Columns for which the broker emits min/max ranges into the page-range index. */
     @Builder.Default
     private List<IndexedColumn> indexedColumns = new ArrayList<>();

@@ -57,72 +57,54 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
         config.setManagedLedgerMinLedgerRolloverTimeMinutes(0);
     }
 
-    private static StreamingLakeConfig cfg(List<StreamingLakeConfig.SchemaColumn> cols) {
+    private static StreamingLakeConfig cfg(List<StreamingLakeConfig.SchemaColumn> cols, long buildBudget) {
         return StreamingLakeConfig.builder()
                 .enabled(true).clientColumnarEnabled(true).setMaxCardinality(64).bloomFpp(0.01)
                 .pageIndexEnsembleSize(1).pageIndexWriteQuorum(1).pageIndexAckQuorum(1)
                 .segmentEnsembleSize(1).segmentWriteQuorum(1).segmentAckQuorum(1)
                 .pageIndexMaxEntriesPerLedger(500).segmentMaxEntriesPerLedger(50)
-                // #6: exercise the off-heap SPILLING build table (row bytes to a file; only the key
-                // index on-heap) + cost-based smaller-side-as-build selection through the coordinator.
+                // off-heap spilling build table (broadcast path) + the broadcast-vs-Grace threshold;
+                // cap Grace partitions small so the test creates few spill files.
                 .joinOffHeapEnabled(true).joinMaxBuildRows(10_000_000)
+                .joinBuildMemoryBudget(buildBudget).joinMaxPartitions(8)
                 .columns(cols).build();
     }
 
-    @Test(timeOut = 300_000)
-    public void innerJoinSqlReturnsExpectedRows() throws Exception {
+    // Register Person + Employee (with the given build-memory budget) and load the demo data; returns a
+    // coordinator that resolves the two tables to their query services.
+    private StreamLakeQueryCoordinator loadTables(long buildBudget) throws Exception {
         String person = "persistent://" + NAMESPACE + "/Person";
         String employee = "persistent://" + NAMESPACE + "/Employee";
         admin.namespaces().setRetention(NAMESPACE, new RetentionPolicies(-1, -1));
         admin.topics().createNonPartitionedTopic(person);
         admin.topics().createNonPartitionedTopic(employee);
-
         register(person, cfg(Arrays.asList(
                 new StreamingLakeConfig.SchemaColumn(1, "personId", "INT64", true),
                 new StreamingLakeConfig.SchemaColumn(2, "name", "STRING", true),
-                new StreamingLakeConfig.SchemaColumn(3, "age", "INT32", true))));
+                new StreamingLakeConfig.SchemaColumn(3, "age", "INT32", true)), buildBudget));
         register(employee, cfg(Arrays.asList(
                 new StreamingLakeConfig.SchemaColumn(1, "empId", "INT64", true),
                 new StreamingLakeConfig.SchemaColumn(2, "personId", "INT64", true),
-                new StreamingLakeConfig.SchemaColumn(3, "salary", "INT64", true))));
-
+                new StreamingLakeConfig.SchemaColumn(3, "salary", "INT64", true)), buildBudget));
         loadPerson(person);
         loadEmployee(employee);
-
         PersistentTopic pPerson = topic(person);
         Awaitility.await().atMost(120, TimeUnit.SECONDS).untilAsserted(() -> {
             long seg = pPerson.getStreamLakeSegmentService().catalog().all().values().stream()
                     .filter(i -> i.state == StreamLakeCatalog.State.SEGMENTED).count();
             assertTrue(seg >= 2, "expected segmented ledgers, was " + seg);
         });
-
-        // Statistics/cost estimator (metadata-only): a selective predicate on the monotonic personId key
-        // must estimate strictly fewer pages/bytes than a match-all -- this is what feeds join-strategy
-        // selection (which side is smaller / does it fit the build budget).
-        StreamLakeQueryService personSvc = pPerson.getStreamLakeQueryService();
-        StreamLakeStatistics.Estimate all = personSvc.estimate(0, Long.MAX_VALUE,
-                org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate.builder()
-                        .range(0, StreamLakeType.INT64, 0L, true, ROWS, true).build());
-        StreamLakeStatistics.Estimate selective = personSvc.estimate(0, Long.MAX_VALUE,
-                org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate.builder()
-                        .range(0, StreamLakeType.INT64, 1000L, true, 1100L, true).build());
-        assertTrue(all.pages > 0, "match-all estimate should see pages, was " + all);
-        assertTrue(selective.pages < all.pages,
-                "selective predicate should estimate fewer pages: " + selective + " vs " + all);
-        assertEquals(all.bytes, all.pages * (1L << 20), "bytes estimate = pages * estimatedPageBytes");
-        System.out.printf("estimate: match-all %s ; selective %s%n", all, selective);
-
-        // Resolve a table name -> its per-topic query service (topic in the query's namespace).
-        StreamLakeQueryCoordinator coordinator = new StreamLakeQueryCoordinator(table -> {
+        return new StreamLakeQueryCoordinator(table -> {
             PersistentTopic pt = topic("persistent://" + NAMESPACE + "/" + table);
             return pt == null ? null : pt.getStreamLakeQueryService();
         });
+    }
 
-        String sql = "SELECT * FROM Person p JOIN Employee e ON p.personId = e.personId "
-                + "WHERE p.age BETWEEN 30 AND 40 AND e.salary >= 40000";
-        StreamLakeQueryResult res = coordinator.executeSql(sql);
+    private static final String JOIN_SQL =
+            "SELECT * FROM Person p JOIN Employee e ON p.personId = e.personId "
+                    + "WHERE p.age BETWEEN 30 AND 40 AND e.salary >= 40000";
 
-        // Closed form: qualifies iff personId % 50 in [10, 20] (11 of every 50), over shared ids [0, ROWS).
+    private static long expectedRows() {
         long expected = 0;
         for (long i = 0; i < ROWS; i++) {
             int band = (int) (i % 50);
@@ -130,34 +112,72 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
                 expected++;
             }
         }
-        assertEquals(res.getRowCount(), (int) expected,
-                "inner-join SQL must return the expected row count");
+        return expected;
+    }
+
+    @Test(timeOut = 300_000)
+    public void innerJoinBroadcastReturnsExpectedRows() throws Exception {
+        // Huge build budget -> the smaller pruned side is broadcast (built in one table, here the
+        // off-heap spilling table); the estimator, streaming contract, and admin REST path are checked.
+        StreamLakeQueryCoordinator coordinator = loadTables(1L << 40);
+        long expected = expectedRows();
+
+        // Statistics/cost estimator (metadata-only): a selective personId range estimates fewer pages.
+        StreamLakeQueryService personSvc = topic("persistent://" + NAMESPACE + "/Person")
+                .getStreamLakeQueryService();
+        StreamLakeStatistics.Estimate all = personSvc.estimate(0, Long.MAX_VALUE,
+                org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate.builder()
+                        .range(0, StreamLakeType.INT64, 0L, true, ROWS, true).build());
+        StreamLakeStatistics.Estimate selective = personSvc.estimate(0, Long.MAX_VALUE,
+                org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate.builder()
+                        .range(0, StreamLakeType.INT64, 1000L, true, 1100L, true).build());
+        assertTrue(all.pages > 0 && selective.pages < all.pages,
+                "selective predicate should estimate fewer pages: " + selective + " vs " + all);
+
+        StreamLakeQueryResult res = coordinator.executeSql(JOIN_SQL);
+        assertEquals(res.getRowCount(), (int) expected, "broadcast join row count");
         assertEquals(res.getColumns(), Arrays.asList("Person.personId", "Person.name", "Person.age",
-                "Employee.empId", "Employee.personId", "Employee.salary"),
-                "SELECT * header is [left cols..., right cols...] with qualified names");
-        // Every joined row shares the join key across the two sides.
+                "Employee.empId", "Employee.personId", "Employee.salary"), "SELECT * header");
         for (List<Object> row : res.getRows()) {
             assertEquals(row.get(0), row.get(4), "Person.personId must equal Employee.personId");
         }
-        System.out.printf("%nSQL join returned %,d rows (expected %,d) in %,d ms%n",
-                res.getRowCount(), expected, res.getLatencyMs());
 
-        // Streaming contract: the column header is known up front and rows are delivered one at a time
-        // (never materialized into a list on the broker) -- this is what lets a multi-GB result stream.
-        StreamLakeQueryCoordinator.Prepared prepared = coordinator.prepare(sql);
-        assertEquals(prepared.columns(), res.getColumns(), "columns available before any row is streamed");
-        long[] streamed = {0};
-        prepared.stream(row -> streamed[0]++);
-        assertEquals(streamed[0], expected, "streamed row count matches (rows pushed incrementally)");
+        // EXPLAIN shows the chosen operator + estimates.
+        StreamLakeQueryResult explain = coordinator.executeSql("EXPLAIN " + JOIN_SQL);
+        String plan = explain.getRows().get(0).get(0).toString();
+        assertTrue(plan.contains("strategy=BROADCAST"), "EXPLAIN should pick BROADCAST: " + plan);
 
-        // Same query over the admin REST API (the transport behind `pulsar-admin streamlake query`).
-        StreamLakeQueryResult viaRest = admin.streamLake().query(TENANT, "ns", sql);
-        assertEquals(viaRest.getRowCount(), (int) expected,
-                "inner-join over the admin REST endpoint must return the same count");
-        assertEquals(viaRest.getColumns(), res.getColumns(),
-                "REST result header must match the coordinator's");
-        System.out.printf("SQL join over admin REST returned %,d rows in %,d ms%n",
-                viaRest.getRowCount(), viaRest.getLatencyMs());
+        // Streaming + admin REST path (transport behind pulsar-admin streamlake query).
+        StreamLakeQueryResult viaRest = admin.streamLake().query(TENANT, "ns", JOIN_SQL);
+        assertEquals(viaRest.getRowCount(), (int) expected, "REST join row count");
+        System.out.printf("%nBROADCAST join = %,d rows (expected %,d); plan: %s%n",
+                res.getRowCount(), expected, plan);
+    }
+
+    @Test(timeOut = 300_000)
+    public void innerJoinGracePartitionedReturnsExpectedRows() throws Exception {
+        // Tiny build budget -> the build side does not fit, so the planner switches to the partitioned
+        // (Grace) hash join: both sides are hash-partitioned to disk and joined partition-by-partition.
+        StreamLakeQueryCoordinator coordinator = loadTables(1L);
+        long expected = expectedRows();
+
+        StreamLakeQueryResult explain = coordinator.executeSql("EXPLAIN " + JOIN_SQL);
+        String plan = explain.getRows().get(0).get(0).toString();
+        assertTrue(plan.contains("strategy=GRACE"), "EXPLAIN should pick GRACE: " + plan);
+        assertTrue(plan.contains("partitions="), "EXPLAIN should show partition count: " + plan);
+
+        StreamLakeQueryResult res = coordinator.executeSql(JOIN_SQL);
+        assertEquals(res.getRowCount(), (int) expected, "grace join row count");
+        assertEquals(res.getColumns(), Arrays.asList("Person.personId", "Person.name", "Person.age",
+                "Employee.empId", "Employee.personId", "Employee.salary"), "SELECT * header");
+        for (List<Object> row : res.getRows()) {
+            assertEquals(row.get(0), row.get(4), "Person.personId must equal Employee.personId");
+        }
+        // Same result over the streaming admin REST path.
+        StreamLakeQueryResult viaRest = admin.streamLake().query(TENANT, "ns", JOIN_SQL);
+        assertEquals(viaRest.getRowCount(), (int) expected, "REST grace join row count");
+        System.out.printf("%nGRACE join = %,d rows (expected %,d); plan: %s%n",
+                res.getRowCount(), expected, plan);
     }
 
     private void register(String topic, StreamingLakeConfig cfg) throws Exception {

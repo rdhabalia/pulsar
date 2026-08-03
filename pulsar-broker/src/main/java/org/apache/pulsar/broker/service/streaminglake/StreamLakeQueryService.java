@@ -55,6 +55,9 @@ public final class StreamLakeQueryService {
     private final boolean joinOffHeapEnabled;
     private final long joinMaxBuildRows;
     private final String joinSpillDir;
+    private final long joinBuildMemoryBudget;
+    private final long runawayResultRows;
+    private final int joinMaxPartitions;
 
     private volatile StreamLakePruner pruner;
     private volatile StreamLakeQueryExecutor executor;
@@ -62,7 +65,8 @@ public final class StreamLakeQueryService {
     private StreamLakeQueryService(ManagedLedger managedLedger, StreamLakeSegmentService segmentService,
             StreamLakePageIndex pageIndex, StreamLakeSchema schema, Executor readExecutor,
             int readConcurrency, StreamLakeStatistics statistics, boolean joinOffHeapEnabled,
-            long joinMaxBuildRows, String joinSpillDir) {
+            long joinMaxBuildRows, String joinSpillDir, long joinBuildMemoryBudget, long runawayResultRows,
+            int joinMaxPartitions) {
         this.managedLedger = managedLedger;
         this.segmentService = segmentService;
         this.pageIndex = pageIndex;
@@ -73,14 +77,44 @@ public final class StreamLakeQueryService {
         this.joinOffHeapEnabled = joinOffHeapEnabled;
         this.joinMaxBuildRows = joinMaxBuildRows;
         this.joinSpillDir = joinSpillDir;
+        this.joinBuildMemoryBudget = joinBuildMemoryBudget;
+        this.runawayResultRows = runawayResultRows;
+        this.joinMaxPartitions = joinMaxPartitions;
     }
 
     public static StreamLakeQueryService create(ManagedLedger managedLedger,
             StreamLakeSegmentService segmentService, StreamLakePageIndex pageIndex, StreamLakeSchema schema,
             Executor readExecutor, int readConcurrency, StreamLakeStatistics statistics,
-            boolean joinOffHeapEnabled, long joinMaxBuildRows, String joinSpillDir) {
+            boolean joinOffHeapEnabled, long joinMaxBuildRows, String joinSpillDir,
+            long joinBuildMemoryBudget, long runawayResultRows, int joinMaxPartitions) {
         return new StreamLakeQueryService(managedLedger, segmentService, pageIndex, schema, readExecutor,
-                readConcurrency, statistics, joinOffHeapEnabled, joinMaxBuildRows, joinSpillDir);
+                readConcurrency, statistics, joinOffHeapEnabled, joinMaxBuildRows, joinSpillDir,
+                joinBuildMemoryBudget, runawayResultRows, joinMaxPartitions);
+    }
+
+    /** Max on-disk partitions for the Grace join (caps ceil(buildBytes/budget)). */
+    public int joinMaxPartitions() {
+        return joinMaxPartitions;
+    }
+
+    /** Build-memory budget (bytes): broadcast if the build side fits this, else partitioned (Grace). */
+    public long joinBuildMemoryBudget() {
+        return joinBuildMemoryBudget;
+    }
+
+    /** Per-partition / build-side row admission guard. */
+    public long joinMaxBuildRows() {
+        return joinMaxBuildRows;
+    }
+
+    /** Directory for join spill / partition files (empty = JVM temp). */
+    public String joinSpillDir() {
+        return joinSpillDir;
+    }
+
+    /** Estimated result-row guard (0 = disabled). */
+    public long runawayResultRows() {
+        return runawayResultRows;
     }
 
     /**

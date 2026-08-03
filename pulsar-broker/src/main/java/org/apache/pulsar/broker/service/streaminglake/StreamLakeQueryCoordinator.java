@@ -79,47 +79,94 @@ public final class StreamLakeQueryCoordinator {
     /**
      * Plan {@code sql} and resolve its tables (may throw {@link IllegalArgumentException} for a bad
      * query or unknown/!StreamLake table) so the caller can fail cleanly before streaming any bytes.
+     * An {@code EXPLAIN <query>} prefix returns a single {@code plan} row describing the chosen operator
+     * + estimates instead of executing.
      */
     public Prepared prepare(String sql) {
+        String trimmed = sql.trim();
+        boolean explain = trimmed.length() >= 8 && trimmed.regionMatches(true, 0, "EXPLAIN ", 0, 8);
+        String query = explain ? trimmed.substring(8) : sql;
+
         Function<String, StreamLakeSchema> schemas = table -> {
             StreamLakeQueryService s = serviceByTable.apply(table);
             return s == null ? null : s.schema();
         };
-        StreamLakeSqlPlanner.Planned planned = StreamLakeSqlPlanner.planStatement(sql, schemas, t -> null);
+        StreamLakeSqlPlanner.Planned planned = StreamLakeSqlPlanner.planStatement(query, schemas, t -> null);
+        return planned.isJoin() ? prepareJoin(planned.join(), explain)
+                : prepareSingle(query, planned.single(), explain);
+    }
 
-        if (planned.isJoin()) {
-            StreamLakeSqlPlanner.JoinPlan jp = planned.join();
-            StreamLakeQueryService left = require(jp.leftTable());
-            StreamLakeQueryService right = require(jp.rightTable());
-            // Cost-based build-side selection: build the SMALLER pruned side (metadata-only estimate),
-            // stream the larger side as the probe. The build table backend (on-heap vs spilling) comes
-            // from the chosen build side's topic config.
-            long leftBytes = estimateBytes(left, jp.leftPredicate());
-            long rightBytes = estimateBytes(right, jp.rightPredicate());
-            StreamRunner runner;
-            if (leftBytes <= rightBytes) {
-                // build = left, probe = right -> executor emits concat(right, left).
-                runner = sink -> left.executor().scanInnerJoin(0, Long.MAX_VALUE, jp.leftPredicate(),
-                        jp.leftKey(), right.executor(), jp.rightPredicate(), jp.rightKey(),
-                        left.newBuildTable(), row -> sink.row(jp.combineFromBuildLeft(row)));
-            } else {
-                // build = right, probe = left -> executor emits concat(left, right) (natural order).
-                runner = sink -> right.executor().scanInnerJoin(0, Long.MAX_VALUE, jp.rightPredicate(),
-                        jp.rightKey(), left.executor(), jp.leftPredicate(), jp.leftKey(),
-                        right.newBuildTable(), row -> sink.row(jp.combineFromBuildRight(row)));
-            }
-            return new Prepared(jp.columnNames(), runner);
+    // Cost-based join planning: build the smaller pruned side; broadcast it if it fits the build-memory
+    // budget, else partition both sides (Grace). Guards a runaway (quadratic) result.
+    private Prepared prepareJoin(StreamLakeSqlPlanner.JoinPlan jp, boolean explain) {
+        StreamLakeQueryService left = require(jp.leftTable());
+        StreamLakeQueryService right = require(jp.rightTable());
+        StreamLakeStatistics.Estimate le = estimate(left, jp.leftPredicate());
+        StreamLakeStatistics.Estimate re = estimate(right, jp.rightPredicate());
+
+        boolean buildLeft = le.bytes <= re.bytes;
+        StreamLakeQueryService buildSvc = buildLeft ? left : right;
+        StreamLakeStatistics.Estimate buildEst = buildLeft ? le : re;
+        StreamLakeStatistics.Estimate probeEst = buildLeft ? re : le;
+        long budget = buildSvc.joinBuildMemoryBudget();
+        boolean broadcast = buildEst.bytes <= budget;
+        int partitions = broadcast ? 1 : (int) Math.min(buildSvc.joinMaxPartitions(),
+                Math.max(2, (buildEst.bytes + budget - 1) / Math.max(1, budget)));
+
+        // Runaway guard (coarse until cardinality sketches land): a FK-style join yields ~max(rows).
+        long estResultRows = Math.max(le.rows, re.rows);
+        long guard = buildSvc.runawayResultRows();
+        if (guard > 0 && estResultRows > guard) {
+            throw new IllegalArgumentException("Estimated result (~" + estResultRows + " rows) exceeds "
+                    + "runawayResultRows=" + guard + "; add a more selective predicate");
         }
 
-        StreamLakeSqlPlanner.Plan p = planned.single();
+        String plan = String.format("JOIN strategy=%s build=%s(%s) probe=%s(%s) partitions=%d "
+                        + "budgetBytes=%d estResultRows~%d",
+                broadcast ? "BROADCAST" : "GRACE",
+                buildLeft ? jp.leftTable() : jp.rightTable(), buildEst,
+                buildLeft ? jp.rightTable() : jp.leftTable(), probeEst,
+                partitions, budget, estResultRows);
+        if (explain) {
+            return planRow(plan);
+        }
+
+        StreamLakeQueryExecutor buildExec = buildSvc.executor();
+        StreamLakeQueryExecutor probeExec = (buildLeft ? right : left).executor();
+        StreamLakeScanPredicate buildPred = buildLeft ? jp.leftPredicate() : jp.rightPredicate();
+        int buildKey = buildLeft ? jp.leftKey() : jp.rightKey();
+        StreamLakeScanPredicate probePred = buildLeft ? jp.rightPredicate() : jp.leftPredicate();
+        int probeKey = buildLeft ? jp.rightKey() : jp.leftKey();
+        // executor + grace both emit concat(probeRow, buildRow); map to natural [left..., right...].
+        Function<Object[], Object[]> combine = buildLeft ? jp::combineFromBuildLeft : jp::combineFromBuildRight;
+
+        StreamRunner runner;
+        if (broadcast) {
+            runner = sink -> buildExec.scanInnerJoin(0, Long.MAX_VALUE, buildPred, buildKey,
+                    probeExec, probePred, probeKey, buildSvc.newBuildTable(),
+                    row -> sink.row(combine.apply(row)));
+        } else {
+            final int nParts = partitions;
+            runner = sink -> StreamLakeGraceJoin.join(buildExec, 0, Long.MAX_VALUE, buildPred, buildKey,
+                    probeExec, probePred, probeKey, nParts, buildSvc.joinSpillDir(),
+                    buildSvc.joinMaxBuildRows(), row -> sink.row(combine.apply(row)));
+        }
+        return new Prepared(jp.columnNames(), runner);
+    }
+
+    private Prepared prepareSingle(String query, StreamLakeSqlPlanner.Plan p, boolean explain) {
         StreamLakeQueryService svc = require(p.table());
         List<String> columns = singleColumnNames(p, svc.schema());
+        if (explain) {
+            String order = p.sortColumn() >= 0 ? " orderBy=col" + p.sortColumn()
+                    + (p.descending() ? " DESC" : " ASC") + (p.limit() > 0 ? " limit=" + p.limit() : "") : "";
+            return planRow("SCAN " + p.table() + "(" + estimate(svc, p.predicate()) + ")" + order);
+        }
         StreamRunner runner;
         if (p.sortColumn() >= 0) {
             // ORDER BY needs materialization (bounded by LIMIT top-K); collect then emit.
-            final String finalSql = sql;
             runner = sink -> {
-                for (Object[] r : svc.executor().executeSql(finalSql, svc.schema(), null)) {
+                for (Object[] r : svc.executor().executeSql(query, svc.schema(), null)) {
                     sink.row(r);
                 }
             };
@@ -128,6 +175,10 @@ public final class StreamLakeQueryCoordinator {
                     row -> sink.row(p.projectRow(row)));
         }
         return new Prepared(columns, runner);
+    }
+
+    private static Prepared planRow(String text) {
+        return new Prepared(List.of("plan"), sink -> sink.row(new Object[]{text}));
     }
 
     /** Buffered convenience: collect the streamed rows into a {@link StreamLakeQueryResult}. */
@@ -150,11 +201,13 @@ public final class StreamLakeQueryCoordinator {
 
     // Metadata-only pruned-size estimate for a join side; a failed estimate is treated as "large" so
     // the side is not chosen as the (resident) build side.
-    private static long estimateBytes(StreamLakeQueryService svc, StreamLakeScanPredicate predicate) {
+    private static StreamLakeStatistics.Estimate estimate(StreamLakeQueryService svc,
+            StreamLakeScanPredicate predicate) {
         try {
-            return svc.estimate(0, Long.MAX_VALUE, predicate).bytes;
+            return svc.estimate(0, Long.MAX_VALUE, predicate);
         } catch (Exception e) {
-            return Long.MAX_VALUE;
+            long big = Long.MAX_VALUE / 4;
+            return new StreamLakeStatistics.Estimate(big, 0, big, big);
         }
     }
 
