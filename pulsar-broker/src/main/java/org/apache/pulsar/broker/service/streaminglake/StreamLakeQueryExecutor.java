@@ -52,6 +52,15 @@ public class StreamLakeQueryExecutor {
         byte[] readArrowBatch(long ledgerId, long entryId) throws Exception;
     }
 
+    /**
+     * Sink for streamed result rows. A scan/join pushes each result row here as it is produced, so the
+     * whole result never has to be materialized in memory (the REST layer writes each row straight to
+     * the response socket).
+     */
+    public interface RowConsumer {
+        void accept(Object[] row) throws Exception;
+    }
+
     private final StreamLakePruner pruner;
     private final PageReader pageReader;
     private final Executor readExecutor;
@@ -78,18 +87,27 @@ public class StreamLakeQueryExecutor {
 
     /** Scan a topic: prune to candidate pages, read them, and exactly row-filter by the predicate. */
     public List<Object[]> scan(long fromMs, long toMs, StreamLakeScanPredicate predicate) throws Exception {
-        List<StreamLakePruner.PagePointer> pages = pruner.prune(fromMs, toMs, predicate);
         List<Object[]> rows = new ArrayList<>();
+        scan(fromMs, toMs, predicate, row -> rows.add(row));
+        return rows;
+    }
+
+    /**
+     * Streaming scan: prune to candidate pages, read them (parallel prefetch), and push each row that
+     * passes the predicate to {@code out} — without materializing the whole result.
+     */
+    public void scan(long fromMs, long toMs, StreamLakeScanPredicate predicate, RowConsumer out)
+            throws Exception {
+        List<StreamLakePruner.PagePointer> pages = pruner.prune(fromMs, toMs, predicate);
         try (StreamLakeArrowBatchDecoder decoder = new StreamLakeArrowBatchDecoder()) {
             forEachPage(pages, (p, arrow) -> {
                 for (Object[] row : decoder.decodeRows(arrow)) {
                     if (predicate.matchesRow(row)) {
-                        rows.add(row);
+                        out.accept(row);
                     }
                 }
             });
         }
-        return rows;
     }
 
     /** Scan and keep only the top-K rows by a sort column (ORDER BY ... LIMIT). */
@@ -146,13 +164,29 @@ public class StreamLakeQueryExecutor {
             StreamLakeQueryExecutor probeSide, StreamLakeScanPredicate probePredicate, int probeKeyColumn,
             StreamLakeJoinTable buildTable) throws Exception {
         List<Object[]> out = new ArrayList<>();
+        scanInnerJoin(fromMs, toMs, buildPredicate, buildKeyColumn, probeSide, probePredicate,
+                probeKeyColumn, buildTable, row -> out.add(row));
+        return out;
+    }
+
+    /**
+     * Streaming inner join: identical to {@link #scanInnerJoin(long, long, StreamLakeScanPredicate, int,
+     * StreamLakeQueryExecutor, StreamLakeScanPredicate, int, StreamLakeJoinTable)} but pushes each joined
+     * row to {@code out} as it is produced, so the join result is never fully materialized. Only the
+     * build side is resident (in {@code buildTable}); the probe side and the output both stream.
+     */
+    public void scanInnerJoin(
+            long fromMs, long toMs,
+            StreamLakeScanPredicate buildPredicate, int buildKeyColumn,
+            StreamLakeQueryExecutor probeSide, StreamLakeScanPredicate probePredicate, int probeKeyColumn,
+            StreamLakeJoinTable buildTable, RowConsumer out) throws Exception {
         try (StreamLakeHashJoin join = new StreamLakeHashJoin(buildKeyColumn, buildTable)) {
             // Phase 1: build side -- filter on predicate columns, materialize the full row only for
-            // survivors (the build side is small and any of its columns may be projected downstream).
+            // survivors (into the pluggable build table: on-heap, spilling, or disk-backed).
             scanRows(buildPredicate, fromMs, toMs, (batch, row) -> join.addBuildRow(batch.row(row)));
 
             // Phase 2: probe side -- filter, read only the key to probe, materialize the full probe row
-            // only when it matches a build key (so non-matching probe rows never allocate wide columns).
+            // only when it matches a build key; emit each match straight to the sink (no result buffer).
             probeSide.scanRows(probePredicate, fromMs, toMs, (batch, row) -> {
                 List<Object[]> buildMatches = join.matches(batch.value(row, probeKeyColumn));
                 if (buildMatches.isEmpty()) {
@@ -160,11 +194,10 @@ public class StreamLakeQueryExecutor {
                 }
                 Object[] probeRow = batch.row(row);
                 for (Object[] buildRow : buildMatches) {
-                    out.add(StreamLakeHashJoin.concat(probeRow, buildRow));
+                    out.accept(StreamLakeHashJoin.concat(probeRow, buildRow));
                 }
             });
         }
-        return out;
     }
 
     /** Convenience overload using an on-heap build table bounded by {@code maxBuildRows}. */

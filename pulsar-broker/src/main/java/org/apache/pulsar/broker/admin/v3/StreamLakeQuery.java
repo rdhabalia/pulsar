@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.admin.v3;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -31,6 +32,12 @@ import jakarta.ws.rs.container.AsyncResponse;
 import jakarta.ws.rs.container.Suspended;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.StreamingOutput;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import org.apache.pulsar.broker.admin.AdminResource;
 import org.apache.pulsar.broker.service.Topic;
@@ -38,33 +45,39 @@ import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeQueryCoordinator;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeQueryService;
 import org.apache.pulsar.broker.web.RestException;
+import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Admin REST endpoint for submitting a StreamLake SQL query and receiving result rows. The query is
- * planned + executed by the broker-side {@link StreamLakeQueryCoordinator}: table names in the SQL are
- * resolved to their topics <b>in the request's namespace</b>, and single-table scans and two-table
- * inner joins are supported. This is the transport behind {@code pulsar-admin streamlake query}.
+ * Admin REST endpoint for submitting a StreamLake SQL query and <b>streaming</b> result rows. The query
+ * is planned + executed by the broker-side {@link StreamLakeQueryCoordinator}: table names resolve to
+ * topics <b>in the request's namespace</b>, and single-table scans and two-table inner joins are
+ * supported. This is the transport behind {@code pulsar-admin streamlake query}.
  *
- * <p>The heavy scan/join runs on the broker executor (off the Jersey IO thread) and the result is
- * resumed asynchronously. Tables must be StreamLake topics owned by this broker (the demo/standalone
- * case); a table that is not found or not a StreamLake topic yields a 400.
+ * <p><b>Streaming (no broker OOM).</b> The query is planned first (so a bad query / unknown table
+ * returns 400 before any bytes are sent); then the response is written as <b>NDJSON</b> — the first
+ * line is a JSON array of column names, and each subsequent line is a JSON array of one row's values.
+ * Rows are written straight to the response socket as they are produced and the writer is flushed
+ * periodically, so a multi-GB result never materializes in broker heap.
  */
 @Path("/streamlake")
 @Tag(name = "streamlake")
-@Produces(MediaType.APPLICATION_JSON)
+@Produces({MediaType.APPLICATION_JSON, "application/x-ndjson"})
 public class StreamLakeQuery extends AdminResource {
 
     private static final Logger log = LoggerFactory.getLogger(StreamLakeQuery.class);
+    private static final ObjectMapper MAPPER = ObjectMapperFactory.getMapper().getObjectMapper();
+    private static final int FLUSH_EVERY_ROWS = 1024;
 
     @POST
     @Path("/{tenant}/{namespace}/query")
     @Consumes(MediaType.TEXT_PLAIN)
     @Operation(summary = "Run a StreamLake SQL query (single-table scan or inner join) over the "
-            + "namespace's tables and return the result rows.")
+            + "namespace's tables and stream the result rows as NDJSON.")
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "Query result (columns + rows)."),
+            @ApiResponse(responseCode = "200", description = "NDJSON stream: line 1 = column names, "
+                    + "each following line = one row (JSON arrays)."),
             @ApiResponse(responseCode = "400", description = "Malformed query or unknown/!StreamLake table.")
     })
     public void query(
@@ -77,12 +90,15 @@ public class StreamLakeQuery extends AdminResource {
             asyncResponse.resume(new RestException(Response.Status.BAD_REQUEST, "Empty query"));
             return;
         }
-        // Run the (blocking) scan/join off the request thread.
+        // Plan + resolve tables off the IO thread; a planning error becomes a clean 400 BEFORE we start
+        // streaming (once the first byte is written the status is already 200).
         pulsar().getExecutor().execute(() -> {
             try {
                 StreamLakeQueryCoordinator coordinator = new StreamLakeQueryCoordinator(
                         table -> resolveService(tenant, namespace, table));
-                asyncResponse.resume(coordinator.executeSql(sql));
+                StreamLakeQueryCoordinator.Prepared prepared = coordinator.prepare(sql);
+                StreamingOutput body = output -> writeNdjson(prepared, output);
+                asyncResponse.resume(Response.ok(body).build());
             } catch (IllegalArgumentException e) {
                 asyncResponse.resume(new RestException(Response.Status.BAD_REQUEST, e.getMessage()));
             } catch (Exception e) {
@@ -90,6 +106,28 @@ public class StreamLakeQuery extends AdminResource {
                 asyncResponse.resume(new RestException(e));
             }
         });
+    }
+
+    private static void writeNdjson(StreamLakeQueryCoordinator.Prepared prepared, OutputStream os)
+            throws IOException {
+        BufferedWriter w = new BufferedWriter(new OutputStreamWriter(os, StandardCharsets.UTF_8));
+        w.write(MAPPER.writeValueAsString(prepared.columns()));
+        w.write('\n');
+        long[] n = {0};
+        try {
+            prepared.stream(row -> {
+                w.write(MAPPER.writeValueAsString(row));
+                w.write('\n');
+                if ((++n[0] % FLUSH_EVERY_ROWS) == 0) {
+                    w.flush();
+                }
+            });
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException("StreamLake query streaming failed: " + e.getMessage(), e);
+        }
+        w.flush();
     }
 
     // Resolve a table name to its per-topic query service (loading the topic on this broker if needed).

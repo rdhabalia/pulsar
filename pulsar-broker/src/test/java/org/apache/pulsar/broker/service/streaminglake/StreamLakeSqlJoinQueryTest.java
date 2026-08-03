@@ -123,6 +123,14 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
         System.out.printf("%nSQL join returned %,d rows (expected %,d) in %,d ms%n",
                 res.getRowCount(), expected, res.getLatencyMs());
 
+        // Streaming contract: the column header is known up front and rows are delivered one at a time
+        // (never materialized into a list on the broker) -- this is what lets a multi-GB result stream.
+        StreamLakeQueryCoordinator.Prepared prepared = coordinator.prepare(sql);
+        assertEquals(prepared.columns(), res.getColumns(), "columns available before any row is streamed");
+        long[] streamed = {0};
+        prepared.stream(row -> streamed[0]++);
+        assertEquals(streamed[0], expected, "streamed row count matches (rows pushed incrementally)");
+
         // Same query over the admin REST API (the transport behind `pulsar-admin streamlake query`).
         StreamLakeQueryResult viaRest = admin.streamLake().query(TENANT, "ns", sql);
         assertEquals(viaRest.getRowCount(), (int) expected,

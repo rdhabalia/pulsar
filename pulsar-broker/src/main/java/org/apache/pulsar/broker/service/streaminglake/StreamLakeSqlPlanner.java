@@ -129,13 +129,21 @@ public final class StreamLakeSqlPlanner {
             }
             List<Object[]> out = new ArrayList<>(rows.size());
             for (Object[] r : rows) {
-                Object[] p = new Object[projection.length];
-                for (int i = 0; i < projection.length; i++) {
-                    p[i] = r[projection[i]];
-                }
-                out.add(p);
+                out.add(projectRow(r));
             }
             return out;
+        }
+
+        /** Apply the SELECT projection to a single row (identity for {@code SELECT *}). */
+        public Object[] projectRow(Object[] r) {
+            if (projection == null) {
+                return r;
+            }
+            Object[] p = new Object[projection.length];
+            for (int i = 0; i < projection.length; i++) {
+                p[i] = r[projection[i]];
+            }
+            return p;
         }
     }
 
@@ -297,20 +305,27 @@ public final class StreamLakeSqlPlanner {
         public List<Object[]> combine(List<Object[]> concatRows) {
             List<Object[]> out = new ArrayList<>(concatRows.size());
             for (Object[] c : concatRows) {
-                Object[] natural = new Object[leftWidth + rightWidth];
-                System.arraycopy(c, rightWidth, natural, 0, leftWidth);   // left columns
-                System.arraycopy(c, 0, natural, leftWidth, rightWidth);   // right columns
-                if (projection == null) {
-                    out.add(natural);
-                } else {
-                    Object[] p = new Object[projection.length];
-                    for (int i = 0; i < projection.length; i++) {
-                        p[i] = natural[projection[i]];
-                    }
-                    out.add(p);
-                }
+                out.add(combineRow(c));
             }
             return out;
+        }
+
+        /**
+         * Reorder a single executor {@code concat(rightRow, leftRow)} row into natural
+         * {@code [left..., right...]} order and apply the projection (used for streaming results).
+         */
+        public Object[] combineRow(Object[] concatRow) {
+            Object[] natural = new Object[leftWidth + rightWidth];
+            System.arraycopy(concatRow, rightWidth, natural, 0, leftWidth);   // left columns
+            System.arraycopy(concatRow, 0, natural, leftWidth, rightWidth);   // right columns
+            if (projection == null) {
+                return natural;
+            }
+            Object[] p = new Object[projection.length];
+            for (int i = 0; i < projection.length; i++) {
+                p[i] = natural[projection[i]];
+            }
+            return p;
         }
     }
 

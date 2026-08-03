@@ -22,8 +22,9 @@ import java.util.List;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import org.apache.pulsar.client.admin.PulsarAdmin;
+import org.apache.pulsar.client.admin.StreamLakeQueryResultHandler;
 import org.apache.pulsar.common.naming.NamespaceName;
-import org.apache.pulsar.common.policies.data.StreamLakeQueryResult;
+import org.apache.pulsar.common.util.ObjectMapperFactory;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
@@ -31,7 +32,8 @@ import picocli.CommandLine.Parameters;
 /**
  * {@code pulsar-admin streamlake} — StreamLake columnar query operations. The {@code query} subcommand
  * submits a SQL query (single-table scan or two-table inner equi-join) over the StreamLake tables in a
- * namespace to the broker and prints the result rows.
+ * namespace to the broker and prints the result rows as they <b>stream</b> back (the CLI holds only one
+ * row at a time, so a large result does not OOM the client).
  */
 @Command(description = "Operations about StreamLake (columnar analytical queries over topics)")
 public class CmdStreamLake extends CmdBase {
@@ -43,7 +45,7 @@ public class CmdStreamLake extends CmdBase {
 
     @Command(description = "Run a StreamLake SQL query over a namespace's tables and print the result. "
             + "Supports SELECT <cols|*> FROM <table> [alias] [JOIN <table> alias ON a.k=b.k] WHERE "
-            + "<conjunctive predicates>. Table names are topics in the namespace.")
+            + "<conjunctive predicates>. Table names are topics in the namespace. Streams the result.")
     private class Query extends CliCommand {
         @Parameters(index = "0", description = "tenant/namespace whose topics are the tables", arity = "1")
         private String namespace;
@@ -51,24 +53,40 @@ public class CmdStreamLake extends CmdBase {
         @Parameters(index = "1", description = "the SQL query", arity = "1")
         private String sql;
 
-        @Option(names = {"-j", "--json"}, description = "Print the raw JSON result instead of a table")
+        @Option(names = {"-j", "--json"}, description = "Print each row as a JSON array (NDJSON) "
+                + "instead of a table")
         private boolean json;
 
         @Override
         void run() throws Exception {
             NamespaceName ns = NamespaceName.get(validateNamespace(namespace));
-            StreamLakeQueryResult result =
-                    getAdmin().streamLake().query(ns.getTenant(), ns.getLocalName(), sql);
-            if (json) {
-                print(result);
-                return;
+            final long[] count = {0};
+            getAdmin().streamLake().query(ns.getTenant(), ns.getLocalName(), sql,
+                    new StreamLakeQueryResultHandler() {
+                        @Override
+                        public void columns(List<String> columns) {
+                            print(json ? toJson(columns) : String.join(" | ", columns));
+                        }
+
+                        @Override
+                        public void row(List<Object> row) {
+                            count[0]++;
+                            print(json ? toJson(row) : row.stream()
+                                    .map(v -> v == null ? "null" : v.toString())
+                                    .collect(Collectors.joining(" | ")));
+                        }
+                    });
+            if (!json) {
+                print(String.format("(%,d rows)", count[0]));
             }
-            print(String.join(" | ", result.getColumns()));
-            for (List<Object> row : result.getRows()) {
-                print(row.stream().map(v -> v == null ? "null" : v.toString())
-                        .collect(Collectors.joining(" | ")));
+        }
+
+        private String toJson(Object value) {
+            try {
+                return ObjectMapperFactory.getMapper().getObjectMapper().writeValueAsString(value);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
-            print(String.format("(%,d rows, %,d ms)", result.getRowCount(), result.getLatencyMs()));
         }
     }
 }

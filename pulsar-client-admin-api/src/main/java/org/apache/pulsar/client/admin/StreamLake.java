@@ -40,6 +40,15 @@ public interface StreamLake {
      */
     StreamLakeQueryResult query(String tenant, String namespace, String sql) throws PulsarAdminException;
 
+    /**
+     * Run a StreamLake SQL query and receive the result as a <b>stream</b>: {@code handler.columns(...)}
+     * once, then {@code handler.row(...)} per row as it arrives. Use this instead of
+     * {@link #query(String, String, String)} for large results — rows are never all held in memory, so
+     * a multi-GB result does not OOM the client.
+     */
+    void query(String tenant, String namespace, String sql, StreamLakeQueryResultHandler handler)
+            throws PulsarAdminException;
+
     /** Asynchronously run a StreamLake SQL query. See {@link #query(String, String, String)}. */
     CompletableFuture<StreamLakeQueryResult> queryAsync(String tenant, String namespace, String sql);
 }
