@@ -109,9 +109,19 @@ public final class StreamLakeQueryCoordinator {
         StreamLakeStatistics.Estimate buildEst = buildLeft ? le : re;
         StreamLakeStatistics.Estimate probeEst = buildLeft ? re : le;
         long budget = buildSvc.joinBuildMemoryBudget();
-        boolean broadcast = buildEst.bytes <= budget;
-        int partitions = broadcast ? 1 : (int) Math.min(buildSvc.joinMaxPartitions(),
-                Math.max(2, (buildEst.bytes + budget - 1) / Math.max(1, budget)));
+        // Strategy: honor a forced joinStrategy, else choose by cost (build fits budget -> BROADCAST,
+        // else GRACE partitioned, or a RocksDB broadcast table when joinLargeBuildUsesRocksDb).
+        JoinOp op;
+        switch (buildSvc.joinStrategy()) {
+            case BROADCAST: op = JoinOp.BROADCAST; break;
+            case GRACE: op = JoinOp.GRACE; break;
+            case ROCKSDB: op = JoinOp.ROCKSDB; break;
+            default:
+                op = buildEst.bytes <= budget ? JoinOp.BROADCAST
+                        : (buildSvc.joinLargeBuildUsesRocksDb() ? JoinOp.ROCKSDB : JoinOp.GRACE);
+        }
+        int partitions = op == JoinOp.GRACE ? (int) Math.min(buildSvc.joinMaxPartitions(),
+                Math.max(2, (buildEst.bytes + budget - 1) / Math.max(1, budget))) : 1;
 
         // Runaway guard (coarse until cardinality sketches land): a FK-style join yields ~max(rows).
         long estResultRows = Math.max(le.rows, re.rows);
@@ -123,8 +133,7 @@ public final class StreamLakeQueryCoordinator {
 
         String plan = String.format("JOIN strategy=%s build=%s(%s) probe=%s(%s) partitions=%d "
                         + "budgetBytes=%d estResultRows~%d",
-                broadcast ? "BROADCAST" : "GRACE",
-                buildLeft ? jp.leftTable() : jp.rightTable(), buildEst,
+                op, buildLeft ? jp.leftTable() : jp.rightTable(), buildEst,
                 buildLeft ? jp.rightTable() : jp.leftTable(), probeEst,
                 partitions, budget, estResultRows);
         if (explain) {
@@ -141,18 +150,30 @@ public final class StreamLakeQueryCoordinator {
         Function<Object[], Object[]> combine = buildLeft ? jp::combineFromBuildLeft : jp::combineFromBuildRight;
 
         StreamRunner runner;
-        if (broadcast) {
-            runner = sink -> buildExec.scanInnerJoin(0, Long.MAX_VALUE, buildPred, buildKey,
-                    probeExec, probePred, probeKey, buildSvc.newBuildTable(),
-                    row -> sink.row(combine.apply(row)));
-        } else {
-            final int nParts = partitions;
-            runner = sink -> StreamLakeGraceJoin.join(buildExec, 0, Long.MAX_VALUE, buildPred, buildKey,
-                    probeExec, probePred, probeKey, nParts, buildSvc.joinSpillDir(),
-                    buildSvc.joinMaxBuildRows(), row -> sink.row(combine.apply(row)));
+        switch (op) {
+            case GRACE: {
+                final int nParts = partitions;
+                runner = sink -> StreamLakeGraceJoin.join(buildExec, 0, Long.MAX_VALUE, buildPred, buildKey,
+                        probeExec, probePred, probeKey, nParts, buildSvc.joinSpillDir(),
+                        buildSvc.joinMaxBuildRows(), row -> sink.row(combine.apply(row)));
+                break;
+            }
+            case ROCKSDB:
+                // Broadcast join whose build table is RocksDB (keys+values on disk).
+                runner = sink -> buildExec.scanInnerJoin(0, Long.MAX_VALUE, buildPred, buildKey,
+                        probeExec, probePred, probeKey,
+                        buildSvc.newBuildTable(StreamLakeQueryService.Backend.ROCKSDB),
+                        row -> sink.row(combine.apply(row)));
+                break;
+            default: // BROADCAST (on-heap or spilling table per config)
+                runner = sink -> buildExec.scanInnerJoin(0, Long.MAX_VALUE, buildPred, buildKey,
+                        probeExec, probePred, probeKey, buildSvc.newBuildTable(),
+                        row -> sink.row(combine.apply(row)));
         }
         return new Prepared(jp.columnNames(), runner);
     }
+
+    private enum JoinOp { BROADCAST, GRACE, ROCKSDB }
 
     private Prepared prepareSingle(String query, StreamLakeSqlPlanner.Plan p, boolean explain) {
         StreamLakeQueryService svc = require(p.table());

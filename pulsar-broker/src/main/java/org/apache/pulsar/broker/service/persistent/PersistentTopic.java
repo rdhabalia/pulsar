@@ -823,17 +823,8 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                 qs = streamLakeQueryService;
                 if (qs == null) {
                     StreamingLakeConfig cfg = getStreamingLakeConfig();
-                    org.apache.pulsar.client.streaminglake.StreamLakeSchema schema =
-                            org.apache.pulsar.client.streaminglake.StreamLakeTopicSchema.fromConfig(cfg)
-                                    .schema();
                     qs = StreamLakeQueryService.create(ledger, getOrCreateStreamLakeSegmentService(),
-                            getOrCreateStreamLakePageIndex(), schema,
-                            brokerService.getPulsar().getExecutor(), cfg.getQueryReadConcurrency(),
-                            new org.apache.pulsar.broker.service.streaminglake.StreamLakeStatistics(
-                                    cfg.getEstimatedRowsPerPage(), cfg.getEstimatedPageBytes()),
-                            cfg.isJoinOffHeapEnabled(), cfg.getJoinMaxBuildRows(), cfg.getJoinSpillDir(),
-                            cfg.getJoinBuildMemoryBudget(), cfg.getRunawayResultRows(),
-                            cfg.getJoinMaxPartitions());
+                            getOrCreateStreamLakePageIndex(), cfg, brokerService.getPulsar().getExecutor());
                     streamLakeQueryService = qs;
                 }
             }

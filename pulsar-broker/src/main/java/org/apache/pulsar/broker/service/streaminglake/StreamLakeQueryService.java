@@ -28,8 +28,13 @@ import org.apache.bookkeeper.mledger.ManagedLedger;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
+import org.apache.pulsar.client.streaminglake.OnHeapJoinTable;
+import org.apache.pulsar.client.streaminglake.SpillingJoinTable;
 import org.apache.pulsar.client.streaminglake.StreamLakeBatchPayload;
+import org.apache.pulsar.client.streaminglake.StreamLakeJoinTable;
 import org.apache.pulsar.client.streaminglake.StreamLakeSchema;
+import org.apache.pulsar.client.streaminglake.StreamLakeTopicSchema;
+import org.apache.pulsar.common.policies.data.StreamingLakeConfig;
 import org.apache.pulsar.common.protocol.Commands;
 
 /**
@@ -45,88 +50,105 @@ import org.apache.pulsar.common.protocol.Commands;
  */
 public final class StreamLakeQueryService {
 
+    /** The build-table backend for a broadcast join. */
+    public enum Backend { ONHEAP, SPILL, ROCKSDB }
+
     private final ManagedLedger managedLedger;
     private final StreamLakeSegmentService segmentService;
     private final StreamLakePageIndex pageIndex;
-    private final StreamLakeSchema schema;
+    private final StreamingLakeConfig cfg;
     private final Executor readExecutor;
-    private final int readConcurrency;
+    private final StreamLakeSchema schema;
     private final StreamLakeStatistics statistics;
-    private final boolean joinOffHeapEnabled;
-    private final long joinMaxBuildRows;
-    private final String joinSpillDir;
-    private final long joinBuildMemoryBudget;
-    private final long runawayResultRows;
-    private final int joinMaxPartitions;
 
     private volatile StreamLakePruner pruner;
     private volatile StreamLakeQueryExecutor executor;
 
     private StreamLakeQueryService(ManagedLedger managedLedger, StreamLakeSegmentService segmentService,
-            StreamLakePageIndex pageIndex, StreamLakeSchema schema, Executor readExecutor,
-            int readConcurrency, StreamLakeStatistics statistics, boolean joinOffHeapEnabled,
-            long joinMaxBuildRows, String joinSpillDir, long joinBuildMemoryBudget, long runawayResultRows,
-            int joinMaxPartitions) {
+            StreamLakePageIndex pageIndex, StreamingLakeConfig cfg, Executor readExecutor) {
         this.managedLedger = managedLedger;
         this.segmentService = segmentService;
         this.pageIndex = pageIndex;
-        this.schema = schema;
+        this.cfg = cfg;
         this.readExecutor = readExecutor;
-        this.readConcurrency = readConcurrency;
-        this.statistics = statistics;
-        this.joinOffHeapEnabled = joinOffHeapEnabled;
-        this.joinMaxBuildRows = joinMaxBuildRows;
-        this.joinSpillDir = joinSpillDir;
-        this.joinBuildMemoryBudget = joinBuildMemoryBudget;
-        this.runawayResultRows = runawayResultRows;
-        this.joinMaxPartitions = joinMaxPartitions;
+        this.schema = StreamLakeTopicSchema.fromConfig(cfg).schema();
+        this.statistics = new StreamLakeStatistics(cfg.getEstimatedRowsPerPage(), cfg.getEstimatedPageBytes());
     }
 
     public static StreamLakeQueryService create(ManagedLedger managedLedger,
-            StreamLakeSegmentService segmentService, StreamLakePageIndex pageIndex, StreamLakeSchema schema,
-            Executor readExecutor, int readConcurrency, StreamLakeStatistics statistics,
-            boolean joinOffHeapEnabled, long joinMaxBuildRows, String joinSpillDir,
-            long joinBuildMemoryBudget, long runawayResultRows, int joinMaxPartitions) {
-        return new StreamLakeQueryService(managedLedger, segmentService, pageIndex, schema, readExecutor,
-                readConcurrency, statistics, joinOffHeapEnabled, joinMaxBuildRows, joinSpillDir,
-                joinBuildMemoryBudget, runawayResultRows, joinMaxPartitions);
+            StreamLakeSegmentService segmentService, StreamLakePageIndex pageIndex, StreamingLakeConfig cfg,
+            Executor readExecutor) {
+        return new StreamLakeQueryService(managedLedger, segmentService, pageIndex, cfg, readExecutor);
+    }
+
+    /** The topic's StreamLake config (join strategy, budgets, RocksDB sizes, ...). */
+    public StreamingLakeConfig config() {
+        return cfg;
+    }
+
+    public StreamingLakeConfig.JoinStrategy joinStrategy() {
+        return cfg.getJoinStrategy();
+    }
+
+    public boolean joinLargeBuildUsesRocksDb() {
+        return cfg.isJoinLargeBuildUsesRocksDb();
     }
 
     /** Max on-disk partitions for the Grace join (caps ceil(buildBytes/budget)). */
     public int joinMaxPartitions() {
-        return joinMaxPartitions;
+        return cfg.getJoinMaxPartitions();
     }
 
-    /** Build-memory budget (bytes): broadcast if the build side fits this, else partitioned (Grace). */
+    /** Build-memory budget (bytes): broadcast if the build side fits this, else a large-build operator. */
     public long joinBuildMemoryBudget() {
-        return joinBuildMemoryBudget;
+        return cfg.getJoinBuildMemoryBudget();
     }
 
     /** Per-partition / build-side row admission guard. */
     public long joinMaxBuildRows() {
-        return joinMaxBuildRows;
+        return cfg.getJoinMaxBuildRows();
     }
 
-    /** Directory for join spill / partition files (empty = JVM temp). */
+    /** Directory for join spill / partition / RocksDB files (empty = JVM temp). */
     public String joinSpillDir() {
-        return joinSpillDir;
+        return cfg.getJoinSpillDir();
     }
 
     /** Estimated result-row guard (0 = disabled). */
     public long runawayResultRows() {
-        return runawayResultRows;
+        return cfg.getRunawayResultRows();
+    }
+
+    /** Off-heap RocksDB block-cache cap for out-of-core operators. */
+    public long rocksdbBlockCacheBytes() {
+        return cfg.getRocksdbBlockCacheBytes();
+    }
+
+    /** Off-heap RocksDB write-buffer size for out-of-core operators. */
+    public long rocksdbWriteBufferBytes() {
+        return cfg.getRocksdbWriteBufferBytes();
     }
 
     /**
-     * A fresh hash-join build table for a join whose build side is <b>this</b> table: an off-heap
-     * {@link org.apache.pulsar.client.streaminglake.SpillingJoinTable spilling} table when
-     * {@code joinOffHeapEnabled} (build sides larger than heap spill row bytes to {@code joinSpillDir}),
-     * else a bounded {@link org.apache.pulsar.client.streaminglake.OnHeapJoinTable on-heap} table.
+     * A fresh broadcast-join build table with the requested backend: {@code ONHEAP} (fast, bounded),
+     * {@code SPILL} (row bytes to a file, on-heap key index), or {@code ROCKSDB} (keys+values on disk,
+     * bounded off-heap) — for build sides far larger than the JVM heap.
      */
-    public org.apache.pulsar.client.streaminglake.StreamLakeJoinTable newBuildTable() {
-        return joinOffHeapEnabled
-                ? new org.apache.pulsar.client.streaminglake.SpillingJoinTable(joinMaxBuildRows, joinSpillDir)
-                : new org.apache.pulsar.client.streaminglake.OnHeapJoinTable(joinMaxBuildRows);
+    public StreamLakeJoinTable newBuildTable(Backend backend) {
+        switch (backend) {
+            case ROCKSDB:
+                return new RocksDbJoinTable(cfg.getJoinSpillDir(), cfg.getRocksdbBlockCacheBytes(),
+                        cfg.getRocksdbWriteBufferBytes());
+            case SPILL:
+                return new SpillingJoinTable(cfg.getJoinMaxBuildRows(), cfg.getJoinSpillDir());
+            default:
+                return new OnHeapJoinTable(cfg.getJoinMaxBuildRows());
+        }
+    }
+
+    /** The default build table for the broadcast path: spilling when configured, else on-heap. */
+    public StreamLakeJoinTable newBuildTable() {
+        return newBuildTable(cfg.isJoinOffHeapEnabled() ? Backend.SPILL : Backend.ONHEAP);
     }
 
     /** The table's columnar schema (from its StreamLake topic policy). */
@@ -167,7 +189,7 @@ public final class StreamLakeQueryService {
                 e = executor;
                 if (e == null) {
                     e = new StreamLakeQueryExecutor(pruner(), this::readArrowBatch, readExecutor,
-                            readConcurrency);
+                            cfg.getQueryReadConcurrency());
                     executor = e;
                 }
             }

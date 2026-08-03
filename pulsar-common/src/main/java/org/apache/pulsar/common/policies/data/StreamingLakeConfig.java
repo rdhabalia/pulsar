@@ -195,6 +195,34 @@ public class StreamingLakeConfig {
     @Builder.Default
     private long joinBuildMemoryBudget = 256L * 1024 * 1024;
 
+    /** Join execution strategies. AUTO selects by cost; the others force a specific operator. */
+    public enum JoinStrategy { AUTO, BROADCAST, GRACE, ROCKSDB }
+
+    /**
+     * Force a specific join strategy (mainly for testing / overrides). {@code AUTO} (default) chooses by
+     * cost: build the smaller pruned side, BROADCAST it if it fits {@code joinBuildMemoryBudget}, else
+     * fall back to a large-build operator ({@code GRACE} partitioned join, or the RocksDB broadcast
+     * table when {@code joinLargeBuildUsesRocksDb}). {@code BROADCAST}/{@code GRACE}/{@code ROCKSDB}
+     * force that operator regardless of the estimate.
+     */
+    @Builder.Default
+    private JoinStrategy joinStrategy = JoinStrategy.AUTO;
+
+    /**
+     * Under {@code joinStrategy=AUTO}, when the build side exceeds the budget: false (default) uses the
+     * Grace partitioned join; true builds the side into a RocksDB table instead (disk keys+values).
+     */
+    @Builder.Default
+    private boolean joinLargeBuildUsesRocksDb = false;
+
+    /** Off-heap RocksDB block-cache cap for out-of-core operators (join/sort/group-by). Default 128 MiB. */
+    @Builder.Default
+    private long rocksdbBlockCacheBytes = 128L * 1024 * 1024;
+
+    /** Off-heap RocksDB write-buffer (memtable) size for out-of-core operators. Default 64 MiB. */
+    @Builder.Default
+    private long rocksdbWriteBufferBytes = 64L * 1024 * 1024;
+
     /**
      * Upper bound on the number of on-disk partitions the Grace hash join creates (it opens 2N spill
      * files at once). The computed {@code ceil(buildBytes/budget)} is capped to this. Default 256.

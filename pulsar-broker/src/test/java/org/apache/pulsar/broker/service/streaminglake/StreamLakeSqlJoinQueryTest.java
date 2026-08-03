@@ -57,7 +57,8 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
         config.setManagedLedgerMinLedgerRolloverTimeMinutes(0);
     }
 
-    private static StreamingLakeConfig cfg(List<StreamingLakeConfig.SchemaColumn> cols, long buildBudget) {
+    private static StreamingLakeConfig cfg(List<StreamingLakeConfig.SchemaColumn> cols, long buildBudget,
+            StreamingLakeConfig.JoinStrategy strategy) {
         return StreamingLakeConfig.builder()
                 .enabled(true).clientColumnarEnabled(true).setMaxCardinality(64).bloomFpp(0.01)
                 .pageIndexEnsembleSize(1).pageIndexWriteQuorum(1).pageIndexAckQuorum(1)
@@ -66,13 +67,15 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
                 // off-heap spilling build table (broadcast path) + the broadcast-vs-Grace threshold;
                 // cap Grace partitions small so the test creates few spill files.
                 .joinOffHeapEnabled(true).joinMaxBuildRows(10_000_000)
-                .joinBuildMemoryBudget(buildBudget).joinMaxPartitions(8)
+                .joinBuildMemoryBudget(buildBudget).joinMaxPartitions(8).joinStrategy(strategy)
+                .rocksdbBlockCacheBytes(16L << 20).rocksdbWriteBufferBytes(8L << 20)
                 .columns(cols).build();
     }
 
-    // Register Person + Employee (with the given build-memory budget) and load the demo data; returns a
-    // coordinator that resolves the two tables to their query services.
-    private StreamLakeQueryCoordinator loadTables(long buildBudget) throws Exception {
+    // Register Person + Employee (with the given build-memory budget + forced strategy) and load the demo
+    // data; returns a coordinator that resolves the two tables to their query services.
+    private StreamLakeQueryCoordinator loadTables(long buildBudget,
+            StreamingLakeConfig.JoinStrategy strategy) throws Exception {
         String person = "persistent://" + NAMESPACE + "/Person";
         String employee = "persistent://" + NAMESPACE + "/Employee";
         admin.namespaces().setRetention(NAMESPACE, new RetentionPolicies(-1, -1));
@@ -81,11 +84,11 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
         register(person, cfg(Arrays.asList(
                 new StreamingLakeConfig.SchemaColumn(1, "personId", "INT64", true),
                 new StreamingLakeConfig.SchemaColumn(2, "name", "STRING", true),
-                new StreamingLakeConfig.SchemaColumn(3, "age", "INT32", true)), buildBudget));
+                new StreamingLakeConfig.SchemaColumn(3, "age", "INT32", true)), buildBudget, strategy));
         register(employee, cfg(Arrays.asList(
                 new StreamingLakeConfig.SchemaColumn(1, "empId", "INT64", true),
                 new StreamingLakeConfig.SchemaColumn(2, "personId", "INT64", true),
-                new StreamingLakeConfig.SchemaColumn(3, "salary", "INT64", true)), buildBudget));
+                new StreamingLakeConfig.SchemaColumn(3, "salary", "INT64", true)), buildBudget, strategy));
         loadPerson(person);
         loadEmployee(employee);
         PersistentTopic pPerson = topic(person);
@@ -119,7 +122,7 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
     public void innerJoinBroadcastReturnsExpectedRows() throws Exception {
         // Huge build budget -> the smaller pruned side is broadcast (built in one table, here the
         // off-heap spilling table); the estimator, streaming contract, and admin REST path are checked.
-        StreamLakeQueryCoordinator coordinator = loadTables(1L << 40);
+        StreamLakeQueryCoordinator coordinator = loadTables(1L << 40, StreamingLakeConfig.JoinStrategy.AUTO);
         long expected = expectedRows();
 
         // Statistics/cost estimator (metadata-only): a selective personId range estimates fewer pages.
@@ -158,7 +161,7 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
     public void innerJoinGracePartitionedReturnsExpectedRows() throws Exception {
         // Tiny build budget -> the build side does not fit, so the planner switches to the partitioned
         // (Grace) hash join: both sides are hash-partitioned to disk and joined partition-by-partition.
-        StreamLakeQueryCoordinator coordinator = loadTables(1L);
+        StreamLakeQueryCoordinator coordinator = loadTables(1L, StreamingLakeConfig.JoinStrategy.AUTO);
         long expected = expectedRows();
 
         StreamLakeQueryResult explain = coordinator.executeSql("EXPLAIN " + JOIN_SQL);
@@ -177,6 +180,29 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
         StreamLakeQueryResult viaRest = admin.streamLake().query(TENANT, "ns", JOIN_SQL);
         assertEquals(viaRest.getRowCount(), (int) expected, "REST grace join row count");
         System.out.printf("%nGRACE join = %,d rows (expected %,d); plan: %s%n",
+                res.getRowCount(), expected, plan);
+    }
+
+    @Test(timeOut = 300_000)
+    public void innerJoinRocksDbReturnsExpectedRows() throws Exception {
+        // Force the RocksDB build-table strategy: the smaller side is built into an on-disk RocksDB
+        // (keys+values off-heap), the larger side streams as the probe.
+        StreamLakeQueryCoordinator coordinator = loadTables(1L << 40,
+                StreamingLakeConfig.JoinStrategy.ROCKSDB);
+        long expected = expectedRows();
+
+        StreamLakeQueryResult explain = coordinator.executeSql("EXPLAIN " + JOIN_SQL);
+        String plan = explain.getRows().get(0).get(0).toString();
+        assertTrue(plan.contains("strategy=ROCKSDB"), "EXPLAIN should pick ROCKSDB: " + plan);
+
+        StreamLakeQueryResult res = coordinator.executeSql(JOIN_SQL);
+        assertEquals(res.getRowCount(), (int) expected, "rocksdb join row count");
+        for (List<Object> row : res.getRows()) {
+            assertEquals(row.get(0), row.get(4), "Person.personId must equal Employee.personId");
+        }
+        StreamLakeQueryResult viaRest = admin.streamLake().query(TENANT, "ns", JOIN_SQL);
+        assertEquals(viaRest.getRowCount(), (int) expected, "REST rocksdb join row count");
+        System.out.printf("%nROCKSDB join = %,d rows (expected %,d); plan: %s%n",
                 res.getRowCount(), expected, plan);
     }
 
