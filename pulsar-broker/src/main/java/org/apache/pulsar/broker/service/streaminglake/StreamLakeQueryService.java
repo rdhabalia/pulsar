@@ -51,30 +51,58 @@ public final class StreamLakeQueryService {
     private final StreamLakeSchema schema;
     private final Executor readExecutor;
     private final int readConcurrency;
+    private final StreamLakeStatistics statistics;
 
+    private volatile StreamLakePruner pruner;
     private volatile StreamLakeQueryExecutor executor;
 
     private StreamLakeQueryService(ManagedLedger managedLedger, StreamLakeSegmentService segmentService,
             StreamLakePageIndex pageIndex, StreamLakeSchema schema, Executor readExecutor,
-            int readConcurrency) {
+            int readConcurrency, StreamLakeStatistics statistics) {
         this.managedLedger = managedLedger;
         this.segmentService = segmentService;
         this.pageIndex = pageIndex;
         this.schema = schema;
         this.readExecutor = readExecutor;
         this.readConcurrency = readConcurrency;
+        this.statistics = statistics;
     }
 
     public static StreamLakeQueryService create(ManagedLedger managedLedger,
             StreamLakeSegmentService segmentService, StreamLakePageIndex pageIndex, StreamLakeSchema schema,
-            Executor readExecutor, int readConcurrency) {
+            Executor readExecutor, int readConcurrency, StreamLakeStatistics statistics) {
         return new StreamLakeQueryService(managedLedger, segmentService, pageIndex, schema, readExecutor,
-                readConcurrency);
+                readConcurrency, statistics);
     }
 
     /** The table's columnar schema (from its StreamLake topic policy). */
     public StreamLakeSchema schema() {
         return schema;
+    }
+
+    /** The pruner over this topic's catalog + segments + page index (shared by the executor + stats). */
+    public StreamLakePruner pruner() {
+        StreamLakePruner p = pruner;
+        if (p == null) {
+            synchronized (this) {
+                p = pruner;
+                if (p == null) {
+                    p = new StreamLakePruner(segmentService.catalog(), segmentService.segmentStore(),
+                            pageIndex);
+                    pruner = p;
+                }
+            }
+        }
+        return p;
+    }
+
+    /**
+     * Metadata-only estimate of how much data {@code predicate} touches after pruning (for the planner's
+     * join-strategy selection). No data pages are read.
+     */
+    public StreamLakeStatistics.Estimate estimate(long fromMs, long toMs,
+            org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate predicate) throws Exception {
+        return statistics.estimate(pruner(), fromMs, toMs, predicate);
     }
 
     /** A ready executor over this topic (prune -> parallel page read -> exact filter / join). */
@@ -84,9 +112,7 @@ public final class StreamLakeQueryService {
             synchronized (this) {
                 e = executor;
                 if (e == null) {
-                    StreamLakePruner pruner = new StreamLakePruner(segmentService.catalog(),
-                            segmentService.segmentStore(), pageIndex);
-                    e = new StreamLakeQueryExecutor(pruner, this::readArrowBatch, readExecutor,
+                    e = new StreamLakeQueryExecutor(pruner(), this::readArrowBatch, readExecutor,
                             readConcurrency);
                     executor = e;
                 }

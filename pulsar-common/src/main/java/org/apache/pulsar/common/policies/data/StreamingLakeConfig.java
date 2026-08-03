@@ -93,6 +93,21 @@ public class StreamingLakeConfig {
     private int queryReadConcurrency = 16;
 
     /**
+     * Planner cost-estimate: assumed rows per page, used to turn the pruner's surviving-page count into
+     * a row-count estimate for join-strategy selection. Default 1,000 (≈ a 1 MiB columnar page).
+     */
+    @Builder.Default
+    private long estimatedRowsPerPage = 1000;
+
+    /**
+     * Planner cost-estimate: assumed bytes per page, used to turn the pruner's surviving-page count into
+     * a byte estimate for join-strategy selection (does this side fit the build memory budget?).
+     * Default 1 MiB.
+     */
+    @Builder.Default
+    private long estimatedPageBytes = 1L << 20;
+
+    /**
      * When true, a closed data ledger's segment is built <b>asynchronously off the owning broker</b>:
      * the broker publishes a {@code {dataTopic, dataLedgerId}} build request to a per-namespace system
      * topic ({@code __streamlake_segment_build}) and a StreamLake consumer on a failover subscription

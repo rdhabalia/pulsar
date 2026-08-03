@@ -828,7 +828,9 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                                     .schema();
                     qs = StreamLakeQueryService.create(ledger, getOrCreateStreamLakeSegmentService(),
                             getOrCreateStreamLakePageIndex(), schema,
-                            brokerService.getPulsar().getExecutor(), cfg.getQueryReadConcurrency());
+                            brokerService.getPulsar().getExecutor(), cfg.getQueryReadConcurrency(),
+                            new org.apache.pulsar.broker.service.streaminglake.StreamLakeStatistics(
+                                    cfg.getEstimatedRowsPerPage(), cfg.getEstimatedPageBytes()));
                     streamLakeQueryService = qs;
                 }
             }

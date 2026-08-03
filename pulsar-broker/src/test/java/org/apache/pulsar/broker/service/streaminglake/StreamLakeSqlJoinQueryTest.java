@@ -93,6 +93,22 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
             assertTrue(seg >= 2, "expected segmented ledgers, was " + seg);
         });
 
+        // Statistics/cost estimator (metadata-only): a selective predicate on the monotonic personId key
+        // must estimate strictly fewer pages/bytes than a match-all -- this is what feeds join-strategy
+        // selection (which side is smaller / does it fit the build budget).
+        StreamLakeQueryService personSvc = pPerson.getStreamLakeQueryService();
+        StreamLakeStatistics.Estimate all = personSvc.estimate(0, Long.MAX_VALUE,
+                org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate.builder()
+                        .range(0, StreamLakeType.INT64, 0L, true, ROWS, true).build());
+        StreamLakeStatistics.Estimate selective = personSvc.estimate(0, Long.MAX_VALUE,
+                org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate.builder()
+                        .range(0, StreamLakeType.INT64, 1000L, true, 1100L, true).build());
+        assertTrue(all.pages > 0, "match-all estimate should see pages, was " + all);
+        assertTrue(selective.pages < all.pages,
+                "selective predicate should estimate fewer pages: " + selective + " vs " + all);
+        assertEquals(all.bytes, all.pages * (1L << 20), "bytes estimate = pages * estimatedPageBytes");
+        System.out.printf("estimate: match-all %s ; selective %s%n", all, selective);
+
         // Resolve a table name -> its per-topic query service (topic in the query's namespace).
         StreamLakeQueryCoordinator coordinator = new StreamLakeQueryCoordinator(table -> {
             PersistentTopic pt = topic("persistent://" + NAMESPACE + "/" + table);
