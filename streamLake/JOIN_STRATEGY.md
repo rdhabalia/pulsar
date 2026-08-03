@@ -73,11 +73,11 @@ then join partition `i` (load `build_i`, stream `probe_i`). Resident memory = O(
 the pruned-size estimate so a partition fits the build budget. Pure sequential IO (suits the spill
 disk). **Skew handling** (§4) is part of this operator.
 
-### 3.3 Optional backends 🚧
+### 3.3 RocksDB backend ✅ · sort-merge 🚧
 
-- **RocksDB join table** — a `StreamLakeJoinTable` backed by RocksDB (composite key `key|seq → rowBytes`
-  + prefix scan), so *both* keys and values live on disk (only block cache/memtable on-heap). Drop-in;
-  good where NVMe point-lookups are preferred. Cap off-heap memory; disable the WAL (ephemeral).
+- ✅ **RocksDB join table** (`RocksDbJoinTable`) — composite key `keyBytes|seq → rowBytes`, prefix
+  scan; *both* keys and values on disk (only block cache/memtable off-heap). Selected via
+  `joinStrategy=ROCKSDB` (force) or `joinLargeBuildUsesRocksDb` under AUTO. WAL off; off-heap capped.
 - **Sort-merge join** — when inputs are already sorted or ORDER-BY/merge semantics are needed.
 
 ---
@@ -118,7 +118,7 @@ by `joinBuildMemoryBudget`; `EXPLAIN <query>` returns the plan. Skew handling (�
 
 ---
 
-## 6. Sort & aggregation (RocksDB as the external sorted map) 🚧
+## 6. Sort & aggregation (RocksDB as the external sorted map) ✅
 
 RocksDB (sorted LSM) is reused as one **external sorted-map** primitive:
 
@@ -158,4 +158,4 @@ Cap RocksDB off-heap memory; disable the WAL.
 5. 🚧 Selector + `EXPLAIN`-lite + runaway guard.
 6. ✅ #4 Grace partitioned join · 🚧 skew (broadcast/salting) + key-filter pushdown.
 7. 🚧 RocksDB external sort (ORDER BY) → GROUP BY (planner + aggregation).
-8. 🚧 Optional: RocksDB / sort-merge join backends.
+8. ✅ RocksDB join backend (`joinStrategy` force) · 🚧 sort-merge backend.
