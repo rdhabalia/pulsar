@@ -119,6 +119,35 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
     }
 
     @Test(timeOut = 300_000)
+    public void groupByAggregates() throws Exception {
+        StreamLakeQueryCoordinator coordinator = loadTables(1L << 40, StreamingLakeConfig.JoinStrategy.AUTO);
+
+        // GROUP BY age (50 distinct ages, 120 rows each). Aggregate personId per group.
+        StreamLakeQueryResult res = coordinator.executeSql(
+                "SELECT age, COUNT(*), MIN(personId), MAX(personId), AVG(personId) FROM Person GROUP BY age");
+        assertEquals(res.getColumns(), Arrays.asList("age", "COUNT(*)", "MIN(personId)", "MAX(personId)",
+                "AVG(personId)"), "aggregate output header");
+        assertEquals(res.getRowCount(), 50, "50 distinct ages -> 50 groups");
+
+        long totalCount = 0;
+        for (List<Object> row : res.getRows()) {
+            int age = ((Number) row.get(0)).intValue();
+            long count = ((Number) row.get(1)).longValue();
+            long min = ((Number) row.get(2)).longValue();
+            long max = ((Number) row.get(3)).longValue();
+            double avg = ((Number) row.get(4)).doubleValue();
+            totalCount += count;
+            long band = age - 20; // personId % 50 for this age
+            assertEquals(count, 120L, "each age group has 120 rows");
+            assertEquals(min, band, "min personId for age " + age);
+            assertEquals(max, band + 5950, "max personId for age " + age);
+            assertEquals(avg, (min + max) / 2.0, 1e-6, "avg personId for age " + age);
+        }
+        assertEquals(totalCount, ROWS, "group counts sum to the total row count");
+        System.out.printf("%nGROUP BY: %,d groups, total count=%,d%n", res.getRowCount(), totalCount);
+    }
+
+    @Test(timeOut = 300_000)
     public void orderByUsesExternalSort() throws Exception {
         StreamLakeQueryCoordinator coordinator = loadTables(1L << 40, StreamingLakeConfig.JoinStrategy.AUTO);
 

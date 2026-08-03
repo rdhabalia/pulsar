@@ -212,18 +212,24 @@ public final class StreamLakeSqlPlanner {
                 window[0], window[1]);
     }
 
-    /** Either a single-table {@link Plan} or a two-table {@link JoinPlan}. */
+    /** Either a single-table {@link Plan}, a two-table {@link JoinPlan}, or a {@link GroupByPlan}. */
     public static final class Planned {
         private final Plan single;
         private final JoinPlan join;
+        private final GroupByPlan groupBy;
 
-        private Planned(Plan single, JoinPlan join) {
+        private Planned(Plan single, JoinPlan join, GroupByPlan groupBy) {
             this.single = single;
             this.join = join;
+            this.groupBy = groupBy;
         }
 
         public boolean isJoin() {
             return join != null;
+        }
+
+        public boolean isGroupBy() {
+            return groupBy != null;
         }
 
         public Plan single() {
@@ -232,6 +238,10 @@ public final class StreamLakeSqlPlanner {
 
         public JoinPlan join() {
             return join;
+        }
+
+        public GroupByPlan groupBy() {
+            return groupBy;
         }
     }
 
@@ -357,14 +367,21 @@ public final class StreamLakeSqlPlanner {
             if (parsed instanceof SqlOrderBy) {
                 throw new IllegalArgumentException("ORDER BY / LIMIT is not supported for joins yet");
             }
-            return new Planned(null, planJoin(select, (SqlJoin) select.getFrom(), schemaByTable));
+            return new Planned(null, planJoin(select, (SqlJoin) select.getFrom(), schemaByTable), null);
         }
         String table = tableName(select.getFrom());
         StreamLakeSchema schema = schemaByTable.apply(table);
         if (schema == null) {
             throw new IllegalArgumentException("Unknown table: " + table);
         }
-        return new Planned(plan(sql, schema, timeColByTable.apply(table)), null);
+        if (select.getGroup() != null && select.getGroup().size() > 0) {
+            if (parsed instanceof SqlOrderBy) {
+                throw new IllegalArgumentException("ORDER BY is not supported with GROUP BY yet");
+            }
+            return new Planned(null, null, planGroupBy(select, table, schema,
+                    timeColByTable.apply(table)));
+        }
+        return new Planned(plan(sql, schema, timeColByTable.apply(table)), null, null);
     }
 
     private static SqlSelect asSelect(SqlNode node) {
@@ -372,6 +389,185 @@ public final class StreamLakeSqlPlanner {
             return (SqlSelect) node;
         }
         throw new IllegalArgumentException("Only SELECT queries are supported, got: " + node.getKind());
+    }
+
+    /** Supported aggregate functions. */
+    public enum AggFunc { COUNT, SUM, MIN, MAX, AVG }
+
+    /** One aggregate in a GROUP BY SELECT: a function over a column ({@code columnIndex = -1} for COUNT(*)). */
+    public static final class Agg {
+        private final AggFunc func;
+        private final int columnIndex;
+        private final StreamLakeType type;
+
+        Agg(AggFunc func, int columnIndex, StreamLakeType type) {
+            this.func = func;
+            this.columnIndex = columnIndex;
+            this.type = type;
+        }
+
+        public AggFunc func() {
+            return func;
+        }
+
+        public int columnIndex() {
+            return columnIndex;
+        }
+
+        public StreamLakeType type() {
+            return type;
+        }
+    }
+
+    /**
+     * A translated single-table {@code GROUP BY}: a pushed-down WHERE predicate + time window, the group
+     * key columns, the aggregate specs, and an output map (each SELECT slot is either a group-key column
+     * or an aggregate), so the executor can assemble result rows in SELECT order.
+     */
+    public static final class GroupByPlan {
+        private final String table;
+        private final StreamLakeScanPredicate predicate;
+        private final long fromMs;
+        private final long toMs;
+        private final int[] groupCols;
+        private final List<Agg> aggs;
+        private final int[] outputKind; // >=0: group-key position; <0: aggregate index = -(v)-1
+        private final List<String> columnNames;
+
+        GroupByPlan(String table, StreamLakeScanPredicate predicate, long fromMs, long toMs, int[] groupCols,
+                List<Agg> aggs, int[] outputKind, List<String> columnNames) {
+            this.table = table;
+            this.predicate = predicate;
+            this.fromMs = fromMs;
+            this.toMs = toMs;
+            this.groupCols = groupCols;
+            this.aggs = aggs;
+            this.outputKind = outputKind;
+            this.columnNames = columnNames;
+        }
+
+        public String table() {
+            return table;
+        }
+
+        public StreamLakeScanPredicate predicate() {
+            return predicate;
+        }
+
+        public long fromMs() {
+            return fromMs;
+        }
+
+        public long toMs() {
+            return toMs;
+        }
+
+        public int[] groupCols() {
+            return groupCols.clone();
+        }
+
+        public List<Agg> aggs() {
+            return aggs;
+        }
+
+        /** Per SELECT column: {@code >=0} = group-key position; {@code <0} = aggregate index {@code -(v)-1}. */
+        public int[] outputKind() {
+            return outputKind.clone();
+        }
+
+        public List<String> columnNames() {
+            return columnNames;
+        }
+    }
+
+    // Translate SELECT <group cols | aggregates> FROM <table> [WHERE ...] GROUP BY <cols>.
+    private static GroupByPlan planGroupBy(SqlSelect select, String table, StreamLakeSchema schema,
+            String timeColumn) {
+        ColumnResolver cols = new ColumnResolver(schema);
+        String timeCol = timeColumn == null ? null : timeColumn.toLowerCase(Locale.ROOT);
+
+        SqlNodeList group = select.getGroup();
+        int[] groupCols = new int[group.size()];
+        Map<Integer, Integer> groupPos = new HashMap<>();
+        for (int i = 0; i < group.size(); i++) {
+            int idx = cols.index(identifierName(group.get(i)));
+            groupCols[i] = idx;
+            groupPos.put(idx, i);
+        }
+
+        long[] window = {Long.MIN_VALUE, Long.MAX_VALUE};
+        StreamLakeScanPredicate.Builder predicate = StreamLakeScanPredicate.builder();
+        if (select.getWhere() != null) {
+            translateWhere(select.getWhere(), cols, timeCol, predicate, window);
+        }
+
+        SqlNodeList selectList = select.getSelectList();
+        List<Agg> aggs = new ArrayList<>();
+        int[] outputKind = new int[selectList.size()];
+        List<String> names = new ArrayList<>();
+        for (int i = 0; i < selectList.size(); i++) {
+            SqlNode item = selectList.get(i);
+            if (isAggCall(item)) {
+                Agg agg = parseAgg((SqlCall) item, cols);
+                aggs.add(agg);
+                outputKind[i] = -aggs.size(); // aggregate index (aggs.size()-1) encoded as -(idx+1)
+                names.add(agg.func() + "(" + (agg.columnIndex() < 0 ? "*"
+                        : schema.columns().get(agg.columnIndex()).name()) + ")");
+            } else if (item instanceof SqlIdentifier && !((SqlIdentifier) item).isStar()) {
+                int idx = cols.index(identifierName(item));
+                Integer pos = groupPos.get(idx);
+                if (pos == null) {
+                    throw new IllegalArgumentException("SELECT column '" + identifierName(item)
+                            + "' must appear in GROUP BY or an aggregate");
+                }
+                outputKind[i] = pos;
+                names.add(schema.columns().get(idx).name());
+            } else {
+                throw new IllegalArgumentException("Unsupported SELECT item in GROUP BY "
+                        + "(use group columns or aggregates)");
+            }
+        }
+        return new GroupByPlan(table, predicate.build(), window[0], window[1], groupCols, aggs, outputKind,
+                names);
+    }
+
+    private static boolean isAggCall(SqlNode item) {
+        if (!(item instanceof SqlCall)) {
+            return false;
+        }
+        SqlCall call = (SqlCall) item;
+        if (call.getOperator() == null) {
+            return false;
+        }
+        return aggFunc(call.getOperator().getName()) != null;
+    }
+
+    private static AggFunc aggFunc(String name) {
+        switch (name.toUpperCase(Locale.ROOT)) {
+            case "COUNT": return AggFunc.COUNT;
+            case "SUM": return AggFunc.SUM;
+            case "MIN": return AggFunc.MIN;
+            case "MAX": return AggFunc.MAX;
+            case "AVG": return AggFunc.AVG;
+            default: return null;
+        }
+    }
+
+    private static Agg parseAgg(SqlCall call, ColumnResolver cols) {
+        AggFunc func = aggFunc(call.getOperator().getName());
+        if (func == null) {
+            throw new IllegalArgumentException("Unsupported aggregate: " + call.getOperator().getName());
+        }
+        List<SqlNode> operands = call.getOperandList();
+        if (func == AggFunc.COUNT && (operands.isEmpty()
+                || (operands.get(0) instanceof SqlIdentifier && ((SqlIdentifier) operands.get(0)).isStar()))) {
+            return new Agg(AggFunc.COUNT, -1, null);
+        }
+        if (operands.isEmpty() || !(operands.get(0) instanceof SqlIdentifier)) {
+            throw new IllegalArgumentException("Aggregate " + func + " requires a column argument");
+        }
+        int idx = cols.index(identifierName(operands.get(0)));
+        return new Agg(func, idx, cols.type(idx));
     }
 
     // Translate SELECT <cols|*> FROM a JOIN b ON a.k=b.k WHERE <qualified conjuncts>.

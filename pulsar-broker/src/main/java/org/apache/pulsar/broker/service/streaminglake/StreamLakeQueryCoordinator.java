@@ -93,8 +93,24 @@ public final class StreamLakeQueryCoordinator {
             return s == null ? null : s.schema();
         };
         StreamLakeSqlPlanner.Planned planned = StreamLakeSqlPlanner.planStatement(query, schemas, t -> null);
-        return planned.isJoin() ? prepareJoin(planned.join(), explain)
-                : prepareSingle(query, planned.single(), explain);
+        if (planned.isJoin()) {
+            return prepareJoin(planned.join(), explain);
+        }
+        if (planned.isGroupBy()) {
+            return prepareGroupBy(planned.groupBy(), explain);
+        }
+        return prepareSingle(query, planned.single(), explain);
+    }
+
+    private Prepared prepareGroupBy(StreamLakeSqlPlanner.GroupByPlan gp, boolean explain) {
+        StreamLakeQueryService svc = require(gp.table());
+        if (explain) {
+            return planRow("GROUPBY table=" + gp.table() + " groupCols=" + gp.groupCols().length
+                    + " aggs=" + gp.aggs().size() + " output=" + gp.columnNames());
+        }
+        StreamRunner runner = sink -> StreamLakeGroupBy.aggregate(svc.executor(), gp, svc.joinSpillDir(),
+                svc.rocksdbBlockCacheBytes(), svc.rocksdbWriteBufferBytes(), row -> sink.row(row));
+        return new Prepared(gp.columnNames(), runner);
     }
 
     // Cost-based join planning: build the smaller pruned side; broadcast it if it fits the build-memory
