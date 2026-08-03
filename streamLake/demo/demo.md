@@ -12,10 +12,11 @@ columnar streaming data. It has two tracks:
   bookie storage with **no manual file edits**, start `zk + bookie + broker`, generate load at scale,
   list the resulting ledgers, and run the query.
 
-> Honesty note: registering a StreamLake table and submitting a query are today driven **inside the
-> broker** (Track A, and the load/query helpers in Track B run in the same JVM as the broker in
-> standalone). The **external admin/REST** register + query surface and the dedicated **query‑executor
-> broker tier** (with its own local storage engine) are the next integration step — see §9 “Deferred”.
+> Honesty note: submitting a **query** is now an external `pulsar-admin streamlake query` command
+> (CLI → REST → broker coordinator; §8). **Registering** a topic as a StreamLake table is still driven
+> **inside the broker** (Track A). The external *register* command and the dedicated **query‑executor
+> broker tier** (with its own local storage engine) are the remaining integration steps — see §11
+> “Deferred”.
 
 ---
 
@@ -197,14 +198,37 @@ broker key**; today segment caching is in‑JVM bounded LRU (`segmentCacheMaxEnt
 
 ---
 
-## 8. The query + expected result
+## 8. The query — via `pulsar-admin` CLI (SQL) + expected result
 
-The inner join the demo runs:
+The query is now a first‑class CLI command that submits SQL to the broker and prints the rows. The
+broker plans it (`StreamLakeSqlPlanner`), runs it on the query coordinator (single‑table scan or a
+two‑table **inner equi‑join**), and returns columns + rows:
+
+```bash
+$PULSAR_HOME/bin/pulsar-admin streamlake query streamlake/ns \
+  "SELECT * FROM Person p JOIN Employee e ON p.personId = e.personId
+   WHERE p.age BETWEEN 30 AND 40 AND e.salary >= 40000"
+```
+
+Output (a table; add `--json` for raw JSON):
 
 ```
-SELECT * FROM Person p JOIN Employee e ON p.personId = e.personId
-WHERE p.age BETWEEN 30 AND 40 AND e.salary >= 40000
+Person.personId | Person.name | Person.age | Employee.empId | Employee.personId | Employee.salary
+2010 | person-2010 | 30 | 9000002010 | 2010 | 40000
+2011 | person-2011 | 31 | 9000002011 | 2011 | 41000
+…
+(1,320 rows, 34 ms)
 ```
+
+The path is `pulsar-admin streamlake query` → `PulsarAdmin.streamLake().query(...)` →
+`POST /admin/v3/streamlake/{tenant}/{namespace}/query` → broker coordinator → `scanInnerJoin`. Table
+names in the SQL are the topics in the namespace. (Single‑table queries work too, e.g.
+`SELECT name, age FROM Person WHERE age BETWEEN 30 AND 40`.)
+
+> The **same** query runs through the in‑broker demo runner (Track A) — which additionally *registers*
+> the tables and *loads* the data. Today a topic must be registered as a StreamLake table in‑broker
+> (Track A) before the CLI can query it; the external *register* command is the last remaining gap
+> (§11). The CLI **query** itself is fully wired and verified.
 
 **Data model** (so the answer is checkable): row `i` has `Person.age = 20 + (i % 50)` and
 `Employee.salary = 30000 + (i % 50) * 1000`, with `personId = i` shared by both tables. So a row
@@ -215,8 +239,8 @@ empRows)` shared ids:
 expected = count of i in [0, N) with (i % 50) in [10, 20]   # 11 of every 50
 ```
 
-For `N = 6000` → **1,320** (the runner prints `expected=` and asserts `matches == expected`). The sample
-row shows the concatenated `[empId, personId, salary, personId, name, age]`.
+For `N = 6000` → **1,320**. This is asserted end‑to‑end by `StreamLakeSqlJoinQueryTest` both through the
+coordinator **and** through the admin REST endpoint (the CLI's transport).
 
 **Pruning at work**: the `age ∈ [30,40]` and `salary ≥ 40000` predicates prune whole segments/pages via
 per‑page min/max before any data page is read; only surviving pages are fetched (in parallel, Phase D)
@@ -257,10 +281,12 @@ topic and the ledgers still reach `SEGMENTED`.
 
 ## 11. Deferred (next integration steps)
 
-- **External register + query surface (admin CLI / REST)**: today registration and query run in‑broker
-  (Track A). A thin admin command + REST endpoint to (a) set a topic's `StreamingLakeConfig` and
-  (b) submit SQL to the executor is the next step (the SQL planner + executor already exist:
-  `StreamLakeSqlPlanner`, `StreamLakeQueryExecutor.executeSql`).
+- **DONE — external query surface (admin CLI / REST)**: `pulsar-admin streamlake query` →
+  `POST /admin/v3/streamlake/{tenant}/{ns}/query` → broker coordinator (single scan + inner join). See
+  §8; verified by `StreamLakeSqlJoinQueryTest` (1,320 rows through the REST endpoint).
+- **External *register* command (the remaining gap)**: a topic is still turned into a StreamLake table
+  in‑broker (Track A). A thin admin command + REST endpoint to set a topic's `StreamingLakeConfig`
+  externally is the last piece so the CLI can both register and query on a deployed cluster.
 - **Dedicated query‑executor broker tier** with its own local storage engine (**RocksDB** vs mmap cache —
   under discussion) and object‑storage offload of cold segments.
 - **500 GB+ load generator as a standalone client**: blocked on the external register path above; until
