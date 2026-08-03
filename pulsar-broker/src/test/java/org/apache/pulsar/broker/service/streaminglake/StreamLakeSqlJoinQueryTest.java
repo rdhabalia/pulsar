@@ -119,6 +119,27 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
     }
 
     @Test(timeOut = 300_000)
+    public void orderByUsesExternalSort() throws Exception {
+        StreamLakeQueryCoordinator coordinator = loadTables(1L << 40, StreamingLakeConfig.JoinStrategy.AUTO);
+
+        // Unbounded ORDER BY (no LIMIT) -> RocksDB external sort. Verify full, correctly-ordered output.
+        StreamLakeQueryResult res = coordinator.executeSql(
+                "SELECT personId FROM Person ORDER BY personId DESC");
+        assertEquals(res.getRowCount(), (int) ROWS, "external sort returns every row");
+        assertEquals(res.getColumns(), Arrays.asList("personId"), "projected column");
+        long prev = Long.MAX_VALUE;
+        for (List<Object> row : res.getRows()) {
+            long v = ((Number) row.get(0)).longValue();
+            assertTrue(v <= prev, "rows must be in descending personId order (was " + v + " after " + prev + ")");
+            prev = v;
+        }
+        assertEquals(((Number) res.getRows().get(0).get(0)).longValue(), ROWS - 1, "first row = max personId");
+        assertEquals(((Number) res.getRows().get((int) ROWS - 1).get(0)).longValue(), 0L, "last row = min");
+        System.out.printf("%nORDER BY external sort: %,d rows, first=%s last=%s%n",
+                res.getRowCount(), res.getRows().get(0).get(0), res.getRows().get((int) ROWS - 1).get(0));
+    }
+
+    @Test(timeOut = 300_000)
     public void innerJoinBroadcastReturnsExpectedRows() throws Exception {
         // Huge build budget -> the smaller pruned side is broadcast (built in one table, here the
         // off-heap spilling table); the estimator, streaming contract, and admin REST path are checked.

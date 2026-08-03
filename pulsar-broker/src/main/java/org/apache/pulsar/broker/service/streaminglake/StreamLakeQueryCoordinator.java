@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.function.Function;
 import org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate;
 import org.apache.pulsar.client.streaminglake.StreamLakeSchema;
+import org.apache.pulsar.client.streaminglake.StreamLakeType;
 import org.apache.pulsar.common.policies.data.StreamLakeQueryResult;
 
 /**
@@ -184,8 +185,15 @@ public final class StreamLakeQueryCoordinator {
             return planRow("SCAN " + p.table() + "(" + estimate(svc, p.predicate()) + ")" + order);
         }
         StreamRunner runner;
-        if (p.sortColumn() >= 0) {
-            // ORDER BY needs materialization (bounded by LIMIT top-K); collect then emit.
+        if (p.sortColumn() >= 0 && p.limit() <= 0) {
+            // Unbounded ORDER BY -> RocksDB external sort (streamed, bounded memory).
+            StreamLakeType sortType = svc.schema().columns().get(p.sortColumn()).type();
+            runner = sink -> StreamLakeExternalSort.sort(svc.executor(), p.fromMs(), p.toMs(),
+                    p.predicate(), p.sortColumn(), sortType, p.descending(), p::projectRow,
+                    svc.joinSpillDir(), svc.rocksdbBlockCacheBytes(), svc.rocksdbWriteBufferBytes(),
+                    row -> sink.row(row));
+        } else if (p.sortColumn() >= 0) {
+            // ORDER BY ... LIMIT k -> bounded top-K (cheaper than an external sort).
             runner = sink -> {
                 for (Object[] r : svc.executor().executeSql(query, svc.schema(), null)) {
                     sink.row(r);
