@@ -48,6 +48,11 @@ public interface PulsarAdmin extends Closeable {
     Brokers brokers();
 
     /**
+     * @return the StreamLake query management object
+     */
+    StreamLake streamLake();
+
+    /**
      * @return the tenants management object
      */
     Tenants tenants();

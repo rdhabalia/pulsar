@@ -33,6 +33,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.client.admin.Bookies;
 import org.apache.pulsar.client.admin.BrokerStats;
 import org.apache.pulsar.client.admin.Brokers;
+import org.apache.pulsar.client.admin.StreamLake;
 import org.apache.pulsar.client.admin.Clusters;
 import org.apache.pulsar.client.admin.Functions;
 import org.apache.pulsar.client.admin.Lookup;
@@ -80,6 +81,7 @@ public class PulsarAdminImpl implements PulsarAdmin {
 
     private final Clusters clusters;
     private final Brokers brokers;
+    private final StreamLake streamLake;
     private final BrokerStats brokerStats;
     private final ProxyStats proxyStats;
     private final Tenants tenants;
@@ -172,6 +174,7 @@ public class PulsarAdminImpl implements PulsarAdmin {
         long requestTimeoutMs = clientConfigData.getRequestTimeoutMs();
         this.clusters = new ClustersImpl(root, auth, requestTimeoutMs);
         this.brokers = new BrokersImpl(root, auth, requestTimeoutMs);
+        this.streamLake = new StreamLakeImpl(root, auth, requestTimeoutMs);
         this.brokerStats = new BrokerStatsImpl(root, auth, requestTimeoutMs);
         this.proxyStats = new ProxyStatsImpl(root, auth, requestTimeoutMs);
         this.tenants = new TenantsImpl(root, auth, requestTimeoutMs);
@@ -271,6 +274,10 @@ public class PulsarAdminImpl implements PulsarAdmin {
      */
     public Brokers brokers() {
         return brokers;
+    }
+
+    public StreamLake streamLake() {
+        return streamLake;
     }
 
     /**

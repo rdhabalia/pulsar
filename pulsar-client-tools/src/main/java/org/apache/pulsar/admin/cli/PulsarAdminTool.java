@@ -246,6 +246,7 @@ public class PulsarAdminTool implements CommandHook {
         commandMap.put("ns-isolation-policy", CmdNamespaceIsolationPolicy.class);
         commandMap.put("brokers", CmdBrokers.class);
         commandMap.put("broker-stats", CmdBrokerStats.class);
+        commandMap.put("streamlake", CmdStreamLake.class);
         commandMap.put("tenants", CmdTenants.class);
         commandMap.put("resourcegroups", CmdResourceGroups.class);
         commandMap.put("properties", CmdTenants.CmdProperties.class); // deprecated, doesn't show in usage()

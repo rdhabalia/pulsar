@@ -122,6 +122,15 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
         }
         System.out.printf("%nSQL join returned %,d rows (expected %,d) in %,d ms%n",
                 res.getRowCount(), expected, res.getLatencyMs());
+
+        // Same query over the admin REST API (the transport behind `pulsar-admin streamlake query`).
+        StreamLakeQueryResult viaRest = admin.streamLake().query(TENANT, "ns", sql);
+        assertEquals(viaRest.getRowCount(), (int) expected,
+                "inner-join over the admin REST endpoint must return the same count");
+        assertEquals(viaRest.getColumns(), res.getColumns(),
+                "REST result header must match the coordinator's");
+        System.out.printf("SQL join over admin REST returned %,d rows in %,d ms%n",
+                viaRest.getRowCount(), viaRest.getLatencyMs());
     }
 
     private void register(String topic, StreamingLakeConfig cfg) throws Exception {
