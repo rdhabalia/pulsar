@@ -300,24 +300,38 @@ public final class StreamLakeSqlPlanner {
 
         /**
          * Reorder the executor's {@code concat(rightRow, leftRow)} join rows into natural
-         * {@code [left..., right...]} order and apply the SELECT projection.
+         * {@code [left..., right...]} order and apply the SELECT projection. Used when the <b>left</b>
+         * table is the build side (probe = right), so the executor emits {@code concat(right, left)}.
          */
         public List<Object[]> combine(List<Object[]> concatRows) {
             List<Object[]> out = new ArrayList<>(concatRows.size());
             for (Object[] c : concatRows) {
-                out.add(combineRow(c));
+                out.add(combineFromBuildLeft(c));
             }
             return out;
         }
 
         /**
-         * Reorder a single executor {@code concat(rightRow, leftRow)} row into natural
-         * {@code [left..., right...]} order and apply the projection (used for streaming results).
+         * Map one executor {@code concat(rightRow, leftRow)} row (LEFT built, RIGHT probed) into the
+         * projected natural {@code [left..., right...]} output row.
          */
-        public Object[] combineRow(Object[] concatRow) {
+        public Object[] combineFromBuildLeft(Object[] concatRow) {
             Object[] natural = new Object[leftWidth + rightWidth];
             System.arraycopy(concatRow, rightWidth, natural, 0, leftWidth);   // left columns
             System.arraycopy(concatRow, 0, natural, leftWidth, rightWidth);   // right columns
+            return project(natural);
+        }
+
+        /**
+         * Map one executor {@code concat(leftRow, rightRow)} row (RIGHT built, LEFT probed) into the
+         * projected natural {@code [left..., right...]} output row. Here the executor already emits
+         * {@code [left..., right...]} (probe = left), so no reorder is needed — only projection.
+         */
+        public Object[] combineFromBuildRight(Object[] concatRow) {
+            return project(concatRow);
+        }
+
+        private Object[] project(Object[] natural) {
             if (projection == null) {
                 return natural;
             }

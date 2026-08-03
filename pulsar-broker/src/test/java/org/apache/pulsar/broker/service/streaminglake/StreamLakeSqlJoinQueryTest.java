@@ -63,6 +63,9 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
                 .pageIndexEnsembleSize(1).pageIndexWriteQuorum(1).pageIndexAckQuorum(1)
                 .segmentEnsembleSize(1).segmentWriteQuorum(1).segmentAckQuorum(1)
                 .pageIndexMaxEntriesPerLedger(500).segmentMaxEntriesPerLedger(50)
+                // #6: exercise the off-heap SPILLING build table (row bytes to a file; only the key
+                // index on-heap) + cost-based smaller-side-as-build selection through the coordinator.
+                .joinOffHeapEnabled(true).joinMaxBuildRows(10_000_000)
                 .columns(cols).build();
     }
 

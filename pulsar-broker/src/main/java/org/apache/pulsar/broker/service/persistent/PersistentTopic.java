@@ -830,7 +830,8 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                             getOrCreateStreamLakePageIndex(), schema,
                             brokerService.getPulsar().getExecutor(), cfg.getQueryReadConcurrency(),
                             new org.apache.pulsar.broker.service.streaminglake.StreamLakeStatistics(
-                                    cfg.getEstimatedRowsPerPage(), cfg.getEstimatedPageBytes()));
+                                    cfg.getEstimatedRowsPerPage(), cfg.getEstimatedPageBytes()),
+                            cfg.isJoinOffHeapEnabled(), cfg.getJoinMaxBuildRows(), cfg.getJoinSpillDir());
                     streamLakeQueryService = qs;
                 }
             }

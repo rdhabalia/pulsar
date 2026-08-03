@@ -52,13 +52,17 @@ public final class StreamLakeQueryService {
     private final Executor readExecutor;
     private final int readConcurrency;
     private final StreamLakeStatistics statistics;
+    private final boolean joinOffHeapEnabled;
+    private final long joinMaxBuildRows;
+    private final String joinSpillDir;
 
     private volatile StreamLakePruner pruner;
     private volatile StreamLakeQueryExecutor executor;
 
     private StreamLakeQueryService(ManagedLedger managedLedger, StreamLakeSegmentService segmentService,
             StreamLakePageIndex pageIndex, StreamLakeSchema schema, Executor readExecutor,
-            int readConcurrency, StreamLakeStatistics statistics) {
+            int readConcurrency, StreamLakeStatistics statistics, boolean joinOffHeapEnabled,
+            long joinMaxBuildRows, String joinSpillDir) {
         this.managedLedger = managedLedger;
         this.segmentService = segmentService;
         this.pageIndex = pageIndex;
@@ -66,13 +70,29 @@ public final class StreamLakeQueryService {
         this.readExecutor = readExecutor;
         this.readConcurrency = readConcurrency;
         this.statistics = statistics;
+        this.joinOffHeapEnabled = joinOffHeapEnabled;
+        this.joinMaxBuildRows = joinMaxBuildRows;
+        this.joinSpillDir = joinSpillDir;
     }
 
     public static StreamLakeQueryService create(ManagedLedger managedLedger,
             StreamLakeSegmentService segmentService, StreamLakePageIndex pageIndex, StreamLakeSchema schema,
-            Executor readExecutor, int readConcurrency, StreamLakeStatistics statistics) {
+            Executor readExecutor, int readConcurrency, StreamLakeStatistics statistics,
+            boolean joinOffHeapEnabled, long joinMaxBuildRows, String joinSpillDir) {
         return new StreamLakeQueryService(managedLedger, segmentService, pageIndex, schema, readExecutor,
-                readConcurrency, statistics);
+                readConcurrency, statistics, joinOffHeapEnabled, joinMaxBuildRows, joinSpillDir);
+    }
+
+    /**
+     * A fresh hash-join build table for a join whose build side is <b>this</b> table: an off-heap
+     * {@link org.apache.pulsar.client.streaminglake.SpillingJoinTable spilling} table when
+     * {@code joinOffHeapEnabled} (build sides larger than heap spill row bytes to {@code joinSpillDir}),
+     * else a bounded {@link org.apache.pulsar.client.streaminglake.OnHeapJoinTable on-heap} table.
+     */
+    public org.apache.pulsar.client.streaminglake.StreamLakeJoinTable newBuildTable() {
+        return joinOffHeapEnabled
+                ? new org.apache.pulsar.client.streaminglake.SpillingJoinTable(joinMaxBuildRows, joinSpillDir)
+                : new org.apache.pulsar.client.streaminglake.OnHeapJoinTable(joinMaxBuildRows);
     }
 
     /** The table's columnar schema (from its StreamLake topic policy). */

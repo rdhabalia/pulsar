@@ -22,7 +22,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.Function;
-import org.apache.pulsar.client.streaminglake.OnHeapJoinTable;
+import org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate;
 import org.apache.pulsar.client.streaminglake.StreamLakeSchema;
 import org.apache.pulsar.common.policies.data.StreamLakeQueryResult;
 
@@ -91,9 +91,23 @@ public final class StreamLakeQueryCoordinator {
             StreamLakeSqlPlanner.JoinPlan jp = planned.join();
             StreamLakeQueryService left = require(jp.leftTable());
             StreamLakeQueryService right = require(jp.rightTable());
-            StreamRunner runner = sink -> left.executor().scanInnerJoin(0, Long.MAX_VALUE,
-                    jp.leftPredicate(), jp.leftKey(), right.executor(), jp.rightPredicate(), jp.rightKey(),
-                    new OnHeapJoinTable(Long.MAX_VALUE), row -> sink.row(jp.combineRow(row)));
+            // Cost-based build-side selection: build the SMALLER pruned side (metadata-only estimate),
+            // stream the larger side as the probe. The build table backend (on-heap vs spilling) comes
+            // from the chosen build side's topic config.
+            long leftBytes = estimateBytes(left, jp.leftPredicate());
+            long rightBytes = estimateBytes(right, jp.rightPredicate());
+            StreamRunner runner;
+            if (leftBytes <= rightBytes) {
+                // build = left, probe = right -> executor emits concat(right, left).
+                runner = sink -> left.executor().scanInnerJoin(0, Long.MAX_VALUE, jp.leftPredicate(),
+                        jp.leftKey(), right.executor(), jp.rightPredicate(), jp.rightKey(),
+                        left.newBuildTable(), row -> sink.row(jp.combineFromBuildLeft(row)));
+            } else {
+                // build = right, probe = left -> executor emits concat(left, right) (natural order).
+                runner = sink -> right.executor().scanInnerJoin(0, Long.MAX_VALUE, jp.rightPredicate(),
+                        jp.rightKey(), left.executor(), jp.leftPredicate(), jp.leftKey(),
+                        right.newBuildTable(), row -> sink.row(jp.combineFromBuildRight(row)));
+            }
             return new Prepared(jp.columnNames(), runner);
         }
 
@@ -132,6 +146,16 @@ public final class StreamLakeQueryCoordinator {
             throw new IllegalArgumentException("Table not found or not a loaded StreamLake topic: " + table);
         }
         return svc;
+    }
+
+    // Metadata-only pruned-size estimate for a join side; a failed estimate is treated as "large" so
+    // the side is not chosen as the (resident) build side.
+    private static long estimateBytes(StreamLakeQueryService svc, StreamLakeScanPredicate predicate) {
+        try {
+            return svc.estimate(0, Long.MAX_VALUE, predicate).bytes;
+        } catch (Exception e) {
+            return Long.MAX_VALUE;
+        }
     }
 
     private static List<String> singleColumnNames(StreamLakeSqlPlanner.Plan plan, StreamLakeSchema schema) {
