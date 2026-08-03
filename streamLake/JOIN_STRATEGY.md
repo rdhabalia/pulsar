@@ -66,7 +66,7 @@ row on a key match. Now cost-aware:
 Limit of #6 + spill: the spill **index** is O(build-row-count) on-heap, so a build side of billions of
 rows still doesn't fit. That's what #4 and RocksDB address.
 
-### 3.2 Grace / partitioned hash join (#4) 🚧
+### 3.2 Grace / partitioned hash join (#4) ✅
 
 For two large sides. Hash-partition **both** sides by `hash(key) % N` into N spill files in one pass;
 then join partition `i` (load `build_i`, stream `probe_i`). Resident memory = O(total/N); pick N from
@@ -97,7 +97,7 @@ heavy-hitter sketch (§2):
 
 ---
 
-## 5. Operator selection + guards 🚧
+## 5. Operator selection + guards ✅ (skew 🚧)
 
 A cost-based selector in `prepare()`:
 
@@ -110,11 +110,11 @@ if estResultRows > runawayThreshold:            reject/abort (quadratic blowup g
 config force_strategy = {broadcast|grace|rocksdb|sortmerge}   # escape hatch / tests
 ```
 
-**`EXPLAIN`-lite** 🚧: return/log the chosen operator, per-side estimates, partition count, and any
+**`EXPLAIN`-lite** ✅: return/log the chosen operator, per-side estimates, partition count, and any
 skew keys, so a plan is never a black box.
 
-*(Today #6 already does the build-side selection implicitly via the estimator; the explicit
-broadcast-vs-grace threshold + EXPLAIN arrive with #4.)*
+*(Implemented: the coordinator estimates both sides, builds the smaller, and picks BROADCAST vs GRACE
+by `joinBuildMemoryBudget`; `EXPLAIN <query>` returns the plan. Skew handling (§4) is the remaining 🚧.)*
 
 ---
 
@@ -143,8 +143,9 @@ Cap RocksDB off-heap memory; disable the WAL.
 | `joinOffHeapEnabled` | false | build table spills row bytes to a file |
 | `joinMaxBuildRows` | 5,000,000 | build-side admission guard (fail fast vs OOM) |
 | `joinSpillDir` | "" (JVM temp) | spill directory (point at the query broker's NVMe) |
-| `joinBuildMemoryBudget` 🚧 | – | broadcast-vs-grace threshold |
-| `runawayResultThreshold` 🚧 | – | abort quadratic-blowup queries |
+| `joinBuildMemoryBudget` | 256 MiB | broadcast-vs-grace threshold |
+| `joinMaxPartitions` | 256 | cap on Grace partition count |
+| `runawayResultRows` | 0 (off) | abort quadratic-blowup queries |
 
 ---
 
@@ -155,6 +156,6 @@ Cap RocksDB off-heap memory; disable the WAL.
 3. ✅ #6 broadcast smaller-side-as-build + off-heap spill wiring.
 4. 🚧 HLL + heavy-hitter sketches (segment) → cardinality/skew/result-size.
 5. 🚧 Selector + `EXPLAIN`-lite + runaway guard.
-6. 🚧 #4 Grace partitioned join + skew (broadcast/salting) + key-filter pushdown.
+6. ✅ #4 Grace partitioned join · 🚧 skew (broadcast/salting) + key-filter pushdown.
 7. 🚧 RocksDB external sort (ORDER BY) → GROUP BY (planner + aggregation).
 8. 🚧 Optional: RocksDB / sort-merge join backends.
