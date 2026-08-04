@@ -119,6 +119,14 @@ public class StreamingLakeConfig {
     private boolean asyncSegmentBuildViaSystemTopic = false;
 
     /**
+     * Number of <b>shards (partitions)</b> for the per-namespace {@code __streamlake_segment_build}
+     * system topic. Requests are keyed by data topic, so each shard has one active failover consumer;
+     * with all brokers subscribed, the shards spread the segment-build load across brokers. Default 16.
+     */
+    @Builder.Default
+    private int segmentBuildTopicPartitions = 16;
+
+    /**
      * Max segments held resident per topic. Segments are loaded on demand from their catalog offset and
      * cached in a bounded LRU, so query-tier memory is O(cache) rather than O(all data ledgers).
      * Default 512.

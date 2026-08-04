@@ -60,29 +60,45 @@ public final class StreamLakeSegmentBuildQueue implements AutoCloseable {
 
     private final PulsarService pulsar;
     private final String systemTopic;
+    private final int partitions;
     private final Function<String, StreamLakeSegmentBuilder> builderResolver;
 
     private volatile Producer<byte[]> producer;
     private volatile Consumer<byte[]> consumer;
     private volatile boolean closed;
 
-    private StreamLakeSegmentBuildQueue(PulsarService pulsar, NamespaceName ns,
+    private StreamLakeSegmentBuildQueue(PulsarService pulsar, NamespaceName ns, int partitions,
             Function<String, StreamLakeSegmentBuilder> builderResolver) {
         this.pulsar = pulsar;
         this.systemTopic = "persistent://" + ns.toString() + "/" + SYSTEM_TOPIC;
+        this.partitions = Math.max(1, partitions);
         this.builderResolver = builderResolver;
     }
 
     /**
-     * Create the queue for a namespace and eagerly start the build consumer (failover subscription) so
-     * requests are drained even on a broker that produced none. Never throws; a consumer that fails to
-     * start is retried on the next publish/build.
+     * Create the queue for a namespace: ensure the <b>sharded</b> (partitioned) build topic exists and
+     * eagerly start the failover build consumer, so every broker subscribes and the shards spread the
+     * build load across brokers. Never throws; a consumer that fails to start is retried on next use.
      */
-    public static StreamLakeSegmentBuildQueue create(PulsarService pulsar, NamespaceName ns,
+    public static StreamLakeSegmentBuildQueue create(PulsarService pulsar, NamespaceName ns, int partitions,
             Function<String, StreamLakeSegmentBuilder> builderResolver) {
-        StreamLakeSegmentBuildQueue q = new StreamLakeSegmentBuildQueue(pulsar, ns, builderResolver);
+        StreamLakeSegmentBuildQueue q = new StreamLakeSegmentBuildQueue(pulsar, ns, partitions,
+                builderResolver);
+        q.ensurePartitionedTopic();
         q.ensureConsumer();
         return q;
+    }
+
+    // Create the partitioned system topic (idempotent: ignore "already exists").
+    private void ensurePartitionedTopic() {
+        try {
+            pulsar.getAdminClient().topics().createPartitionedTopic(systemTopic, partitions);
+        } catch (org.apache.pulsar.client.admin.PulsarAdminException.ConflictException alreadyExists) {
+            // fine -- already created
+        } catch (Exception e) {
+            log.warn("StreamLake could not create sharded build topic {} ({} partitions): {}",
+                    systemTopic, partitions, e.toString());
+        }
     }
 
     /**

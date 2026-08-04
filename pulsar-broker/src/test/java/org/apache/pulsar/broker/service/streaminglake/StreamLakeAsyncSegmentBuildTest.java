@@ -133,11 +133,11 @@ public class StreamLakeAsyncSegmentBuildTest extends StreamLakeRealBookieTestBas
             }
         });
 
-        // Prove the build actually went through the system topic (not an inline fallback): the system
-        // topic must have received at least one request per closed ledger.
-        long published = admin.topics().getStats(systemTopic).getMsgInCounter();
+        // Prove the build actually went through the (sharded) system topic: aggregate stats across its
+        // partitions must show at least one request per closed ledger.
+        long published = admin.topics().getPartitionedStats(systemTopic, false).getMsgInCounter();
         assertTrue(published >= closedLedgers.size(),
-                "system topic should carry one build request per closed ledger, was " + published
+                "sharded system topic should carry one build request per closed ledger, was " + published
                         + " for " + closedLedgers.size() + " closed ledgers");
     }
 }

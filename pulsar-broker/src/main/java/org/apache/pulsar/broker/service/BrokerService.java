@@ -2477,10 +2477,10 @@ public class BrokerService implements Closeable {
      * request for a topic not owned here is redelivered until its owner handles it.
      */
     public org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuildQueue
-            getStreamLakeSegmentBuildQueue(NamespaceName ns) {
+            getStreamLakeSegmentBuildQueue(NamespaceName ns, int partitions) {
         return streamLakeBuildQueues.computeIfAbsent(ns, n ->
                 org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuildQueue.create(
-                        pulsar, n, this::resolveStreamLakeBuilder));
+                        pulsar, n, partitions, this::resolveStreamLakeBuilder));
     }
 
     private org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuilder
