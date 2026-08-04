@@ -2485,12 +2485,52 @@ public class BrokerService implements Closeable {
 
     private org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuilder
             resolveStreamLakeBuilder(String dataTopic) {
+        // Prefer a locally-owned topic's builder (shares open handles).
         Optional<Topic> ref = getTopicReference(dataTopic);
-        if (ref.isEmpty() || !(ref.get() instanceof PersistentTopic)) {
+        if (ref.isPresent() && ref.get() instanceof PersistentTopic) {
+            var svc = ((PersistentTopic) ref.get()).getStreamLakeSegmentService();
+            if (svc != null) {
+                return svc.builder();
+            }
+        }
+        // Headless: open the topic's StreamLake metadata directly from BookKeeper, so ANY broker can
+        // build the segment for a closed data ledger without owning the data topic.
+        return headlessStreamLakeBuilder(dataTopic);
+    }
+
+    private org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuilder
+            headlessStreamLakeBuilder(String dataTopic) {
+        try {
+            org.apache.pulsar.common.naming.TopicName tn =
+                    org.apache.pulsar.common.naming.TopicName.get(dataTopic);
+            java.util.Optional<org.apache.pulsar.common.policies.data.TopicPolicies> pol =
+                    pulsar.getTopicPoliciesService().getTopicPoliciesAsync(tn,
+                            TopicPoliciesService.GetType.LOCAL_ONLY).get(30, TimeUnit.SECONDS);
+            org.apache.pulsar.common.policies.data.StreamingLakeConfig cfg = pol
+                    .map(org.apache.pulsar.common.policies.data.TopicPolicies::getStreamingLake)
+                    .orElse(null);
+            if (cfg == null || !cfg.isEnabled()) {
+                return null;
+            }
+            String mlName = tn.getPersistenceNamingEncoding();
+            var bk = pulsar.getBookKeeperClient();
+            var metaStore = new org.apache.pulsar.broker.service.streaminglake.StreamLakeMetaStore(
+                    pulsar.getLocalMetadataStore(), mlName);
+            var pageIndex = org.apache.pulsar.broker.service.streaminglake.StreamLakePageIndex.open(
+                    bk, metaStore, 1L << 30, cfg.getPageIndexMaxEntriesPerLedger(),
+                    cfg.getPageIndexEnsembleSize(), cfg.getPageIndexWriteQuorum(),
+                    cfg.getPageIndexAckQuorum());
+            var segmentStore = org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentStore.open(
+                    bk, metaStore, 1L << 30, cfg.getSegmentMaxEntriesPerLedger(),
+                    cfg.getSegmentEnsembleSize(), cfg.getSegmentWriteQuorum(), cfg.getSegmentAckQuorum(),
+                    cfg.getSegmentCacheMaxEntries());
+            var catalog = org.apache.pulsar.broker.service.streaminglake.StreamLakeCatalog.open(bk, metaStore);
+            return new org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuilder(
+                    pageIndex, segmentStore, catalog, cfg.getSegmentColumnMaxBytes(), cfg.getBloomFpp());
+        } catch (Exception e) {
+            log.warn().exception(e).log("StreamLake headless segment-builder open failed for " + dataTopic);
             return null;
         }
-        var svc = ((PersistentTopic) ref.get()).getStreamLakeSegmentService();
-        return svc == null ? null : svc.builder();
     }
 
     private void closeStreamLakeBuildQueues() {

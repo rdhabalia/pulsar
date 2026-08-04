@@ -54,13 +54,23 @@ public class StreamLakeMetaStore {
     private static final int MAX_ATTEMPTS = 5;
 
     private final MetadataStore store;
-    private final ManagedLedger ml;
+    private final String name;
     private final String path;
 
     public StreamLakeMetaStore(MetadataStore store, ManagedLedger ml) {
+        this(store, ml.getName());
+    }
+
+    /** Open the metastore by managed-ledger name (topic path) alone -- for headless/off-broker builds. */
+    public StreamLakeMetaStore(MetadataStore store, String managedLedgerName) {
         this.store = store;
-        this.ml = ml;
-        this.path = ROOT + "/" + ml.getName();
+        this.name = managedLedgerName;
+        this.path = ROOT + "/" + managedLedgerName;
+    }
+
+    /** The managed-ledger name (topic path) this metastore node is keyed by. */
+    public String name() {
+        return name;
     }
 
     /** The persisted index pointers; a null/empty field means "not set". */

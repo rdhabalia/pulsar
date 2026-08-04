@@ -85,7 +85,6 @@ public class StreamLakePageIndex implements AutoCloseable {
     }
 
     private final BookKeeper bk;
-    private final ManagedLedger ml;
     private final StreamLakeMetaStore metaStore;
     private final long maxHeadBytes;
     private final int maxEntriesPerLedger;
@@ -101,11 +100,10 @@ public class StreamLakePageIndex implements AutoCloseable {
     private int headEntryCount;
     private long headDataLedger = -1; // the data ledger the head is currently accumulating footers for
 
-    private StreamLakePageIndex(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
+    private StreamLakePageIndex(BookKeeper bk, StreamLakeMetaStore metaStore,
                                 long maxHeadBytes, int maxEntriesPerLedger,
                                 int ensembleSize, int writeQuorum, int ackQuorum) {
         this.bk = bk;
-        this.ml = ml;
         this.metaStore = metaStore;
         this.maxHeadBytes = maxHeadBytes > 0 ? maxHeadBytes : DEFAULT_MAX_HEAD_BYTES;
         this.maxEntriesPerLedger = maxEntriesPerLedger > 0 ? maxEntriesPerLedger : DEFAULT_MAX_ENTRIES;
@@ -148,13 +146,20 @@ public class StreamLakePageIndex implements AutoCloseable {
      */
     public static StreamLakePageIndex open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
             long maxHeadBytes, int maxEntriesPerLedger, int ensembleSize, int writeQuorum, int ackQuorum) {
-        StreamLakePageIndex idx = new StreamLakePageIndex(bk, ml, metaStore, maxHeadBytes,
+        return open(bk, metaStore, maxHeadBytes, maxEntriesPerLedger, ensembleSize, writeQuorum, ackQuorum);
+    }
+
+    /** Headless open by metastore alone (no ManagedLedger) -- for off-broker builds. */
+    public static StreamLakePageIndex open(BookKeeper bk, StreamLakeMetaStore metaStore,
+            long maxHeadBytes, int maxEntriesPerLedger, int ensembleSize, int writeQuorum, int ackQuorum) {
+        StreamLakePageIndex idx = new StreamLakePageIndex(bk, metaStore, maxHeadBytes,
                 maxEntriesPerLedger, ensembleSize, writeQuorum, ackQuorum);
         try {
             idx.chain.addAll(metaStore.read().pageIndexLedgerIds);
             idx.replay();
         } catch (Exception e) {
-            log.warn("StreamLake page index falling back to empty for {}: {}", ml.getName(), e.toString());
+            log.warn("StreamLake page index falling back to empty for {}: {}",
+                    metaStore.name(), e.toString());
         }
         return idx;
     }
@@ -308,7 +313,7 @@ public class StreamLakePageIndex implements AutoCloseable {
                 // a chain entry was already GC'd; skip it
             } catch (Exception e) {
                 log.warn("StreamLake page index replay skipped ledger {} for {}: {}",
-                        ledgerId, ml.getName(), e.toString());
+                        ledgerId, metaStore.name(), e.toString());
             }
         }
     }

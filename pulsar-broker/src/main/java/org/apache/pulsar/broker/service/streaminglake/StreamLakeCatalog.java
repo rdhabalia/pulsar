@@ -124,24 +124,28 @@ public class StreamLakeCatalog implements AutoCloseable {
     }
 
     private final BookKeeper bk;
-    private final ManagedLedger ml;
     private final StreamLakeMetaStore metaStore;
     private final ConcurrentMap<Long, LedgerInfo> infos = new ConcurrentHashMap<>();
     private volatile LedgerHandle writeLedger; // null => in-memory only (BK unavailable)
 
-    private StreamLakeCatalog(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore) {
+    private StreamLakeCatalog(BookKeeper bk, StreamLakeMetaStore metaStore) {
         this.bk = bk;
-        this.ml = ml;
         this.metaStore = metaStore;
     }
 
     /** Load (replay + rotate) the catalog ledger; never throws -- falls back to an in-memory catalog. */
     public static StreamLakeCatalog open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore) {
-        StreamLakeCatalog cat = new StreamLakeCatalog(bk, ml, metaStore);
+        return open(bk, metaStore);
+    }
+
+    /** Headless open by metastore alone (no ManagedLedger) -- for off-broker builds. */
+    public static StreamLakeCatalog open(BookKeeper bk, StreamLakeMetaStore metaStore) {
+        StreamLakeCatalog cat = new StreamLakeCatalog(bk, metaStore);
         try {
             cat.loadAndRotate();
         } catch (Exception e) {
-            log.warn("StreamLake catalog falling back to in-memory for {}: {}", ml.getName(), e.toString());
+            log.warn("StreamLake catalog falling back to in-memory for {}: {}",
+                    metaStore.name(), e.toString());
             cat.writeLedger = null;
         }
         return cat;
@@ -276,7 +280,7 @@ public class StreamLakeCatalog implements AutoCloseable {
                     writeLedger.addEntry(encode(info));
                 }
             } catch (Exception ex) {
-                log.warn("StreamLake catalog append failed for {}: {}", ml.getName(), ex.toString());
+                log.warn("StreamLake catalog append failed for {}: {}", metaStore.name(), ex.toString());
             }
         }
     }

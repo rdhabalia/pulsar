@@ -81,7 +81,6 @@ public class StreamLakeSegmentStore implements AutoCloseable {
     }
 
     private final BookKeeper bk;
-    private final ManagedLedger ml;
     private final StreamLakeMetaStore metaStore;
     private final long maxHeadBytes;
     private final int maxEntriesPerLedger;
@@ -97,11 +96,10 @@ public class StreamLakeSegmentStore implements AutoCloseable {
     private long headBytes;
     private int headEntryCount;
 
-    private StreamLakeSegmentStore(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
+    private StreamLakeSegmentStore(BookKeeper bk, StreamLakeMetaStore metaStore,
                                    long maxHeadBytes, int maxEntriesPerLedger, int ensembleSize,
                                    int writeQuorum, int ackQuorum, int cacheMaxEntries) {
         this.bk = bk;
-        this.ml = ml;
         this.metaStore = metaStore;
         this.maxHeadBytes = maxHeadBytes > 0 ? maxHeadBytes : DEFAULT_MAX_HEAD_BYTES;
         this.maxEntriesPerLedger = maxEntriesPerLedger > 0 ? maxEntriesPerLedger
@@ -149,12 +147,21 @@ public class StreamLakeSegmentStore implements AutoCloseable {
     public static StreamLakeSegmentStore open(BookKeeper bk, ManagedLedger ml, StreamLakeMetaStore metaStore,
             long maxHeadBytes, int maxEntriesPerLedger, int ensembleSize, int writeQuorum, int ackQuorum,
             int cacheMaxEntries) {
-        StreamLakeSegmentStore store = new StreamLakeSegmentStore(bk, ml, metaStore, maxHeadBytes,
+        return open(bk, metaStore, maxHeadBytes, maxEntriesPerLedger, ensembleSize, writeQuorum, ackQuorum,
+                cacheMaxEntries);
+    }
+
+    /** Headless open by metastore alone (no ManagedLedger) -- for off-broker builds. */
+    public static StreamLakeSegmentStore open(BookKeeper bk, StreamLakeMetaStore metaStore,
+            long maxHeadBytes, int maxEntriesPerLedger, int ensembleSize, int writeQuorum, int ackQuorum,
+            int cacheMaxEntries) {
+        StreamLakeSegmentStore store = new StreamLakeSegmentStore(bk, metaStore, maxHeadBytes,
                 maxEntriesPerLedger, ensembleSize, writeQuorum, ackQuorum, cacheMaxEntries);
         try {
             store.chain.addAll(metaStore.read().segmentLedgerIds);
         } catch (Exception e) {
-            log.warn("StreamLake segment store falling back to empty for {}: {}", ml.getName(), e.toString());
+            log.warn("StreamLake segment store falling back to empty for {}: {}",
+                    metaStore.name(), e.toString());
         }
         return store;
     }
