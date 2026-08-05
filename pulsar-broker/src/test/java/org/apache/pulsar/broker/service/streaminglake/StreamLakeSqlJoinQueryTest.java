@@ -34,6 +34,7 @@ import org.apache.pulsar.client.streaminglake.StreamLakeType;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.StreamLakeQueryResult;
+import org.apache.pulsar.common.policies.data.StreamLakeQueryStats;
 import org.apache.pulsar.common.policies.data.StreamingLakeConfig;
 import org.awaitility.Awaitility;
 import org.testng.annotations.Test;
@@ -116,6 +117,27 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
             }
         }
         return expected;
+    }
+
+    @Test(timeOut = 300_000)
+    public void queryReportsExecutionMetrics() throws Exception {
+        StreamLakeQueryCoordinator coordinator = loadTables(1L << 40, StreamingLakeConfig.JoinStrategy.AUTO);
+
+        // Person.age = 20 + (personId % 50), so age in [30,40] keeps 11 of 50 bands x 120 rows = 1320.
+        StreamLakeQueryCoordinator.Prepared prepared =
+                coordinator.prepare("SELECT personId, age FROM Person WHERE age BETWEEN 30 AND 40");
+        long[] returned = {0};
+        prepared.stream(row -> returned[0]++);
+
+        StreamLakeQueryStats s = prepared.metrics().toStats();
+        assertEquals(returned[0], 1320L, "age 30..40 -> 11 bands x 120 rows");
+        assertTrue(s.getRowsRead() >= returned[0], "rows read >= rows returned (read includes filtered)");
+        assertTrue(s.getPagesScanned() > 0, "pages were scanned during pruning");
+        assertTrue(s.getPagesKept() > 0, "some pages survived pruning");
+        assertTrue(s.getPagesKept() <= s.getPagesScanned(), "kept <= scanned");
+        assertTrue(s.getBytesRead() > 0, "kept pages' Arrow bytes were read");
+        assertTrue(s.getCandidateLedgers() > 0, "candidate ledgers were considered");
+        assertTrue(s.getPeakReadBufferBytes() > 0, "a bounded read buffer was used");
     }
 
     @Test(timeOut = 300_000)

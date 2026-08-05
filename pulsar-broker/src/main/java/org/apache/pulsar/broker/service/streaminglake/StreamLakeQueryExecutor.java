@@ -65,6 +65,7 @@ public class StreamLakeQueryExecutor {
     private final PageReader pageReader;
     private final Executor readExecutor;
     private final int readConcurrency;
+    private final StreamLakeQueryMetrics metrics;
 
     /** Serial reader (no page read-ahead). */
     public StreamLakeQueryExecutor(StreamLakePruner pruner, PageReader pageReader) {
@@ -79,10 +80,27 @@ public class StreamLakeQueryExecutor {
      */
     public StreamLakeQueryExecutor(StreamLakePruner pruner, PageReader pageReader,
             Executor readExecutor, int readConcurrency) {
+        this(pruner, pageReader, readExecutor, readConcurrency, new StreamLakeQueryMetrics());
+    }
+
+    /**
+     * Metrics-bound executor: as it prunes, reads and decodes pages it accumulates the per-query
+     * counters into {@code metrics} (rows read, bytes read, pages scanned/kept). One metrics instance is
+     * shared across both sides of a join so the numbers are whole-query totals.
+     */
+    public StreamLakeQueryExecutor(StreamLakePruner pruner, PageReader pageReader,
+            Executor readExecutor, int readConcurrency, StreamLakeQueryMetrics metrics) {
         this.pruner = pruner;
         this.pageReader = pageReader;
         this.readExecutor = readExecutor;
         this.readConcurrency = readConcurrency;
+        this.metrics = metrics;
+        metrics.setReadConcurrency(readConcurrency);
+    }
+
+    /** The per-query execution counters this executor accumulates into. */
+    public StreamLakeQueryMetrics metrics() {
+        return metrics;
     }
 
     /** Scan a topic: prune to candidate pages, read them, and exactly row-filter by the predicate. */
@@ -101,6 +119,7 @@ public class StreamLakeQueryExecutor {
         try (StreamLakeArrowBatchDecoder decoder = new StreamLakeArrowBatchDecoder()) {
             forEachPage(fromMs, toMs, predicate, (p, arrow) -> {
                 for (Object[] row : decoder.decodeRows(arrow)) {
+                    metrics.incRowsRead();
                     if (predicate.matchesRow(row)) {
                         out.accept(row);
                     }
@@ -227,6 +246,7 @@ public class StreamLakeQueryExecutor {
                 try (StreamLakeArrowBatchDecoder.Batch batch = decoder.open(arrow)) {
                     int cols = batch.columnCount();
                     for (int r = 0; r < batch.rowCount(); r++) {
+                        metrics.incRowsRead();
                         if (matchesRowLazy(predicate, predicateColumns, batch, r, cols)) {
                             visitor.visit(batch, r);
                         }
@@ -252,25 +272,30 @@ public class StreamLakeQueryExecutor {
      */
     private void forEachPage(long fromMs, long toMs, StreamLakeScanPredicate predicate, PageConsumer consumer)
             throws Exception {
+        StreamLakePruner.Stats stats = new StreamLakePruner.Stats();
         if (readExecutor == null || readConcurrency <= 1) {
-            pruner.prune(fromMs, toMs, predicate, new StreamLakePruner.Stats(),
-                    p -> consumer.accept(p, pageReader.readArrowBatch(p.ledgerId, p.entryId)));
+            pruner.prune(fromMs, toMs, predicate, stats, p -> {
+                byte[] arrow = pageReader.readArrowBatch(p.ledgerId, p.entryId);
+                deliver(consumer, p, arrow);
+            });
+            metrics.addPruneStats(stats);
             return;
         }
         int window = readConcurrency;
         ArrayDeque<CompletableFuture<byte[]>> inFlight = new ArrayDeque<>(window);
         ArrayDeque<StreamLakePruner.PagePointer> pending = new ArrayDeque<>(window);
         try {
-            pruner.prune(fromMs, toMs, predicate, new StreamLakePruner.Stats(), p -> {
+            pruner.prune(fromMs, toMs, predicate, stats, p -> {
                 inFlight.add(submitRead(p));
                 pending.add(p);
                 if (inFlight.size() >= window) {
-                    consumer.accept(pending.poll(), await(inFlight.poll()));
+                    deliver(consumer, pending.poll(), await(inFlight.poll()));
                 }
             });
             while (!inFlight.isEmpty()) {
-                consumer.accept(pending.poll(), await(inFlight.poll()));
+                deliver(consumer, pending.poll(), await(inFlight.poll()));
             }
+            metrics.addPruneStats(stats);
         } catch (Exception e) {
             // Cancel any still-in-flight reads so a failure mid-scan doesn't leak the read pool/buffers.
             for (CompletableFuture<byte[]> f : inFlight) {
@@ -278,6 +303,13 @@ public class StreamLakeQueryExecutor {
             }
             throw e;
         }
+    }
+
+    /** Record a read page's size, then hand it (in order) to the consumer. */
+    private void deliver(PageConsumer consumer, StreamLakePruner.PagePointer p, byte[] arrow)
+            throws Exception {
+        metrics.recordPageRead(arrow.length);
+        consumer.accept(p, arrow);
     }
 
     /** Await a read, unwrapping the (possibly double-wrapped) cause as the original checked exception. */

@@ -167,3 +167,8 @@ Cap RocksDB off-heap memory; disable the WAL.
    the only remaining ledger-count-resident structure is the catalog itself (see #10).
 10. 🚧 Time-indexed / paged catalog — the resident `StreamLakeCatalog.infos` map is still fully in memory
     (~10 MB @ 5 PB); page/time-index it so it need not be wholly resident at very high ledger counts.
+11. ✅ Query execution stats — the executor accumulates per-query counters (`StreamLakeQueryMetrics`:
+    rows read, pages scanned/kept/pruned, candidate ledgers, bytes read, peak read buffer) shared across
+    both join sides; the REST layer appends a trailing NDJSON **object** (`StreamLakeQueryStats`) with
+    those plus rows/bytes returned + elapsed, and `pulsar-admin streamlake query` prints the rows as an
+    aligned **table** followed by that stats **footer** (`--json` still streams NDJSON, stats included).

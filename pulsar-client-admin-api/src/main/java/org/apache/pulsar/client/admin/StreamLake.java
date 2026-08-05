@@ -30,8 +30,9 @@ public interface StreamLake {
 
     /**
      * Run a StreamLake SQL query over the tables in {@code tenant/namespace} and return the result.
-     * Supported: {@code SELECT <cols|*> FROM <table> [<alias>] [JOIN <table> <alias> ON a.k=b.k]
-     * WHERE <conjunctive predicates>}. Table names refer to topics in the given namespace.
+     * Supported: {@code SELECT &lt;cols|*&gt; FROM &lt;table&gt; [&lt;alias&gt;] [JOIN &lt;table&gt;
+     * &lt;alias&gt; ON a.k=b.k] WHERE &lt;conjunctive predicates&gt;}. Table names refer to topics in
+     * the given namespace.
      *
      * @param tenant    the tenant
      * @param namespace the namespace (its topics are the queryable tables)

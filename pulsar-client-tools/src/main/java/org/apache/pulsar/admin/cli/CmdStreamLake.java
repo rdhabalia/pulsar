@@ -18,12 +18,13 @@
  */
 package org.apache.pulsar.admin.cli;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.admin.StreamLakeQueryResultHandler;
 import org.apache.pulsar.common.naming.NamespaceName;
+import org.apache.pulsar.common.policies.data.StreamLakeQueryStats;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -60,25 +61,96 @@ public class CmdStreamLake extends CmdBase {
         @Override
         void run() throws Exception {
             NamespaceName ns = NamespaceName.get(validateNamespace(namespace));
-            final long[] count = {0};
+            if (json) {
+                runJson(ns);
+            } else {
+                runTable(ns);
+            }
+        }
+
+        // --json: stream each row (and the trailing stats) as JSON, one per line (no client buffering).
+        private void runJson(NamespaceName ns) throws Exception {
             getAdmin().streamLake().query(ns.getTenant(), ns.getLocalName(), sql,
                     new StreamLakeQueryResultHandler() {
                         @Override
                         public void columns(List<String> columns) {
-                            print(json ? toJson(columns) : String.join(" | ", columns));
+                            print(toJson(columns));
                         }
 
                         @Override
                         public void row(List<Object> row) {
-                            count[0]++;
-                            print(json ? toJson(row) : row.stream()
-                                    .map(v -> v == null ? "null" : v.toString())
-                                    .collect(Collectors.joining(" | ")));
+                            print(toJson(row));
+                        }
+
+                        @Override
+                        public void summary(StreamLakeQueryStats stats) {
+                            print(toJson(stats));
                         }
                     });
-            if (!json) {
-                print(String.format("(%,d rows)", count[0]));
+        }
+
+        // Default: buffer the rows (needed to size columns), print an aligned table, then a stats footer.
+        private void runTable(NamespaceName ns) throws Exception {
+            List<String> cols = new ArrayList<>();
+            List<List<Object>> rows = new ArrayList<>();
+            StreamLakeQueryStats[] stats = {null};
+            getAdmin().streamLake().query(ns.getTenant(), ns.getLocalName(), sql,
+                    new StreamLakeQueryResultHandler() {
+                        @Override
+                        public void columns(List<String> columns) {
+                            cols.addAll(columns);
+                        }
+
+                        @Override
+                        public void row(List<Object> row) {
+                            rows.add(row);
+                        }
+
+                        @Override
+                        public void summary(StreamLakeQueryStats s) {
+                            stats[0] = s;
+                        }
+                    });
+            printTable(cols, rows);
+            print(String.format("(%,d rows)", rows.size()));
+            if (stats[0] != null) {
+                printFooter(stats[0]);
             }
+        }
+
+        private void printTable(List<String> cols, List<List<Object>> rows) {
+            int n = cols.size();
+            int[] width = new int[n];
+            for (int i = 0; i < n; i++) {
+                width[i] = cols.get(i) == null ? 4 : cols.get(i).length();
+            }
+            List<String[]> cells = new ArrayList<>(rows.size());
+            for (List<Object> row : rows) {
+                String[] c = new String[n];
+                for (int i = 0; i < n; i++) {
+                    Object v = i < row.size() ? row.get(i) : null;
+                    c[i] = v == null ? "null" : v.toString();
+                    width[i] = Math.max(width[i], c[i].length());
+                }
+                cells.add(c);
+            }
+            print(renderRow(cols.toArray(new String[0]), width));
+            print(renderSeparator(width));
+            for (String[] c : cells) {
+                print(renderRow(c, width));
+            }
+        }
+
+        private void printFooter(StreamLakeQueryStats s) {
+            print("");
+            print(String.format("rows returned: %,d   rows read: %,d",
+                    s.getRowsReturned(), s.getRowsRead()));
+            print(String.format("pages scanned: %,d   kept: %,d   pruned: %,d   candidate ledgers: %,d",
+                    s.getPagesScanned(), s.getPagesKept(), s.getPagesPruned(), s.getCandidateLedgers()));
+            print(String.format("bytes read: %s   bytes returned: %s   peak read buffer: %s",
+                    humanBytes(s.getBytesRead()), humanBytes(s.getBytesReturned()),
+                    humanBytes(s.getPeakReadBufferBytes())));
+            print(String.format("elapsed: %,d ms", s.getElapsedMs()));
         }
 
         private String toJson(Object value) {
@@ -88,5 +160,47 @@ public class CmdStreamLake extends CmdBase {
                 throw new RuntimeException(e);
             }
         }
+    }
+
+    private static String renderRow(String[] cells, int[] width) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < width.length; i++) {
+            if (i > 0) {
+                sb.append(" | ");
+            }
+            String v = i < cells.length && cells[i] != null ? cells[i] : "";
+            sb.append(v);
+            for (int p = v.length(); p < width[i]; p++) {
+                sb.append(' ');
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String renderSeparator(int[] width) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < width.length; i++) {
+            if (i > 0) {
+                sb.append("-+-");
+            }
+            for (int p = 0; p < width[i]; p++) {
+                sb.append('-');
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String humanBytes(long b) {
+        if (b < 1024) {
+            return b + " B";
+        }
+        String[] u = {"KiB", "MiB", "GiB", "TiB", "PiB"};
+        double v = b;
+        int i = -1;
+        do {
+            v /= 1024;
+            i++;
+        } while (v >= 1024 && i < u.length - 1);
+        return String.format("%.1f %s", v, u[i]);
     }
 }

@@ -60,10 +60,12 @@ public final class StreamLakeQueryCoordinator {
     public static final class Prepared {
         private final List<String> columns;
         private final StreamRunner runner;
+        private final StreamLakeQueryMetrics metrics;
 
-        private Prepared(List<String> columns, StreamRunner runner) {
+        private Prepared(List<String> columns, StreamRunner runner, StreamLakeQueryMetrics metrics) {
             this.columns = columns;
             this.runner = runner;
+            this.metrics = metrics;
         }
 
         /** Result column names, in output order (available before any row is produced). */
@@ -74,6 +76,11 @@ public final class StreamLakeQueryCoordinator {
         /** Execute the query, pushing each result row to {@code sink} as it is produced. */
         public void stream(RowSink sink) throws Exception {
             runner.run(sink);
+        }
+
+        /** Per-query broker-side execution counters, populated as {@link #stream} runs. */
+        public StreamLakeQueryMetrics metrics() {
+            return metrics;
         }
     }
 
@@ -92,30 +99,34 @@ public final class StreamLakeQueryCoordinator {
             StreamLakeQueryService s = serviceByTable.apply(table);
             return s == null ? null : s.schema();
         };
+        StreamLakeQueryMetrics metrics = new StreamLakeQueryMetrics();
         StreamLakeSqlPlanner.Planned planned = StreamLakeSqlPlanner.planStatement(query, schemas, t -> null);
         if (planned.isJoin()) {
-            return prepareJoin(planned.join(), explain);
+            return prepareJoin(planned.join(), explain, metrics);
         }
         if (planned.isGroupBy()) {
-            return prepareGroupBy(planned.groupBy(), explain);
+            return prepareGroupBy(planned.groupBy(), explain, metrics);
         }
-        return prepareSingle(query, planned.single(), explain);
+        return prepareSingle(query, planned.single(), explain, metrics);
     }
 
-    private Prepared prepareGroupBy(StreamLakeSqlPlanner.GroupByPlan gp, boolean explain) {
+    private Prepared prepareGroupBy(StreamLakeSqlPlanner.GroupByPlan gp, boolean explain,
+            StreamLakeQueryMetrics metrics) {
         StreamLakeQueryService svc = require(gp.table());
         if (explain) {
             return planRow("GROUPBY table=" + gp.table() + " groupCols=" + gp.groupCols().length
-                    + " aggs=" + gp.aggs().size() + " output=" + gp.columnNames());
+                    + " aggs=" + gp.aggs().size() + " output=" + gp.columnNames(), metrics);
         }
-        StreamRunner runner = sink -> StreamLakeGroupBy.aggregate(svc.executor(), gp, svc.joinSpillDir(),
-                svc.rocksdbBlockCacheBytes(), svc.rocksdbWriteBufferBytes(), row -> sink.row(row));
-        return new Prepared(gp.columnNames(), runner);
+        StreamRunner runner = sink -> StreamLakeGroupBy.aggregate(svc.executor(metrics), gp,
+                svc.joinSpillDir(), svc.rocksdbBlockCacheBytes(), svc.rocksdbWriteBufferBytes(),
+                row -> sink.row(row));
+        return new Prepared(gp.columnNames(), runner, metrics);
     }
 
     // Cost-based join planning: build the smaller pruned side; broadcast it if it fits the build-memory
     // budget, else partition both sides (Grace). Guards a runaway (quadratic) result.
-    private Prepared prepareJoin(StreamLakeSqlPlanner.JoinPlan jp, boolean explain) {
+    private Prepared prepareJoin(StreamLakeSqlPlanner.JoinPlan jp, boolean explain,
+            StreamLakeQueryMetrics metrics) {
         StreamLakeQueryService left = require(jp.leftTable());
         StreamLakeQueryService right = require(jp.rightTable());
         StreamLakeStatistics.Estimate le = estimate(left, jp.leftPredicate());
@@ -154,11 +165,11 @@ public final class StreamLakeQueryCoordinator {
                 buildLeft ? jp.rightTable() : jp.leftTable(), probeEst,
                 partitions, budget, estResultRows);
         if (explain) {
-            return planRow(plan);
+            return planRow(plan, metrics);
         }
 
-        StreamLakeQueryExecutor buildExec = buildSvc.executor();
-        StreamLakeQueryExecutor probeExec = (buildLeft ? right : left).executor();
+        StreamLakeQueryExecutor buildExec = buildSvc.executor(metrics);
+        StreamLakeQueryExecutor probeExec = (buildLeft ? right : left).executor(metrics);
         StreamLakeScanPredicate buildPred = buildLeft ? jp.leftPredicate() : jp.rightPredicate();
         int buildKey = buildLeft ? jp.leftKey() : jp.rightKey();
         StreamLakeScanPredicate probePred = buildLeft ? jp.rightPredicate() : jp.leftPredicate();
@@ -187,43 +198,45 @@ public final class StreamLakeQueryCoordinator {
                         probeExec, probePred, probeKey, buildSvc.newBuildTable(),
                         row -> sink.row(combine.apply(row)));
         }
-        return new Prepared(jp.columnNames(), runner);
+        return new Prepared(jp.columnNames(), runner, metrics);
     }
 
     private enum JoinOp { BROADCAST, GRACE, ROCKSDB }
 
-    private Prepared prepareSingle(String query, StreamLakeSqlPlanner.Plan p, boolean explain) {
+    private Prepared prepareSingle(String query, StreamLakeSqlPlanner.Plan p, boolean explain,
+            StreamLakeQueryMetrics metrics) {
         StreamLakeQueryService svc = require(p.table());
         List<String> columns = singleColumnNames(p, svc.schema());
         if (explain) {
             String order = p.sortColumn() >= 0 ? " orderBy=col" + p.sortColumn()
                     + (p.descending() ? " DESC" : " ASC") + (p.limit() > 0 ? " limit=" + p.limit() : "") : "";
-            return planRow("SCAN " + p.table() + "(" + estimate(svc, p.predicate()) + ")" + order);
+            return planRow("SCAN " + p.table() + "(" + estimate(svc, p.predicate()) + ")" + order, metrics);
         }
+        StreamLakeQueryExecutor exec = svc.executor(metrics);
         StreamRunner runner;
         if (p.sortColumn() >= 0 && p.limit() <= 0) {
             // Unbounded ORDER BY -> RocksDB external sort (streamed, bounded memory).
             StreamLakeType sortType = svc.schema().columns().get(p.sortColumn()).type();
-            runner = sink -> StreamLakeExternalSort.sort(svc.executor(), p.fromMs(), p.toMs(),
+            runner = sink -> StreamLakeExternalSort.sort(exec, p.fromMs(), p.toMs(),
                     p.predicate(), p.sortColumn(), sortType, p.descending(), p::projectRow,
                     svc.joinSpillDir(), svc.rocksdbBlockCacheBytes(), svc.rocksdbWriteBufferBytes(),
                     row -> sink.row(row));
         } else if (p.sortColumn() >= 0) {
             // ORDER BY ... LIMIT k -> bounded top-K (cheaper than an external sort).
             runner = sink -> {
-                for (Object[] r : svc.executor().executeSql(query, svc.schema(), null)) {
+                for (Object[] r : exec.executeSql(query, svc.schema(), null)) {
                     sink.row(r);
                 }
             };
         } else {
-            runner = sink -> svc.executor().scan(p.fromMs(), p.toMs(), p.predicate(),
+            runner = sink -> exec.scan(p.fromMs(), p.toMs(), p.predicate(),
                     row -> sink.row(p.projectRow(row)));
         }
-        return new Prepared(columns, runner);
+        return new Prepared(columns, runner, metrics);
     }
 
-    private static Prepared planRow(String text) {
-        return new Prepared(List.of("plan"), sink -> sink.row(new Object[]{text}));
+    private static Prepared planRow(String text, StreamLakeQueryMetrics metrics) {
+        return new Prepared(List.of("plan"), sink -> sink.row(new Object[]{text}), metrics);
     }
 
     /** Buffered convenience: collect the streamed rows into a {@link StreamLakeQueryResult}. */

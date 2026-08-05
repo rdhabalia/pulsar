@@ -145,8 +145,8 @@ import org.apache.pulsar.broker.service.schema.exceptions.IncompatibleSchemaExce
 import org.apache.pulsar.broker.service.schema.exceptions.NotExistSchemaException;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeMetaStore;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakePageIndex;
-import org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuildQueue;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeQueryService;
+import org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuildQueue;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentService;
 import org.apache.pulsar.broker.stats.ClusterReplicationMetrics;
 import org.apache.pulsar.broker.stats.NamespaceStats;

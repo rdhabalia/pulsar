@@ -19,6 +19,7 @@
 package org.apache.pulsar.broker.admin.v3;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.common.base.Utf8;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -45,6 +46,7 @@ import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeQueryCoordinator;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeQueryService;
 import org.apache.pulsar.broker.web.RestException;
+import org.apache.pulsar.common.policies.data.StreamLakeQueryStats;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -110,15 +112,20 @@ public class StreamLakeQuery extends AdminResource {
 
     private static void writeNdjson(StreamLakeQueryCoordinator.Prepared prepared, OutputStream os)
             throws IOException {
+        long t0 = System.nanoTime();
         BufferedWriter w = new BufferedWriter(new OutputStreamWriter(os, StandardCharsets.UTF_8));
         w.write(MAPPER.writeValueAsString(prepared.columns()));
         w.write('\n');
-        long[] n = {0};
+        long[] rows = {0};
+        long[] bytes = {0};
         try {
             prepared.stream(row -> {
-                w.write(MAPPER.writeValueAsString(row));
+                String line = MAPPER.writeValueAsString(row);
+                w.write(line);
                 w.write('\n');
-                if ((++n[0] % FLUSH_EVERY_ROWS) == 0) {
+                rows[0]++;
+                bytes[0] += Utf8.encodedLength(line) + 1;
+                if ((rows[0] % FLUSH_EVERY_ROWS) == 0) {
                     w.flush();
                 }
             });
@@ -127,6 +134,14 @@ public class StreamLakeQuery extends AdminResource {
         } catch (Exception e) {
             throw new IOException("StreamLake query streaming failed: " + e.getMessage(), e);
         }
+        // Trailing NDJSON metadata: a JSON OBJECT (rows are arrays, so it is unambiguous) carrying the
+        // execution stats -- the client parses it out and prints it as a footer.
+        StreamLakeQueryStats stats = prepared.metrics().toStats();
+        stats.setRowsReturned(rows[0]);
+        stats.setBytesReturned(bytes[0]);
+        stats.setElapsedMs((System.nanoTime() - t0) / 1_000_000);
+        w.write(MAPPER.writeValueAsString(stats));
+        w.write('\n');
         w.flush();
     }
 

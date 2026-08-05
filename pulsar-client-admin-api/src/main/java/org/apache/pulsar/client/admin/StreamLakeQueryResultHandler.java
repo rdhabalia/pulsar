@@ -19,12 +19,14 @@
 package org.apache.pulsar.client.admin;
 
 import java.util.List;
+import org.apache.pulsar.common.policies.data.StreamLakeQueryStats;
 
 /**
  * Streaming callback for a StreamLake query: {@link #columns} is invoked once with the result header,
- * then {@link #row} is invoked once per result row as it arrives from the broker. Because rows are
- * consumed incrementally (never all held in memory), a multi-GB result can be processed without OOM on
- * the client.
+ * then {@link #row} is invoked once per result row as it arrives from the broker, and finally
+ * {@link #summary} is invoked once with the query's execution stats. Because rows are consumed
+ * incrementally (never all held in memory), a multi-GB result can be processed without OOM on the
+ * client.
  */
 public interface StreamLakeQueryResultHandler {
 
@@ -33,4 +35,11 @@ public interface StreamLakeQueryResultHandler {
 
     /** Called once per result row, with the row's values in column order. */
     void row(List<Object> row);
+
+    /**
+     * Called once, after the last row, with the query's execution metadata (rows/bytes read + returned,
+     * pages pruned, elapsed time, peak buffer). Default is a no-op for handlers that don't need it.
+     */
+    default void summary(StreamLakeQueryStats stats) {
+    }
 }

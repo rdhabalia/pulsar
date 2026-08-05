@@ -35,6 +35,7 @@ import org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate;
 import org.apache.pulsar.client.streaminglake.StreamLakeSchema;
 import org.apache.pulsar.client.streaminglake.StreamLakeStatsBuilder;
 import org.apache.pulsar.client.streaminglake.StreamLakeType;
+import org.apache.pulsar.common.policies.data.StreamLakeQueryStats;
 import org.apache.pulsar.metadata.api.MetadataStore;
 import org.apache.pulsar.metadata.api.MetadataStoreConfig;
 import org.apache.pulsar.metadata.api.MetadataStoreFactory;
@@ -142,6 +143,41 @@ public class StreamLakeQueryExecutorTest {
         List<Object[]> top = engine.scanTopK(DAY1, DAY1 + 1000, pred, 1, 2, true);
         assertEquals(top.size(), 1);
         assertEquals(top.get(0)[2], 900L);
+    }
+
+    @Test
+    public void scanAccumulatesQueryMetrics() throws Exception {
+        StreamLakeMetaStore ms = metaStore();
+        StreamLakePageIndex pageIndex = StreamLakePageIndex.open(bk, ml, ms);
+        StreamLakeSegmentStore segStore = StreamLakeSegmentStore.open(bk, ml, ms);
+        StreamLakeCatalog catalog = StreamLakeCatalog.open(bk, ml, ms);
+
+        addPage(pageIndex, 0, Arrays.asList(new Object[]{1, 1, 100L}, new Object[]{2, 1, 400L}));
+        addPage(pageIndex, 1, java.util.Collections.singletonList(new Object[]{3, 2, 500L}));
+        addPage(pageIndex, 2, java.util.Collections.singletonList(new Object[]{4, 1, 900L}));
+        addPage(pageIndex, 3, java.util.Collections.singletonList(new Object[]{5, 3, 50L}));
+        catalog.upsert(new StreamLakeCatalog.LedgerInfo(DATA_LEDGER, 1L, DAY1, DAY1 + 3600_000, 5,
+                StreamLakeCatalog.State.CLOSED));
+        new StreamLakeSegmentBuilder(pageIndex, segStore, catalog, 2L * 1024 * 1024, 0.01)
+                .buildForLedger(DATA_LEDGER);
+
+        StreamLakePruner pruner = new StreamLakePruner(catalog, segStore, pageIndex);
+        StreamLakeQueryExecutor.PageReader reader = (lid, eid) -> pageBytes.get(eid);
+        StreamLakeQueryMetrics metrics = new StreamLakeQueryMetrics();
+        StreamLakeQueryExecutor engine = new StreamLakeQueryExecutor(pruner, reader, null, 1, metrics);
+
+        // WHERE deptId = 1 -> the dept-2 and dept-3 pages prune; both dept-1 pages are read (3 rows).
+        StreamLakeScanPredicate pred = StreamLakeScanPredicate.builder()
+                .eq(1, StreamLakeType.INT32, 1).build();
+        assertEquals(engine.scan(DAY1, DAY1 + 1000, pred).size(), 3);
+
+        StreamLakeQueryStats s = metrics.toStats();
+        assertEquals(s.getPagesScanned(), 4, "all 4 segment pages checked");
+        assertEquals(s.getPagesKept(), 2, "only the 2 dept-1 pages survive");
+        assertEquals(s.getPagesPruned(), 2, "the 2 non-dept-1 pages pruned");
+        assertEquals(s.getRowsRead(), 3, "rows decoded from the 2 kept pages");
+        assertTrue(s.getBytesRead() > 0, "read the kept pages' Arrow bytes");
+        assertTrue(s.getPeakReadBufferBytes() > 0, "a bounded read buffer was used");
     }
 
     @Test

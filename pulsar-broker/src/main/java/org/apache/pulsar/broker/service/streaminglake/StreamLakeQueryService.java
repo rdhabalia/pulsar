@@ -197,6 +197,15 @@ public final class StreamLakeQueryService {
         return e;
     }
 
+    /**
+     * A fresh per-query executor bound to {@code metrics} (not cached, so concurrent queries don't share
+     * counters). Both sides of a join pass the same metrics instance so the totals are whole-query.
+     */
+    public StreamLakeQueryExecutor executor(StreamLakeQueryMetrics metrics) {
+        return new StreamLakeQueryExecutor(pruner(), this::readArrowBatch, readExecutor,
+                cfg.getQueryReadConcurrency(), metrics);
+    }
+
     // Read one pruned page (a data-ledger entry) from the managed ledger and strip the message
     // metadata + payload framing down to the Arrow batch bytes.
     private byte[] readArrowBatch(long ledgerId, long entryId) throws Exception {

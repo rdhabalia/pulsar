@@ -37,6 +37,7 @@ import org.apache.pulsar.client.admin.StreamLake;
 import org.apache.pulsar.client.admin.StreamLakeQueryResultHandler;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.common.policies.data.StreamLakeQueryResult;
+import org.apache.pulsar.common.policies.data.StreamLakeQueryStats;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 
 /**
@@ -77,7 +78,14 @@ public class StreamLakeImpl extends BaseResource implements StreamLake {
                         ? Collections.emptyList() : MAPPER.readValue(header, COLUMNS));
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    if (!line.isEmpty()) {
+                    if (line.isEmpty()) {
+                        continue;
+                    }
+                    // A trailing JSON object (starts with '{') is the execution-stats footer; every row
+                    // is a JSON array. Distinguish by the first character.
+                    if (line.charAt(0) == '{') {
+                        handler.summary(MAPPER.readValue(line, StreamLakeQueryStats.class));
+                    } else {
                         handler.row(MAPPER.readValue(line, ROW));
                     }
                 }
