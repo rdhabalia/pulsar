@@ -159,3 +159,7 @@ Cap RocksDB off-heap memory; disable the WAL.
 6. ✅ #4 Grace partitioned join · 🚧 skew (broadcast/salting) + key-filter pushdown.
 7. 🚧 RocksDB external sort (ORDER BY) → GROUP BY (planner + aggregation).
 8. ✅ RocksDB join backend (`joinStrategy` force) · 🚧 sort-merge backend.
+9. ✅ Streaming prune — `StreamLakePruner.prune(..., PageSink)` pushes each surviving page to the
+   executor's bounded read-ahead pump instead of returning a `List<PagePointer>`, so a full-scan or
+   low-selectivity query (and each join side) is O(read-ahead) memory, not O(surviving pages). The
+   cost estimator counts via a streaming sink too (no page buffer).

@@ -18,7 +18,6 @@
  */
 package org.apache.pulsar.broker.service.streaminglake;
 
-import java.util.List;
 import org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate;
 
 /**
@@ -73,9 +72,20 @@ public final class StreamLakeStatistics {
     public Estimate estimate(StreamLakePruner pruner, long fromMs, long toMs,
             StreamLakeScanPredicate predicate) throws Exception {
         StreamLakePruner.Stats s = new StreamLakePruner.Stats();
-        List<StreamLakePruner.PagePointer> pages = pruner.prune(fromMs, toMs, predicate, s);
-        long pageCount = pages.size();
-        long ledgers = pages.stream().mapToLong(p -> p.ledgerId).distinct().count();
-        return new Estimate(pageCount, ledgers, pageCount * rowsPerPage, pageCount * pageBytes);
+        // Count surviving pages (and the distinct ledgers they span) via a streaming sink, so cost
+        // estimation never buffers the page list. Pages arrive grouped by ledger, so a distinct ledger
+        // is simply a change in ledgerId -> exact distinct count with O(1) memory.
+        long[] pageCount = {0};
+        long[] ledgerCount = {0};
+        long[] lastLedger = {Long.MIN_VALUE};
+        pruner.prune(fromMs, toMs, predicate, s, p -> {
+            pageCount[0]++;
+            if (p.ledgerId != lastLedger[0]) {
+                ledgerCount[0]++;
+                lastLedger[0] = p.ledgerId;
+            }
+        });
+        long pages = pageCount[0];
+        return new Estimate(pages, ledgerCount[0], pages * rowsPerPage, pages * pageBytes);
     }
 }

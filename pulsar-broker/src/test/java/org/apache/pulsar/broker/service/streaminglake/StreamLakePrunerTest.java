@@ -156,6 +156,58 @@ public class StreamLakePrunerTest {
         assertEquals(pages.size(), 4, "all pages overlap the wide range");
     }
 
+    @Test
+    public void streamingPruneMatchesListPruneAndCounts() throws Exception {
+        StreamLakeMetaStore ms = metaStore();
+        StreamLakePageIndex pageIndex = StreamLakePageIndex.open(bk, ml, ms);
+        StreamLakeSegmentStore segStore = StreamLakeSegmentStore.open(bk, ml, ms);
+        StreamLakeCatalog catalog = StreamLakeCatalog.open(bk, ml, ms);
+
+        // Two ledgers, four pages each (deptId 0-9,10-19,20-29,30-39), spanning DAY1..DAY2.
+        for (int i = 0; i < 4; i++) {
+            pageIndex.appendFooter(100L, i, footer(i * 10, i * 10 + 9));
+            pageIndex.appendFooter(200L, i, footer(i * 10, i * 10 + 9));
+        }
+        catalog.upsert(new StreamLakeCatalog.LedgerInfo(100L, 1L, DAY1, DAY1 + 3600_000, 40,
+                StreamLakeCatalog.State.CLOSED));
+        catalog.upsert(new StreamLakeCatalog.LedgerInfo(200L, 1L, DAY2, DAY2 + 3600_000, 40,
+                StreamLakeCatalog.State.CLOSED));
+        StreamLakeSegmentBuilder builder = new StreamLakeSegmentBuilder(
+                pageIndex, segStore, catalog, 2L * 1024 * 1024, 0.01);
+        builder.buildForLedger(100L);
+        builder.buildForLedger(200L);
+
+        StreamLakePruner pruner = pruner(catalog, segStore, pageIndex);
+        // Wide range -> all 8 pages across both ledgers survive (the low-selectivity case).
+        StreamLakeScanPredicate pred = StreamLakeScanPredicate.builder()
+                .range(0, StreamLakeType.INT32, 0, 39).build();
+
+        // The buffering List overload and the streaming sink must agree exactly, in order.
+        List<StreamLakePruner.PagePointer> listed = pruner.prune(DAY1, DAY2 + 3600_000, pred);
+        List<StreamLakePruner.PagePointer> streamed = new ArrayList<>();
+        pruner.prune(DAY1, DAY2 + 3600_000, pred, new StreamLakePruner.Stats(), streamed::add);
+        assertEquals(streamed.size(), listed.size(), "streaming yields the same page count as the list");
+        assertEquals(streamed.size(), 8, "all 8 pages survive the wide range");
+        for (int i = 0; i < listed.size(); i++) {
+            assertEquals(streamed.get(i).ledgerId, listed.get(i).ledgerId, "page " + i + " ledger matches");
+            assertEquals(streamed.get(i).entryId, listed.get(i).entryId, "page " + i + " entry matches");
+        }
+
+        // Counting sink (as StreamLakeStatistics uses): pages + distinct ledgers, without buffering.
+        long[] pageCount = {0};
+        long[] ledgerCount = {0};
+        long[] lastLedger = {Long.MIN_VALUE};
+        pruner.prune(DAY1, DAY2 + 3600_000, pred, new StreamLakePruner.Stats(), p -> {
+            pageCount[0]++;
+            if (p.ledgerId != lastLedger[0]) {
+                ledgerCount[0]++;
+                lastLedger[0] = p.ledgerId;
+            }
+        });
+        assertEquals(pageCount[0], 8L, "8 surviving pages");
+        assertEquals(ledgerCount[0], 2L, "spanning 2 distinct ledgers");
+    }
+
     private static StreamLakePruner pruner(StreamLakeCatalog c, StreamLakeSegmentStore s,
             StreamLakePageIndex p) {
         return new StreamLakePruner(c, s, p);

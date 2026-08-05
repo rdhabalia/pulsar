@@ -70,14 +70,35 @@ public class StreamLakePruner {
         this.pageIndex = pageIndex;
     }
 
+    /**
+     * Sink for surviving pages, invoked once per page <b>as it is found</b> (ledger-then-entry order),
+     * so a caller can stream pruning without ever buffering the full page list -- a low-selectivity scan
+     * over a huge table would otherwise hold O(surviving pages) pointers in memory.
+     */
+    public interface PageSink {
+        void accept(PagePointer page) throws Exception;
+    }
+
     public List<PagePointer> prune(long fromMs, long toMs, StreamLakeScanPredicate predicate) throws Exception {
         return prune(fromMs, toMs, predicate, new Stats());
     }
 
-    /** Prune, recording per-level counters into {@code stats}. */
+    /** Prune, recording per-level counters into {@code stats}. Buffers the full surviving-page list. */
     public List<PagePointer> prune(long fromMs, long toMs, StreamLakeScanPredicate predicate, Stats stats)
             throws Exception {
         List<PagePointer> out = new ArrayList<>();
+        prune(fromMs, toMs, predicate, stats, out::add);
+        return out;
+    }
+
+    /**
+     * Streaming prune: push each surviving page to {@code sink} as it is found (recording counters into
+     * {@code stats}) without buffering the result, so peak memory is independent of the number of
+     * surviving pages -- a full-table or low-selectivity scan stays bounded (only per-ledger scratch is
+     * held). Pages arrive in the same ledger-then-entry order as the list-returning overloads.
+     */
+    public void prune(long fromMs, long toMs, StreamLakeScanPredicate predicate, Stats stats, PageSink sink)
+            throws Exception {
         List<Long> candidates = catalog.candidateLedgers(fromMs, toMs);
         stats.candidateLedgers = candidates.size();
 
@@ -94,7 +115,7 @@ public class StreamLakePruner {
                     stats.pagesScanned++;
                     if (predicate.matches(StreamLakeBatchStats.decode(f.stats))) {
                         stats.pagesKept++;
-                        out.add(new PagePointer(ledgerId, f.dataEntryId));
+                        sink.accept(new PagePointer(ledgerId, f.dataEntryId));
                     }
                 }
                 continue;
@@ -142,13 +163,12 @@ public class StreamLakePruner {
                 if (surviving[i]) {
                     stats.pagesKept++;
                     kept++;
-                    out.add(new PagePointer(ledgerId, seg.pageEntryIds[i]));
+                    sink.accept(new PagePointer(ledgerId, seg.pageEntryIds[i]));
                 }
             }
             if (kept == 0) {
                 stats.segmentsSkipped++; // the whole segment was pruned out
             }
         }
-        return out;
     }
 }

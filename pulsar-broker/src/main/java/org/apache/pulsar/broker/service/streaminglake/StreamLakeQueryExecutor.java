@@ -98,9 +98,8 @@ public class StreamLakeQueryExecutor {
      */
     public void scan(long fromMs, long toMs, StreamLakeScanPredicate predicate, RowConsumer out)
             throws Exception {
-        List<StreamLakePruner.PagePointer> pages = pruner.prune(fromMs, toMs, predicate);
         try (StreamLakeArrowBatchDecoder decoder = new StreamLakeArrowBatchDecoder()) {
-            forEachPage(pages, (p, arrow) -> {
+            forEachPage(fromMs, toMs, predicate, (p, arrow) -> {
                 for (Object[] row : decoder.decodeRows(arrow)) {
                     if (predicate.matchesRow(row)) {
                         out.accept(row);
@@ -223,9 +222,8 @@ public class StreamLakeQueryExecutor {
     private void scanRows(StreamLakeScanPredicate predicate, long fromMs, long toMs, RowVisitor visitor)
             throws Exception {
         int[] predicateColumns = predicateColumns(predicate);
-        List<StreamLakePruner.PagePointer> pages = pruner.prune(fromMs, toMs, predicate);
         try (StreamLakeArrowBatchDecoder decoder = new StreamLakeArrowBatchDecoder()) {
-            forEachPage(pages, (p, arrow) -> {
+            forEachPage(fromMs, toMs, predicate, (p, arrow) -> {
                 try (StreamLakeArrowBatchDecoder.Batch batch = decoder.open(arrow)) {
                     int cols = batch.columnCount();
                     for (int r = 0; r < batch.rowCount(); r++) {
@@ -244,42 +242,55 @@ public class StreamLakeQueryExecutor {
     }
 
     /**
-     * Read the pruned pages and hand each (in page order) to {@code consumer}. With a read executor and
-     * {@code readConcurrency > 1} this keeps up to {@code readConcurrency} page reads in flight (a
-     * bounded sliding window) while the consumer decodes/filters the head page on the calling thread --
-     * so the (slow) BookKeeper reads overlap but decoding stays single-threaded and ordered. Otherwise
-     * it reads serially.
+     * Stream the pruned pages (never buffering the full page list) and hand each -- in ledger-then-entry
+     * order -- to {@code consumer}. With a read executor and {@code readConcurrency > 1} this keeps up to
+     * {@code readConcurrency} page reads in flight (a bounded sliding window) while the consumer
+     * decodes/filters the head page on the calling thread, so the (BookKeeper) reads overlap but decoding
+     * stays single-threaded and ordered. Otherwise it reads serially. Peak memory is O(readConcurrency)
+     * pages regardless of how many pages survive pruning, because the prune pushes pages here one at a
+     * time (its {@code accept} blocks once the window is full, back-pressuring the prune traversal).
      */
-    private void forEachPage(List<StreamLakePruner.PagePointer> pages, PageConsumer consumer)
+    private void forEachPage(long fromMs, long toMs, StreamLakeScanPredicate predicate, PageConsumer consumer)
             throws Exception {
-        if (readExecutor == null || readConcurrency <= 1 || pages.size() <= 1) {
-            for (StreamLakePruner.PagePointer p : pages) {
-                consumer.accept(p, pageReader.readArrowBatch(p.ledgerId, p.entryId));
-            }
+        if (readExecutor == null || readConcurrency <= 1) {
+            pruner.prune(fromMs, toMs, predicate, new StreamLakePruner.Stats(),
+                    p -> consumer.accept(p, pageReader.readArrowBatch(p.ledgerId, p.entryId)));
             return;
         }
-        int window = Math.min(readConcurrency, pages.size());
+        int window = readConcurrency;
         ArrayDeque<CompletableFuture<byte[]>> inFlight = new ArrayDeque<>(window);
-        int next = 0;
-        for (; next < window; next++) {
-            inFlight.add(submitRead(pages.get(next)));
-        }
-        for (int i = 0; i < pages.size(); i++) {
-            byte[] arrow;
-            try {
-                arrow = inFlight.poll().get();
-            } catch (ExecutionException e) {
-                Throwable cause = e.getCause() instanceof CompletionException ? e.getCause().getCause()
-                        : e.getCause();
-                if (cause instanceof Exception) {
-                    throw (Exception) cause;
+        ArrayDeque<StreamLakePruner.PagePointer> pending = new ArrayDeque<>(window);
+        try {
+            pruner.prune(fromMs, toMs, predicate, new StreamLakePruner.Stats(), p -> {
+                inFlight.add(submitRead(p));
+                pending.add(p);
+                if (inFlight.size() >= window) {
+                    consumer.accept(pending.poll(), await(inFlight.poll()));
                 }
-                throw new RuntimeException(cause);
+            });
+            while (!inFlight.isEmpty()) {
+                consumer.accept(pending.poll(), await(inFlight.poll()));
             }
-            if (next < pages.size()) {
-                inFlight.add(submitRead(pages.get(next++)));
+        } catch (Exception e) {
+            // Cancel any still-in-flight reads so a failure mid-scan doesn't leak the read pool/buffers.
+            for (CompletableFuture<byte[]> f : inFlight) {
+                f.cancel(true);
             }
-            consumer.accept(pages.get(i), arrow);
+            throw e;
+        }
+    }
+
+    /** Await a read, unwrapping the (possibly double-wrapped) cause as the original checked exception. */
+    private static byte[] await(CompletableFuture<byte[]> f) throws Exception {
+        try {
+            return f.get();
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause() instanceof CompletionException ? e.getCause().getCause()
+                    : e.getCause();
+            if (cause instanceof Exception) {
+                throw (Exception) cause;
+            }
+            throw new RuntimeException(cause);
         }
     }
 
