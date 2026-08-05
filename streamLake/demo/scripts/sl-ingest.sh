@@ -22,9 +22,27 @@ PERSON_START="${SL_PERSON_START:-0}"
 EMP_START="${SL_EMP_START:-0}"
 
 OUT="$INGEST_DIR/out"
-echo "==> compiling StreamLakeIngest against $PULSAR_HOME/lib…"
 mkdir -p "$OUT"
-javac -cp "$PULSAR_HOME/lib/*" -d "$OUT" "$INGEST_DIR/StreamLakeIngest.java"
+# Strip macOS AppleDouble (._*) files that break jar/classpath reads on Linux (no-op if none).
+find "$PULSAR_HOME/lib" -name '._*' -delete 2>/dev/null || true
+
+# The client jars are Java 17 bytecode. Prefer JAVA_HOME (the JDK the broker uses), NOT a bare `javac`
+# on PATH which may be an older JDK 8 (-> "class file has wrong version 61.0, should be 52.0").
+JAVAC="${JAVA_HOME:+$JAVA_HOME/bin/}javac"
+JAVA="${JAVA_HOME:+$JAVA_HOME/bin/}java"
+vstr="$("$JAVAC" -version 2>&1 | awk 'NR==1{print $2}')"   # e.g. 17.0.5  or  1.8.0_301
+jver="${vstr%%.*}"
+[ "$jver" = "1" ] && jver="$(printf '%s' "$vstr" | cut -d. -f2)"   # 1.8 -> 8
+case "$jver" in ''|*[!0-9]*) jver=0;; esac
+if [ "$jver" -lt 17 ]; then
+  echo "ERROR: '$JAVAC' is Java ${vstr:-unknown}; the StreamLake client needs JDK 17+." >&2
+  echo "Point JAVA_HOME at a JDK 17+ (the one the broker uses) and re-run, e.g.:" >&2
+  echo "  export JAVA_HOME=\"\$(dirname \$(dirname \$(readlink -f \$(command -v java))))\"" >&2
+  echo "  $0" >&2
+  exit 1
+fi
+echo "==> compiling StreamLakeIngest with javac (Java $jver) against $PULSAR_HOME/lib…"
+"$JAVAC" -cp "$PULSAR_HOME/lib/*" -d "$OUT" "$INGEST_DIR/StreamLakeIngest.java"
 
 run() {  # run <table> <target-gb> <start-id>
   local table="$1" gb="$2" start="$3"

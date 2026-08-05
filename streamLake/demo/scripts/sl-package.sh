@@ -4,6 +4,7 @@
 # SERVER distribution (broker + bookie + zk + pulsar-admin, with the streamlake CLI) plus this demo/
 # folder (docs + scripts + the ingestion program).
 set -euo pipefail
+export COPYFILE_DISABLE=1   # macOS: never embed ._* AppleDouble files
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"   # .../pulsar/pulsar
 cd "$REPO_ROOT"
@@ -30,7 +31,7 @@ echo "[3/4] Staging the demo assets (docs + scripts + ingest) into the distribut
 cp -r "$REPO_ROOT/streamLake/demo" "$DIST_DIR/streamlake-demo"
 
 echo "[4/4] Packaging streamlake-demo.tar.gz…"
-tar -C "$WORK" -czf "$REPO_ROOT/streamlake-demo.tar.gz" "$(basename "$DIST_DIR")"
+tar --exclude '._*' -C "$WORK" -czf "$REPO_ROOT/streamlake-demo.tar.gz" "$(basename "$DIST_DIR")"
 echo "Done: $REPO_ROOT/streamlake-demo.tar.gz"
 echo
 echo "Ship + unpack + run the whole demo on the host:"

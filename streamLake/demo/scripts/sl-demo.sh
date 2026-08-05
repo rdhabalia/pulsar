@@ -19,6 +19,8 @@ if [ ! -x "$PULSAR_HOME/bin/pulsar" ]; then
   echo "set PULSAR_HOME, then re-run." >&2
   exit 1
 fi
+# macOS-created AppleDouble files (._*) break jar/classpath reads on Linux; strip them once up front.
+find "$PULSAR_HOME" -name '._*' -delete 2>/dev/null || true
 
 # ---- interactive (or env) config ----
 STORAGE_DIR="${SL_STORAGE_DIR:-}"
