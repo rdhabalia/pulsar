@@ -304,14 +304,29 @@ $PULSAR_HOME/bin/pulsar-admin streamlake register public/default Employee \
 | `SL_PERSON_START` / `SL_EMP_START` | `0` | sl-ingest | starting id (for append re‑runs) |
 | `SL_SERVICE_URL` / `SL_ADMIN_URL` | `pulsar://localhost:6650` / `http://localhost:8080` | sl-ingest | broker endpoints |
 
-**Load generator directly** (`streamlake-demo/ingest/StreamLakeIngest.java`, compiled by `sl-ingest.sh`):
+**Load generator directly** (`streamlake-demo/ingest/StreamLakeIngest.java`, compiled by `sl-ingest.sh`).
+Note the JDK 17+ (`$JAVA_HOME/bin/java`) and the Arrow `--add-opens` flags — `sl-ingest.sh` adds these for
+you; only needed if you run it by hand:
 ```bash
-java -cp "$PULSAR_HOME/lib/*:streamlake-demo/ingest/out" StreamLakeIngest \
+"$JAVA_HOME/bin/java" -Xmx2g \
+  -Dio.netty.tryReflectionSetAccessible=true \
+  --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED \
+  --add-opens=java.base/java.lang=ALL-UNNAMED \
+  -cp "$PULSAR_HOME/lib/*:streamlake-demo/ingest/out" StreamLakeIngest \
   --service-url pulsar://localhost:6650 --admin-url http://localhost:8080 \
   --tenant public --namespace default --table Person \
   --target-gb 500 --rows-per-page 1000 --start-id 0
 #   ... or --rows N   for an exact row count instead of a size target.
 ```
+
+### Host gotchas (handled by the scripts; here if you run steps by hand)
+- **`javac` is Java 8** (`class file has wrong version 61.0, should be 52.0`): the client jars are Java 17
+  bytecode. Put a JDK 17+ first on PATH — `export JAVA_HOME="$(dirname $(dirname $(readlink -f $(command -v java))))"; export PATH="$JAVA_HOME/bin:$PATH"`.
+- **Arrow `UnsupportedOperationException: … DirectByteBuffer … not available`**: JDK 17 needs the
+  `--add-opens` above (Arrow off-heap memory). `sl-ingest.sh` sets them; by hand, `export
+  JDK_JAVA_OPTIONS="-Dio.netty.tryReflectionSetAccessible=true --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"`.
+- **macOS `._*` files** (`error in opening zip file`): `find "$PULSAR_HOME" -name '._*' -delete` (the
+  scripts do this automatically).
 
 ---
 

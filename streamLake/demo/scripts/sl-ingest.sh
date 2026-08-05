@@ -44,10 +44,20 @@ fi
 echo "==> compiling StreamLakeIngest with javac (Java $jver) against $PULSAR_HOME/lib…"
 "$JAVAC" -cp "$PULSAR_HOME/lib/*" -d "$OUT" "$INGEST_DIR/StreamLakeIngest.java"
 
+# JVM flags Apache Arrow + Netty need on JDK 17+ for off-heap memory (same set bin/pulsar uses).
+# Without java.nio opened, Arrow fails: "sun.misc.Unsafe or java.nio.DirectByteBuffer.<init> not available".
+ARROW_OPTS="-Dio.netty.tryReflectionSetAccessible=true \
+-Dorg.apache.pulsar.shade.io.netty.tryReflectionSetAccessible=true \
+--add-opens=java.base/java.lang=ALL-UNNAMED \
+--add-opens=java.base/java.nio=ALL-UNNAMED \
+--add-opens=java.base/sun.nio.ch=ALL-UNNAMED \
+--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
+
 run() {  # run <table> <target-gb> <start-id>
   local table="$1" gb="$2" start="$3"
   echo "==> ingesting $table to ~${gb}GB (startId=$start)…"
-  java -Xmx2g -cp "$PULSAR_HOME/lib/*:$OUT" StreamLakeIngest \
+  # shellcheck disable=SC2086
+  "$JAVA" -Xmx2g $ARROW_OPTS -cp "$PULSAR_HOME/lib/*:$OUT" StreamLakeIngest \
     --service-url "$SERVICE_URL" --admin-url "$ADMIN_URL" \
     --tenant "$TENANT" --namespace "$NAMESPACE" --table "$table" \
     --target-gb "$gb" --rows-per-page "$ROWS_PER_PAGE" --start-id "$start"
