@@ -99,76 +99,85 @@ public class StreamLakePruner {
      */
     public void prune(long fromMs, long toMs, StreamLakeScanPredicate predicate, Stats stats, PageSink sink)
             throws Exception {
-        List<Long> candidates = catalog.candidateLedgers(fromMs, toMs);
-        stats.candidateLedgers = candidates.size();
+        int[] candidateCount = {0};
+        catalog.forEachCandidateLedger(fromMs, toMs, ledgerId -> {
+            candidateCount[0]++;
+            pruneLedger(ledgerId, predicate, stats, sink);
+        });
+        stats.candidateLedgers = candidateCount[0];
+    }
 
-        for (long ledgerId : candidates) {
-            StreamLakeCatalog.LedgerInfo info = catalog.get(ledgerId);
-            StreamLakeSegmentStore.LedgerSegment seg = (info != null && info.hasSegment())
-                    ? segmentStore.load(ledgerId, info.segmentLedgerId, info.segmentStartEntry,
-                            info.segmentEndEntry)
-                    : null;
+    /**
+     * Prune one candidate data ledger, pushing its surviving pages to {@code sink}. Split out of the
+     * candidate loop so the candidate ledgers can be streamed (no {@code List<Long>} of matches held).
+     */
+    private void pruneLedger(long ledgerId, StreamLakeScanPredicate predicate, Stats stats, PageSink sink)
+            throws Exception {
+        StreamLakeCatalog.LedgerInfo info = catalog.get(ledgerId);
+        StreamLakeSegmentStore.LedgerSegment seg = (info != null && info.hasSegment())
+                ? segmentStore.load(ledgerId, info.segmentLedgerId, info.segmentStartEntry,
+                        info.segmentEndEntry)
+                : null;
 
-            if (seg == null) {
-                // Not segmented yet (recent data): fall back to a per-page footer prune of this ledger.
-                for (StreamLakePageIndex.PageFooter f : pageIndex.footersFor(ledgerId)) {
-                    stats.pagesScanned++;
-                    if (predicate.matches(StreamLakeBatchStats.decode(f.stats))) {
-                        stats.pagesKept++;
-                        sink.accept(new PagePointer(ledgerId, f.dataEntryId));
-                    }
-                }
-                continue;
-            }
-
-            // Segmented: prune to exact pages from the column segments alone (no page-footer read).
-            // Per predicate column, AND together each column segment's surviving page positions.
-            stats.segmentsTotal++;
-            int numPages = seg.numPages();
-            boolean[] surviving = new boolean[numPages];
-            Arrays.fill(surviving, true);
-            boolean anyCollapsed = false;
-            for (StreamLakeScanPredicate.ColumnPredicate cp : predicate.columns()) {
-                StreamLakeColumnSegment cseg = seg.columns.get(cp.columnIndex());
-                if (cseg == null) {
-                    continue; // this column has no segment stats -> cannot prune on it
-                }
-                anyCollapsed |= cseg.collapsed();
-                boolean[] col = cseg.candidatePositions(cp);
-                for (int i = 0; i < numPages; i++) {
-                    surviving[i] &= col[i];
-                }
-            }
-            // Precision recheck: when a predicate column collapsed (its per-page granularity was lost to
-            // a whole-segment stat), consult the data ledger's exact page-index range and drop pages the
-            // exact footer (incl. set(N)) rejects. Always safe -- the footer test is never a false negative.
-            if (anyCollapsed && info.pageIndexLedgerId >= 0) {
-                Map<Long, byte[]> statsByEntry = new HashMap<>();
-                for (StreamLakePageIndex.PageFooter f : pageIndex.readRange(info.pageIndexLedgerId,
-                        info.pageIndexStartEntry, info.pageIndexEndEntry)) {
-                    statsByEntry.put(f.dataEntryId, f.stats);
-                }
-                for (int i = 0; i < numPages; i++) {
-                    if (surviving[i]) {
-                        byte[] fs = statsByEntry.get(seg.pageEntryIds[i]);
-                        if (fs != null && !predicate.matches(StreamLakeBatchStats.decode(fs))) {
-                            surviving[i] = false;
-                        }
-                    }
-                }
-            }
-            int kept = 0;
-            for (int i = 0; i < numPages; i++) {
+        if (seg == null) {
+            // Not segmented yet (recent data): fall back to a per-page footer prune of this ledger.
+            for (StreamLakePageIndex.PageFooter f : pageIndex.footersFor(ledgerId)) {
                 stats.pagesScanned++;
-                if (surviving[i]) {
+                if (predicate.matches(StreamLakeBatchStats.decode(f.stats))) {
                     stats.pagesKept++;
-                    kept++;
-                    sink.accept(new PagePointer(ledgerId, seg.pageEntryIds[i]));
+                    sink.accept(new PagePointer(ledgerId, f.dataEntryId));
                 }
             }
-            if (kept == 0) {
-                stats.segmentsSkipped++; // the whole segment was pruned out
+            return;
+        }
+
+        // Segmented: prune to exact pages from the column segments alone (no page-footer read).
+        // Per predicate column, AND together each column segment's surviving page positions.
+        stats.segmentsTotal++;
+        int numPages = seg.numPages();
+        boolean[] surviving = new boolean[numPages];
+        Arrays.fill(surviving, true);
+        boolean anyCollapsed = false;
+        for (StreamLakeScanPredicate.ColumnPredicate cp : predicate.columns()) {
+            StreamLakeColumnSegment cseg = seg.columns.get(cp.columnIndex());
+            if (cseg == null) {
+                continue; // this column has no segment stats -> cannot prune on it
             }
+            anyCollapsed |= cseg.collapsed();
+            boolean[] col = cseg.candidatePositions(cp);
+            for (int i = 0; i < numPages; i++) {
+                surviving[i] &= col[i];
+            }
+        }
+        // Precision recheck: when a predicate column collapsed (its per-page granularity was lost to
+        // a whole-segment stat), consult the data ledger's exact page-index range and drop pages the
+        // exact footer (incl. set(N)) rejects. Always safe -- the footer test is never a false negative.
+        if (anyCollapsed && info.pageIndexLedgerId >= 0) {
+            Map<Long, byte[]> statsByEntry = new HashMap<>();
+            for (StreamLakePageIndex.PageFooter f : pageIndex.readRange(info.pageIndexLedgerId,
+                    info.pageIndexStartEntry, info.pageIndexEndEntry)) {
+                statsByEntry.put(f.dataEntryId, f.stats);
+            }
+            for (int i = 0; i < numPages; i++) {
+                if (surviving[i]) {
+                    byte[] fs = statsByEntry.get(seg.pageEntryIds[i]);
+                    if (fs != null && !predicate.matches(StreamLakeBatchStats.decode(fs))) {
+                        surviving[i] = false;
+                    }
+                }
+            }
+        }
+        int kept = 0;
+        for (int i = 0; i < numPages; i++) {
+            stats.pagesScanned++;
+            if (surviving[i]) {
+                stats.pagesKept++;
+                kept++;
+                sink.accept(new PagePointer(ledgerId, seg.pageEntryIds[i]));
+            }
+        }
+        if (kept == 0) {
+            stats.segmentsSkipped++; // the whole segment was pruned out
         }
     }
 }

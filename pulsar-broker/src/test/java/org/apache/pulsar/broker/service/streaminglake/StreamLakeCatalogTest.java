@@ -101,6 +101,14 @@ public class StreamLakeCatalogTest {
         // both ledgers intersect a wide range
         assertEquals(cat.candidateLedgers(DAY1, DAY2 + 3600_000).size(), 2);
 
+        // streaming variant yields the same candidate ledgers as the List variant (holds no buffer)
+        List<Long> streamedDay1 = new java.util.ArrayList<>();
+        cat.forEachCandidateLedger(DAY1, DAY1 + 1000, streamedDay1::add);
+        assertEquals(streamedDay1, day1);
+        List<Long> streamedWide = new java.util.ArrayList<>();
+        cat.forEachCandidateLedger(DAY1, DAY2 + 3600_000, streamedWide::add);
+        assertEquals(streamedWide, cat.candidateLedgers(DAY1, DAY2 + 3600_000));
+
         // segment-build queue: only the CLOSED ledger
         assertEquals(cat.closedUnsegmented(), java.util.Arrays.asList(100L));
         cat.close();

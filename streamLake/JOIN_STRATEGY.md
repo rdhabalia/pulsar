@@ -162,4 +162,8 @@ Cap RocksDB off-heap memory; disable the WAL.
 9. ✅ Streaming prune — `StreamLakePruner.prune(..., PageSink)` pushes each surviving page to the
    executor's bounded read-ahead pump instead of returning a `List<PagePointer>`, so a full-scan or
    low-selectivity query (and each join side) is O(read-ahead) memory, not O(surviving pages). The
-   cost estimator counts via a streaming sink too (no page buffer).
+   cost estimator counts via a streaming sink too (no page buffer). Candidate ledgers are also streamed
+   (`StreamLakeCatalog.forEachCandidateLedger`) so no per-query buffer scales with matching-ledger count;
+   the only remaining ledger-count-resident structure is the catalog itself (see #10).
+10. 🚧 Time-indexed / paged catalog — the resident `StreamLakeCatalog.infos` map is still fully in memory
+    (~10 MB @ 5 PB); page/time-index it so it need not be wholly resident at very high ledger counts.

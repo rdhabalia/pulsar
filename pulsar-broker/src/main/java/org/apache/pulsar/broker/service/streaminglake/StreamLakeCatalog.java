@@ -191,6 +191,24 @@ public class StreamLakeCatalog implements AutoCloseable {
         return infos.get(dataLedgerId);
     }
 
+    /** Visits a candidate data ledger id; may throw so pruning work can run inline per ledger. */
+    public interface LedgerVisitor {
+        void visit(long dataLedgerId) throws Exception;
+    }
+
+    /**
+     * Stream data ledgers whose [minEventTime, maxEventTime] intersects [fromMs, toMs] (date pruning) to
+     * {@code visitor} without materializing the candidate list -- so a scan holds no per-query buffer
+     * that scales with the number of matching ledgers (the resident catalog is iterated in place).
+     */
+    public void forEachCandidateLedger(long fromMs, long toMs, LedgerVisitor visitor) throws Exception {
+        for (LedgerInfo i : infos.values()) {
+            if (i.maxEventTime >= fromMs && i.minEventTime <= toMs) {
+                visitor.visit(i.dataLedgerId);
+            }
+        }
+    }
+
     /** Data ledgers whose [minEventTime, maxEventTime] intersects [fromMs, toMs] (date pruning). */
     public List<Long> candidateLedgers(long fromMs, long toMs) {
         List<Long> out = new ArrayList<>();
