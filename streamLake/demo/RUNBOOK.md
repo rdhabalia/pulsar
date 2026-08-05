@@ -237,12 +237,32 @@ query above (`personId 0..100000`): **≈ 22,000 rows**.
 
 ---
 
-## 9. Re‑run / scale up
+## 9. Long ingestion: run detached, interrupt, resume, scale up
 
-Ingestion **appends** — raise the target and (optionally) start where the last run ended (the load
-generator prints `nextStartId`):
+**Run it so an ssh drop can't kill it** (a 1 TB load runs for hours):
 ```bash
-# grow both tables to 1 TB
+# inside tmux (recommended) — survives disconnects. Detach: Ctrl-b then d ; reattach: tmux attach -t sl
+tmux new -s sl
+streamlake-demo/scripts/sl-ingest.sh
+# ...or nohup:
+nohup streamlake-demo/scripts/sl-ingest.sh > "$PULSAR_HOME/logs/ingest.out" 2>&1 &
+tail -f "$PULSAR_HOME/logs/ingest.out"
+```
+
+**If ingestion was interrupted and you re-run it** (e.g. ssh dropped):
+- You do **not** need to clean anything — data already written is durable in BookKeeper; re-running only
+  adds more, nothing is corrupted.
+- A table that already reached its size target is **skipped** (the generator checks storage first), so a
+  completed table is never re-written.
+- A table that stopped **part-way** resumes from `--start-id` (default 0), so re-running with defaults
+  appends rows with **duplicate personIds** until the size target — fine for a rough demo, but it skews
+  the exact join/group counts. To resume **cleanly**, pass the id it reached (`sl-ingest` prints
+  `nextStartId=…` on a clean finish; if it was killed, estimate ≈ data pages × rowsPerPage from
+  `sl-info.sh`), e.g. `SL_EMP_START=8000000000 streamlake-demo/scripts/sl-ingest.sh`. Or wipe and start
+  fresh (§10).
+
+**Scale up** (append more) — raise the target and start where it ended:
+```bash
 SL_PERSON_GB=1000 SL_EMP_GB=1000 \
   SL_PERSON_START=12500000000 SL_EMP_START=12500000000 \
   streamlake-demo/scripts/sl-ingest.sh
@@ -253,14 +273,24 @@ Change per‑page density with `SL_ROWS_PER_PAGE` (default 1000) and RF/rollover
 
 ---
 
-## 10. Stop / reset / troubleshoot
+## 10. Stop the broker / reset / troubleshoot
 
+**Stop the server (broker + bookie + zk):**
 ```bash
-streamlake-demo/scripts/sl-start.sh stop         # stop the server
+streamlake-demo/scripts/sl-start.sh stop         # graceful (uses the pid file)
 streamlake-demo/scripts/sl-start.sh status       # healthy / not ready
+# manual equivalent:  kill "$(cat "$PULSAR_HOME/data/standalone.pid")"
 ```
-- **Reset everything:** stop, then remove the storage dir contents (`rm -rf /mnt/nvme/{zk,bk}`) and
-  `$PULSAR_HOME/data`. Re‑run `sl-demo.sh`.
+Stopping **keeps all data on disk** — restart with `sl-start.sh start` and the tables are still there
+(no re-ingest needed). Ingestion running in `tmux`/`nohup` is a separate process; stop it from its
+session or `kill` its `java` PID.
+
+**Full reset (start over with an empty cluster):**
+```bash
+streamlake-demo/scripts/sl-start.sh stop
+rm -rf "$SL_STORAGE_DIR"/{zk,bk} "$PULSAR_HOME/data"    # e.g. SL_STORAGE_DIR=/grid/x/dfs-data/tmp/test
+SL_STORAGE_DIR="$SL_STORAGE_DIR" SL_PERSON_GB=500 SL_EMP_GB=500 streamlake-demo/scripts/sl-demo.sh
+```
 - **`LedgerNotExistException` on a query:** data ledgers were trimmed. `sl-register.sh` sets infinite
   retention; if you registered manually, run
   `pulsar-admin namespaces set-retention public/default --size -1 --time -1`.
@@ -319,14 +349,15 @@ you; only needed if you run it by hand:
 #   ... or --rows N   for an exact row count instead of a size target.
 ```
 
-### Host gotchas (handled by the scripts; here if you run steps by hand)
+### Host gotchas (now auto-handled by the scripts; here for reference / manual runs)
 - **`javac` is Java 8** (`class file has wrong version 61.0, should be 52.0`): the client jars are Java 17
-  bytecode. Put a JDK 17+ first on PATH — `export JAVA_HOME="$(dirname $(dirname $(readlink -f $(command -v java))))"; export PATH="$JAVA_HOME/bin:$PATH"`.
-- **Arrow `UnsupportedOperationException: … DirectByteBuffer … not available`**: JDK 17 needs the
-  `--add-opens` above (Arrow off-heap memory). `sl-ingest.sh` sets them; by hand, `export
+  bytecode. `sl-ingest.sh` **auto-detects a JDK 17+** (prefers `$JAVA_HOME`, else the JDK behind the
+  `java` on PATH). Manual override if detection fails: `export JAVA_HOME=/path/to/jdk17`.
+- **Arrow `UnsupportedOperationException: … DirectByteBuffer … not available`**: JDK 17 needs the Arrow
+  `--add-opens`. `sl-ingest.sh` **sets them automatically**; by hand, `export
   JDK_JAVA_OPTIONS="-Dio.netty.tryReflectionSetAccessible=true --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"`.
-- **macOS `._*` files** (`error in opening zip file`): `find "$PULSAR_HOME" -name '._*' -delete` (the
-  scripts do this automatically).
+- **macOS `._*` files** (`error in opening zip file`): the scripts run `find "$PULSAR_HOME" -name '._*'
+  -delete` automatically.
 
 ---
 

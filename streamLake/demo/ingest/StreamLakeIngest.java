@@ -85,6 +85,16 @@ public final class StreamLakeIngest {
                 StreamLakeProducer p = new StreamLakeProducer(raw, ts, rowsPerPage, 1 << 30, 0)) {
 
             long t0 = System.nanoTime();
+            // Idempotent re-runs: if this table is already at/over its size target, do nothing (so
+            // re-running after a completed load does not append duplicate ids).
+            if (targetBytes > 0) {
+                long cur = storageSize(admin, topic);
+                if (cur >= targetBytes) {
+                    System.out.printf("%s already at %s (>= target %s); nothing to do.%n",
+                            table, gb(cur), gb(targetBytes));
+                    return;
+                }
+            }
             long i = startId;
             long written = 0;
             long lastReport = 0;

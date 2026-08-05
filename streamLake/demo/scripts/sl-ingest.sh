@@ -26,22 +26,29 @@ mkdir -p "$OUT"
 # Strip macOS AppleDouble (._*) files that break jar/classpath reads on Linux (no-op if none).
 find "$PULSAR_HOME/lib" -name '._*' -delete 2>/dev/null || true
 
-# The client jars are Java 17 bytecode. Prefer JAVA_HOME (the JDK the broker uses), NOT a bare `javac`
-# on PATH which may be an older JDK 8 (-> "class file has wrong version 61.0, should be 52.0").
-JAVAC="${JAVA_HOME:+$JAVA_HOME/bin/}javac"
-JAVA="${JAVA_HOME:+$JAVA_HOME/bin/}java"
-vstr="$("$JAVAC" -version 2>&1 | awk 'NR==1{print $2}')"   # e.g. 17.0.5  or  1.8.0_301
-jver="${vstr%%.*}"
-[ "$jver" = "1" ] && jver="$(printf '%s' "$vstr" | cut -d. -f2)"   # 1.8 -> 8
-case "$jver" in ''|*[!0-9]*) jver=0;; esac
-if [ "$jver" -lt 17 ]; then
-  echo "ERROR: '$JAVAC' is Java ${vstr:-unknown}; the StreamLake client needs JDK 17+." >&2
-  echo "Point JAVA_HOME at a JDK 17+ (the one the broker uses) and re-run, e.g.:" >&2
-  echo "  export JAVA_HOME=\"\$(dirname \$(dirname \$(readlink -f \$(command -v java))))\"" >&2
-  echo "  $0" >&2
+# The client jars are Java 17 bytecode, so we need a JDK 17+ (a bare `javac` may be JDK 8 ->
+# "class file has wrong version 61.0, should be 52.0"). Auto-resolve one, in order: $JAVA_HOME, then
+# the JDK that backs the `java` on PATH (the broker already runs on 17+), then a bare `javac` if 17+.
+JAVAC=""; JAVA=""; JDK_VER=0
+_try_jdk() {  # _try_jdk <home-or-empty> ; sets JAVAC/JAVA/JDK_VER if that home's javac is >= 17
+  local home="$1" jc jr v m
+  jc="${home:+$home/bin/}javac"; jr="${home:+$home/bin/}java"
+  command -v "$jc" >/dev/null 2>&1 || return 1
+  v="$("$jc" -version 2>&1 | awk 'NR==1{print $2}')"; m="${v%%.*}"
+  [ "$m" = "1" ] && m="$(printf '%s' "$v" | cut -d. -f2)"   # 1.8.0 -> 8
+  case "$m" in ''|*[!0-9]*) return 1;; esac
+  [ "$m" -ge 17 ] || return 1
+  JAVAC="$jc"; JAVA="$jr"; JDK_VER="$m"; return 0
+}
+_jhome_from_path=""
+_jbin="$(command -v java 2>/dev/null || true)"
+[ -n "$_jbin" ] && _jhome_from_path="$(dirname "$(dirname "$(readlink -f "$_jbin")")")"
+_try_jdk "${JAVA_HOME:-}" || _try_jdk "$_jhome_from_path" || _try_jdk "" || {
+  echo "ERROR: no JDK 17+ found (the StreamLake client jars are Java 17 bytecode)." >&2
+  echo "Install a JDK 17+ or 'export JAVA_HOME=/path/to/jdk17' and re-run." >&2
   exit 1
-fi
-echo "==> compiling StreamLakeIngest with javac (Java $jver) against $PULSAR_HOME/lib…"
+}
+echo "==> compiling StreamLakeIngest with javac (Java $JDK_VER) against $PULSAR_HOME/lib…"
 "$JAVAC" -cp "$PULSAR_HOME/lib/*" -d "$OUT" "$INGEST_DIR/StreamLakeIngest.java"
 
 # JVM flags Apache Arrow + Netty need on JDK 17+ for off-heap memory (same set bin/pulsar uses).
