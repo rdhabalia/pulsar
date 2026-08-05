@@ -116,3 +116,7 @@ CLAUDE.md
 # StreamLake benchmark off-heap spill scratch dir (never commit spill files)
 /pulsar-broker/temp/
 /temp/
+
+# StreamLake demo build artifacts
+/streamlake-demo.tar.gz
+streamLake/demo/ingest/out/
