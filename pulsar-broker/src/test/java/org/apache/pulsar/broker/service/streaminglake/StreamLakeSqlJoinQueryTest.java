@@ -19,6 +19,8 @@
 package org.apache.pulsar.broker.service.streaminglake;
 
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
 import java.util.Arrays;
 import java.util.List;
@@ -35,6 +37,8 @@ import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.StreamLakeQueryResult;
 import org.apache.pulsar.common.policies.data.StreamLakeQueryStats;
+import org.apache.pulsar.common.policies.data.StreamLakeTableConfig;
+import org.apache.pulsar.common.policies.data.StreamLakeTableInfo;
 import org.apache.pulsar.common.policies.data.StreamingLakeConfig;
 import org.awaitility.Awaitility;
 import org.testng.annotations.Test;
@@ -117,6 +121,55 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
             }
         }
         return expected;
+    }
+
+    @Test(timeOut = 300_000)
+    public void registerAndInfoViaAdmin() throws Exception {
+        // Exercises the EXTERNAL admin path end to end (pulsar-admin -> REST -> broker):
+        // register a topic as a StreamLake table, ingest, then read its on-storage layout via `info`.
+        String person = "persistent://" + NAMESPACE + "/PersonReg";
+        admin.namespaces().setRetention(NAMESPACE, new RetentionPolicies(-1, -1));
+        admin.topics().createNonPartitionedTopic(person);
+
+        StreamLakeTableConfig cfg = new StreamLakeTableConfig();
+        cfg.setColumns(Arrays.asList(
+                new StreamLakeTableConfig.Column(1, "personId", "INT64", true),
+                new StreamLakeTableConfig.Column(2, "name", "STRING", true),
+                new StreamLakeTableConfig.Column(3, "age", "INT32", true)));
+        cfg.setReplicationFactor(1);
+        cfg.setPageIndexMaxEntriesPerLedger(500);
+        cfg.setSegmentMaxEntriesPerLedger(50);
+        admin.streamLake().register(TENANT, "ns", "PersonReg", cfg);
+
+        Awaitility.await().atMost(30, TimeUnit.SECONDS).untilAsserted(() ->
+                assertTrue(topic(person).isStreamLakeClientColumnar(),
+                        "topic is a StreamLake table after register"));
+
+        loadPerson(person);
+
+        PersistentTopic pt = topic(person);
+        Awaitility.await().atMost(120, TimeUnit.SECONDS).untilAsserted(() -> {
+            long seg = pt.getStreamLakeSegmentService().catalog().all().values().stream()
+                    .filter(i -> i.state == StreamLakeCatalog.State.SEGMENTED).count();
+            assertTrue(seg >= 2, "expected segmented data ledgers, was " + seg);
+        });
+
+        StreamLakeTableInfo info = admin.streamLake().getInfo(TENANT, "ns", "PersonReg");
+        assertTrue(info.getDataPages() > 0, "info reports the data-ledger page (entry) count");
+        assertTrue(info.getDataLedgers() > 1, "the small rollover made several data ledgers");
+        assertTrue(info.getDataLedgersSegmented() >= 2, "several data ledgers segmented");
+        assertEquals(info.getDataLedgersOpen(), info.getDataLedgers() - info.getDataLedgersSegmented(),
+                "open = total - segmented");
+        assertNotNull(info.getCatalogLedgerId(), "catalog ledger recorded");
+        assertFalse(info.getPageIndexLedgerIds().isEmpty(), "page-index ledger recorded");
+        assertFalse(info.getSegmentLedgerIds().isEmpty(), "segment ledger recorded");
+
+        // Registered-by-admin table is queryable by name (same path the CLI query uses).
+        StreamLakeQueryResult res = new StreamLakeQueryCoordinator(t -> {
+            PersistentTopic p = topic("persistent://" + NAMESPACE + "/" + t);
+            return p == null ? null : p.getStreamLakeQueryService();
+        }).executeSql("SELECT personId, age FROM PersonReg WHERE age BETWEEN 30 AND 40");
+        assertEquals(res.getRowCount(), 1320, "age 30..40 -> 1320 rows");
     }
 
     @Test(timeOut = 300_000)

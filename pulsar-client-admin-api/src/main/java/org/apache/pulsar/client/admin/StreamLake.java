@@ -20,13 +20,36 @@ package org.apache.pulsar.client.admin;
 
 import java.util.concurrent.CompletableFuture;
 import org.apache.pulsar.common.policies.data.StreamLakeQueryResult;
+import org.apache.pulsar.common.policies.data.StreamLakeTableConfig;
+import org.apache.pulsar.common.policies.data.StreamLakeTableInfo;
 
 /**
- * Admin operations for StreamLake, the columnar analytical layer over a topic's data. Currently exposes
- * SQL query execution: a single-table scan or a two-table inner equi-join over the StreamLake tables in
- * a namespace, planned + executed on the broker and returned as columns + rows.
+ * Admin operations for StreamLake, the columnar analytical layer over a topic's data: register a topic
+ * as a StreamLake table (schema + tuning), inspect its on-storage layout, and run SQL queries (a
+ * single-table scan or a two-table inner equi-join over the StreamLake tables in a namespace, planned +
+ * executed on the broker and returned as columns + rows).
  */
 public interface StreamLake {
+
+    /**
+     * Register (or reconfigure) a topic as a StreamLake table by applying a {@link StreamLakeTableConfig}
+     * (schema + tuning) as its topic policy. The topic must already exist and the broker must have
+     * topic-level policies enabled. After this returns the topic accepts client-columnar writes and is
+     * queryable by name.
+     *
+     * @param tenant    the tenant
+     * @param namespace the namespace
+     * @param table     the topic (table) short name within the namespace
+     * @param config    the StreamLake table configuration to apply
+     */
+    void register(String tenant, String namespace, String table, StreamLakeTableConfig config)
+            throws PulsarAdminException;
+
+    /**
+     * Report a StreamLake table's on-storage layout: data-ledger counts (total / segmented / open), the
+     * backing catalog / page-index / segment ledgers, ingested rows and the event-time range.
+     */
+    StreamLakeTableInfo getInfo(String tenant, String namespace, String table) throws PulsarAdminException;
 
     /**
      * Run a StreamLake SQL query over the tables in {@code tenant/namespace} and return the result.

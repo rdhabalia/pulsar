@@ -12,11 +12,11 @@ columnar streaming data. It has two tracks:
   bookie storage with **no manual file edits**, start `zk + bookie + broker`, generate load at scale,
   list the resulting ledgers, and run the query.
 
-> Honesty note: submitting a **query** is now an external `pulsar-admin streamlake query` command
-> (CLI → REST → broker coordinator; §8). **Registering** a topic as a StreamLake table is still driven
-> **inside the broker** (Track A). The external *register* command and the dedicated **query‑executor
-> broker tier** (with its own local storage engine) are the remaining integration steps — see §11
-> “Deferred”.
+> Honesty note: **register**, **query**, and **info** are now first‑class external `pulsar-admin
+> streamlake` commands (CLI → REST → broker; §8–§9), and a standalone **load generator** ingests at
+> scale — so the whole of Track B (register → ingest → query → inspect) runs on a deployed server with
+> **no in‑broker step**, driven by one script (`sl-demo.sh`). The dedicated **query‑executor broker
+> tier** (with its own local storage engine) is the one remaining integration item — see §11.
 
 ---
 
@@ -118,6 +118,33 @@ Ship it:
 scp streamlake-demo.tar.gz user@HOST:/opt/
 ssh user@HOST 'cd /opt && tar xzf streamlake-demo.tar.gz'   # unpacks apache-pulsar-<ver>/
 ```
+
+### 4a. Track B — one command on the host (register → ingest → query)
+
+After unpacking, a single interactive script does **everything**: it asks for your storage disk and the
+two table sizes, configures + starts `zk + bookie + broker`, registers `Person` + `Employee`, ingests
+the requested amount, prints the on‑storage layout, and shows the queries to run.
+
+```bash
+cd /opt/apache-pulsar-<ver>
+streamlake-demo/scripts/sl-demo.sh
+#   Local disk path for StreamLake storage [/mnt/nvme]: /mnt/nvme
+#   Person table size in GB [500]: 500
+#   Employee table size in GB [500]: 500
+```
+
+Non‑interactive / re‑runnable (raise the sizes any time — ingestion appends):
+
+```bash
+SL_STORAGE_DIR=/mnt/nvme SL_PERSON_GB=1000 SL_EMP_GB=1000 \
+  streamlake-demo/scripts/sl-demo.sh
+```
+
+The steps are also runnable individually (all under `streamlake-demo/scripts/`, with `PULSAR_HOME` set):
+`sl-configure.sh` (storage), `sl-start.sh start|stop|status`, `sl-register.sh`, `sl-ingest.sh`,
+`sl-info.sh`, `sl-queries.sh [--run]`. The ingestion program is `streamlake-demo/ingest/StreamLakeIngest.java`
+(compiled on the host against `$PULSAR_HOME/lib/*`); pass `SL_PERSON_GB`/`SL_EMP_GB` (target on‑disk size)
+or edit it to use `--rows N`.
 
 ---
 
@@ -248,13 +275,75 @@ and row‑filtered exactly.
 
 ---
 
+### Register a table externally (no in‑broker step)
+
+```bash
+$PULSAR_HOME/bin/pulsar-admin streamlake register streamlake/ns Person \
+  --schema "personId:INT64,name:STRING,age:INT32" --rf 1
+$PULSAR_HOME/bin/pulsar-admin streamlake register streamlake/ns Employee \
+  --schema "empId:INT64,personId:INT64,salary:INT64" --rf 1
+```
+`--schema` is `name:TYPE[:noidx]` (INT32|INT64|DOUBLE|BOOLEAN|STRING|BYTES; indexed by default). Other
+flags: `--rf` (replication, 1 for one bookie), `--page-index-max-entries`, `--segment-max-entries`,
+`--max-cardinality`, `--bloom-fpp`, `--async-build`. (`sl-register.sh` runs both; the topic must exist
+and have infinite retention — the script sets it.)
+
+### The three demo queries + a validation scan
+
+All four are bounded so they return quickly and print as a table (add `--json` for raw). `sl-queries.sh`
+prints them ready to paste; `sl-queries.sh --run` executes them.
+
+```bash
+Q="$PULSAR_HOME/bin/pulsar-admin streamlake query streamlake/ns"
+
+# 1) Inner join (Person ⋈ Employee ON personId), over a pruned personId slice
+$Q "SELECT * FROM Person p JOIN Employee e ON p.personId = e.personId \
+    WHERE p.personId BETWEEN 0 AND 100000 AND p.age BETWEEN 30 AND 40 AND e.salary >= 40000"
+
+# 2) Group by (age -> COUNT/MIN/MAX; scans a slice, returns 50 rows)
+$Q "SELECT age, COUNT(*), MIN(personId), MAX(personId) FROM Person \
+    WHERE personId BETWEEN 0 AND 1000000 GROUP BY age"
+
+# 3) Order by (top-20 highest salaries; bounded top-K external sort)
+$Q "SELECT personId, salary FROM Employee \
+    WHERE personId BETWEEN 0 AND 1000000 ORDER BY salary DESC LIMIT 20"
+
+# 4) Single-table scan to validate data (a key-range slice; page-pruned)
+$Q "SELECT personId, name, age FROM Person WHERE personId BETWEEN 0 AND 20"
+```
+
+Every query prints a **stats footer** (rows read, pages scanned/kept/pruned, bytes read, peak buffer,
+elapsed) after the table. A whole‑table group‑by works too (heavy scan, 50‑row result):
+`$Q "SELECT age, COUNT(*) FROM Person GROUP BY age"`. Event‑time (date) pruning is automatic by publish
+time — the covered range is shown by `streamlake info` (§9); range predicates on indexed columns (e.g.
+`personId BETWEEN …`) prune to just the pages in that slice, which is the "scan a range to validate"
+capability.
+
 ## 9. Validate the ledgers
 
 **From the demo report (Track A)** — the per‑table block already lists the catalog ledger, the
 page‑index ledger id(s), the segment ledger id(s), and every data ledger's state + offsets. That *is*
 the ledger inventory.
 
-**From `pulsar-admin` (Track B)** — inspect the managed (data) ledger chain of a topic:
+**From `pulsar-admin streamlake info` (Track B)** — the on‑storage layout at a glance (this is the
+`sl-info.sh` output):
+
+```bash
+$PULSAR_HOME/bin/pulsar-admin streamlake info streamlake/ns Person
+# StreamLake table: persistent://streamlake/ns/Person
+#   data ledgers      : 214 total  (212 segmented, 2 not-yet-segmented)
+#   page-index ledgers: 3  ids=[5, 88, 171]
+#   segment ledgers   : 1  ids=[9]
+#   catalog ledger    : 4
+#   data pages        : 10,700 (data-ledger entries; rows = pages x rowsPerPage)
+#   event-time range  : 1,700,000,000,000 .. 1,700,000,600,000 (epoch ms)
+```
+
+`data pages` is the number of data‑ledger entries; the **exact ingested row count** is echoed by the
+ingestion program (`DONE Person: wrote N rows …`). `page-index` / `segment` / `catalog` are the only
+StreamLake ledgers kept in ZooKeeper (as tiny pointers under `/streamlake/<tenant>/<ns>/<topic>`).
+
+**From `pulsar-admin topics stats-internal` (Track B)** — inspect the managed (data) ledger chain:
 
 ```bash
 $PULSAR_HOME/bin/pulsar-admin topics stats-internal persistent://<tenant>/<ns>/Person
@@ -281,16 +370,19 @@ topic and the ledgers still reach `SEGMENTED`.
 
 ## 11. Deferred (next integration steps)
 
-- **DONE — external query surface (admin CLI / REST)**: `pulsar-admin streamlake query` →
-  `POST /admin/v3/streamlake/{tenant}/{ns}/query` → broker coordinator (single scan + inner join). See
-  §8; verified by `StreamLakeSqlJoinQueryTest` (1,320 rows through the REST endpoint).
-- **External *register* command (the remaining gap)**: a topic is still turned into a StreamLake table
-  in‑broker (Track A). A thin admin command + REST endpoint to set a topic's `StreamingLakeConfig`
-  externally is the last piece so the CLI can both register and query on a deployed cluster.
+- **DONE — external query** (`pulsar-admin streamlake query` → REST → coordinator; §8).
+- **DONE — external register** (`pulsar-admin streamlake register` → REST sets the topic's
+  `StreamingLakeConfig`; §8, `sl-register.sh`). A deployed cluster now registers **and** queries with no
+  in‑broker step; verified by `StreamLakeSqlJoinQueryTest.registerAndInfoViaAdmin`.
+- **DONE — external info** (`pulsar-admin streamlake info` → REST reports the ledger inventory; §9).
+- **DONE — standalone load generator** (`streamlake-demo/ingest/StreamLakeIngest.java`, driven by
+  `sl-ingest.sh`): ingests Person + Employee to a configurable on‑disk size (GB) via the public client
+  API; re‑runnable to grow the tables.
 - **Dedicated query‑executor broker tier** with its own local storage engine (**RocksDB** vs mmap cache —
-  under discussion) and object‑storage offload of cold segments.
-- **500 GB+ load generator as a standalone client**: blocked on the external register path above; until
-  then, scale the in‑broker runner via `SL_DEMO_PERSON_ROWS` / `SL_DEMO_EMP_ROWS`.
+  under discussion) and object‑storage offload of cold segments. *(still open)*
+- **Explicit event‑time window on `query`** (`--from/--to` epoch‑ms): today date pruning is automatic by
+  publish time, and range predicates on indexed columns bound a scan; an explicit time‑window flag is a
+  small follow‑up. *(still open)*
 
 ---
 

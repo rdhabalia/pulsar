@@ -38,6 +38,8 @@ import org.apache.pulsar.client.admin.StreamLakeQueryResultHandler;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.common.policies.data.StreamLakeQueryResult;
 import org.apache.pulsar.common.policies.data.StreamLakeQueryStats;
+import org.apache.pulsar.common.policies.data.StreamLakeTableConfig;
+import org.apache.pulsar.common.policies.data.StreamLakeTableInfo;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 
 /**
@@ -57,6 +59,49 @@ public class StreamLakeImpl extends BaseResource implements StreamLake {
     public StreamLakeImpl(WebTarget web, Authentication auth, long requestTimeoutMs) {
         super(auth, requestTimeoutMs);
         this.adminV3StreamLake = web.path("admin/v3/streamlake");
+    }
+
+    @Override
+    public void register(String tenant, String namespace, String table, StreamLakeTableConfig config)
+            throws PulsarAdminException {
+        WebTarget path = adminV3StreamLake.path(tenant).path(namespace).path(table).path("register");
+        Response response = null;
+        try {
+            response = request(path).post(Entity.entity(config, MediaType.APPLICATION_JSON));
+            if (response.getStatusInfo().getFamily() != Response.Status.Family.SUCCESSFUL) {
+                throw getApiException(response);
+            }
+        } catch (PulsarAdminException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new PulsarAdminException(e);
+        } finally {
+            if (response != null) {
+                response.close();
+            }
+        }
+    }
+
+    @Override
+    public StreamLakeTableInfo getInfo(String tenant, String namespace, String table)
+            throws PulsarAdminException {
+        WebTarget path = adminV3StreamLake.path(tenant).path(namespace).path(table).path("info");
+        Response response = null;
+        try {
+            response = request(path).get();
+            if (response.getStatusInfo().getFamily() != Response.Status.Family.SUCCESSFUL) {
+                throw getApiException(response);
+            }
+            return response.readEntity(StreamLakeTableInfo.class);
+        } catch (PulsarAdminException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new PulsarAdminException(e);
+        } finally {
+            if (response != null) {
+                response.close();
+            }
+        }
     }
 
     @Override

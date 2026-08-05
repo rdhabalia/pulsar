@@ -10,13 +10,19 @@ case "$cmd" in
     echo "Starting Pulsar standalone (zk + bookie + broker)…"
     # --num-bookies 1 for a single-host demo; the fork stores StreamLake page-index/segment/catalog
     # ledgers in the same bookie. For >1 bookie set page-index/segment RF accordingly (see demo.md §7).
+    # SL_ZK_DIR / SL_BK_DIR point zk + bookie (journal+ledgers) data at your storage disk.
+    ZK_DIR="${SL_ZK_DIR:-$PULSAR_HOME/data/zk}"
+    BK_DIR="${SL_BK_DIR:-$PULSAR_HOME/data/bk}"
+    mkdir -p "$ZK_DIR" "$BK_DIR" "$PULSAR_HOME/logs" "$PULSAR_HOME/data"
     nohup "$PULSAR_HOME/bin/pulsar" standalone \
       --num-bookies 1 \
-      --zookeeper-dir "$PULSAR_HOME/data/zk" \
-      --bookkeeper-dir "$PULSAR_HOME/data/bk" \
+      --zookeeper-dir "$ZK_DIR" \
+      --bookkeeper-dir "$BK_DIR" \
       > "$PULSAR_HOME/logs/standalone.out" 2>&1 &
     echo $! > "$PULSAR_HOME/data/standalone.pid"
     echo "PID $(cat "$PULSAR_HOME/data/standalone.pid"); logs: $PULSAR_HOME/logs/standalone.out"
+    echo "  zk data : $ZK_DIR"
+    echo "  bk data : $BK_DIR"
     echo "Wait for readiness:  until $PULSAR_HOME/bin/pulsar-admin brokers healthcheck; do sleep 2; done"
     ;;
   stop)

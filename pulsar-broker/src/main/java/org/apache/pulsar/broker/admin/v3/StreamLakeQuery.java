@@ -25,6 +25,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
@@ -39,14 +40,23 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.apache.pulsar.broker.admin.AdminResource;
 import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
+import org.apache.pulsar.broker.service.streaminglake.StreamLakeCatalog;
+import org.apache.pulsar.broker.service.streaminglake.StreamLakeMetaStore;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeQueryCoordinator;
 import org.apache.pulsar.broker.service.streaminglake.StreamLakeQueryService;
 import org.apache.pulsar.broker.web.RestException;
+import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.StreamLakeQueryStats;
+import org.apache.pulsar.common.policies.data.StreamLakeTableConfig;
+import org.apache.pulsar.common.policies.data.StreamLakeTableInfo;
+import org.apache.pulsar.common.policies.data.StreamingLakeConfig;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -108,6 +118,128 @@ public class StreamLakeQuery extends AdminResource {
                 asyncResponse.resume(new RestException(e));
             }
         });
+    }
+
+    @POST
+    @Path("/{tenant}/{namespace}/{table}/register")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Register (or reconfigure) a topic as a StreamLake table by setting its "
+            + "StreamingLakeConfig topic policy (schema, tuning, ledger rollovers, replication).")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "204", description = "The table config was applied."),
+            @ApiResponse(responseCode = "400", description = "Missing/invalid config."),
+            @ApiResponse(responseCode = "404", description = "Topic does not exist.")
+    })
+    public void register(
+            @Suspended final AsyncResponse asyncResponse,
+            @PathParam("tenant") String tenant,
+            @PathParam("namespace") String namespace,
+            @PathParam("table") String table,
+            StreamLakeTableConfig req) {
+        validateNamespaceName(tenant, namespace);
+        if (req == null || req.getColumns() == null || req.getColumns().isEmpty()) {
+            asyncResponse.resume(new RestException(Response.Status.BAD_REQUEST,
+                    "Missing StreamLakeTableConfig body (need at least one column)"));
+            return;
+        }
+        StreamingLakeConfig config = toStreamingLakeConfig(req);
+        String topicName = "persistent://" + tenant + "/" + namespace + "/" + table;
+        pulsar().getTopicPoliciesService()
+                .updateTopicPoliciesAsync(TopicName.get(topicName), false, false,
+                        p -> p.setStreamingLake(config))
+                .thenRun(() -> asyncResponse.resume(Response.noContent().build()))
+                .exceptionally(ex -> {
+                    log.warn("StreamLake register failed for {}: {}", topicName, ex.toString());
+                    asyncResponse.resume(new RestException(ex));
+                    return null;
+                });
+    }
+
+    // Convert the lean admin-api request into the internal StreamingLakeConfig topic policy. The demo
+    // uses a single replication factor (rf) for every StreamLake ledger tier (single-bookie).
+    private static StreamingLakeConfig toStreamingLakeConfig(StreamLakeTableConfig req) {
+        List<StreamingLakeConfig.SchemaColumn> cols = new ArrayList<>();
+        for (StreamLakeTableConfig.Column c : req.getColumns()) {
+            cols.add(new StreamingLakeConfig.SchemaColumn(c.getColumnId(), c.getName(), c.getType(),
+                    c.isIndexed()));
+        }
+        int rf = Math.max(1, req.getReplicationFactor());
+        return StreamingLakeConfig.builder()
+                .enabled(true).clientColumnarEnabled(true)
+                .setMaxCardinality(req.getSetMaxCardinality()).bloomFpp(req.getBloomFpp())
+                .pageIndexEnsembleSize(rf).pageIndexWriteQuorum(rf).pageIndexAckQuorum(rf)
+                .segmentEnsembleSize(rf).segmentWriteQuorum(rf).segmentAckQuorum(rf)
+                .pageIndexMaxEntriesPerLedger(req.getPageIndexMaxEntriesPerLedger())
+                .segmentMaxEntriesPerLedger(req.getSegmentMaxEntriesPerLedger())
+                .asyncSegmentBuildViaSystemTopic(req.isAsyncSegmentBuildViaSystemTopic())
+                .columns(cols).build();
+    }
+
+    @GET
+    @Path("/{tenant}/{namespace}/{table}/info")
+    @Produces(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Report a StreamLake table's on-storage layout: data-ledger counts "
+            + "(total/segmented/open), the catalog/page-index/segment ledgers, rows and event-time range.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "The table's storage-layout snapshot."),
+            @ApiResponse(responseCode = "400", description = "Not a loaded StreamLake table.")
+    })
+    public void info(
+            @Suspended final AsyncResponse asyncResponse,
+            @PathParam("tenant") String tenant,
+            @PathParam("namespace") String namespace,
+            @PathParam("table") String table) {
+        validateNamespaceName(tenant, namespace);
+        pulsar().getExecutor().execute(() -> {
+            try {
+                asyncResponse.resume(buildInfo(tenant, namespace, table));
+            } catch (IllegalArgumentException e) {
+                asyncResponse.resume(new RestException(Response.Status.BAD_REQUEST, e.getMessage()));
+            } catch (Exception e) {
+                log.warn("StreamLake info failed for {}/{}/{}: {}", tenant, namespace, table, e.toString());
+                asyncResponse.resume(new RestException(e));
+            }
+        });
+    }
+
+    private StreamLakeTableInfo buildInfo(String tenant, String namespace, String table) throws Exception {
+        String topicName = "persistent://" + tenant + "/" + namespace + "/" + table;
+        Optional<Topic> ref = pulsar().getBrokerService().getTopicReference(topicName);
+        if (ref.isEmpty()) {
+            ref = pulsar().getBrokerService().getTopic(topicName, false).get();
+        }
+        if (ref.isEmpty() || !(ref.get() instanceof PersistentTopic)) {
+            throw new IllegalArgumentException("Not a loaded StreamLake table: " + table);
+        }
+        PersistentTopic pt = (PersistentTopic) ref.get();
+        Map<Long, StreamLakeCatalog.LedgerInfo> catalog = pt.getStreamLakeSegmentService().catalog().all();
+        StreamLakeMetaStore.Record rec = new StreamLakeMetaStore(
+                pulsar().getLocalMetadataStore(), pt.getManagedLedger()).read();
+
+        StreamLakeTableInfo info = new StreamLakeTableInfo();
+        info.setTopic(topicName);
+        info.setDataLedgers(catalog.size());
+        long segmented = 0;
+        long pages = 0;
+        long minEt = Long.MAX_VALUE;
+        long maxEt = Long.MIN_VALUE;
+        for (StreamLakeCatalog.LedgerInfo li : catalog.values()) {
+            if (li.state == StreamLakeCatalog.State.SEGMENTED) {
+                segmented++;
+            }
+            pages += li.rowCount; // LedgerInfo.rowCount is the data ledger's entry (page) count
+            minEt = Math.min(minEt, li.minEventTime);
+            maxEt = Math.max(maxEt, li.maxEventTime);
+        }
+        info.setDataLedgersSegmented(segmented);
+        info.setDataLedgersOpen(catalog.size() - segmented);
+        info.setDataPages(pages);
+        info.setMinEventTime(catalog.isEmpty() ? 0 : minEt);
+        info.setMaxEventTime(catalog.isEmpty() ? 0 : maxEt);
+        info.setCatalogLedgerId(rec.catalogLedgerId);
+        info.setPageIndexLedgerIds(rec.pageIndexLedgerIds);
+        info.setSegmentLedgerIds(rec.segmentLedgerIds);
+        return info;
     }
 
     private static void writeNdjson(StreamLakeQueryCoordinator.Prepared prepared, OutputStream os)

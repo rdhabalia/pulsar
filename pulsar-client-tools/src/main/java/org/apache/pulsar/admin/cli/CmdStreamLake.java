@@ -25,23 +25,127 @@ import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.admin.StreamLakeQueryResultHandler;
 import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.policies.data.StreamLakeQueryStats;
+import org.apache.pulsar.common.policies.data.StreamLakeTableConfig;
+import org.apache.pulsar.common.policies.data.StreamLakeTableInfo;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
 
 /**
- * {@code pulsar-admin streamlake} — StreamLake columnar query operations. The {@code query} subcommand
- * submits a SQL query (single-table scan or two-table inner equi-join) over the StreamLake tables in a
- * namespace to the broker and prints the result rows as they <b>stream</b> back (the CLI holds only one
- * row at a time, so a large result does not OOM the client).
+ * {@code pulsar-admin streamlake} — StreamLake columnar operations: {@code register} a topic as a
+ * StreamLake table (schema + tuning), {@code info} to inspect its on-storage layout, and {@code query}
+ * to run SQL (single-table scan or two-table inner equi-join) over a namespace's tables. Query results
+ * stream back (the CLI holds only one row at a time in {@code --json} mode).
  */
 @Command(description = "Operations about StreamLake (columnar analytical queries over topics)")
 public class CmdStreamLake extends CmdBase {
 
     public CmdStreamLake(Supplier<PulsarAdmin> admin) {
         super("streamlake", admin);
+        addCommand("register", new Register());
+        addCommand("info", new Info());
         addCommand("query", new Query());
+    }
+
+    @Command(description = "Register (or reconfigure) a topic as a StreamLake table: set its schema "
+            + "(indexed columns) + tuning as a topic policy. The topic must already exist.")
+    private class Register extends CliCommand {
+        @Parameters(index = "0", description = "tenant/namespace", arity = "1")
+        private String namespace;
+
+        @Parameters(index = "1", description = "table (topic short name in the namespace)", arity = "1")
+        private String table;
+
+        @Option(names = {"-s", "--schema"}, required = true, description = "comma-separated columns "
+                + "'name:TYPE[:noidx]' (TYPE: INT32|INT64|DOUBLE|BOOLEAN|STRING|BYTES; columns are "
+                + "indexed by default, add ':noidx' to skip pruning stats)")
+        private String schema;
+
+        @Option(names = "--max-cardinality", description = "low-card exact-set cap (default 64)")
+        private int maxCardinality = 64;
+
+        @Option(names = "--bloom-fpp", description = "bloom false-positive rate (default 0.01)")
+        private double bloomFpp = 0.01;
+
+        @Option(names = "--page-index-max-entries", description = "page-index ledger rollover (default "
+                + "1000000)")
+        private int pageIndexMaxEntries = 1_000_000;
+
+        @Option(names = "--segment-max-entries", description = "segment ledger rollover (default 200000)")
+        private int segmentMaxEntries = 200_000;
+
+        @Option(names = "--rf", description = "replication factor (ensemble=write=ack) for the "
+                + "page-index + segment ledgers (default 1 for a single-bookie demo)")
+        private int rf = 1;
+
+        @Option(names = "--async-build", description = "build segments via the system topic (Phase F)")
+        private boolean asyncBuild;
+
+        @Override
+        void run() throws Exception {
+            NamespaceName ns = NamespaceName.get(validateNamespace(namespace));
+            List<StreamLakeTableConfig.Column> cols = new ArrayList<>();
+            int id = 1;
+            for (String spec : schema.split(",")) {
+                String[] parts = spec.trim().split(":");
+                if (parts.length < 2 || parts[0].trim().isEmpty() || parts[1].trim().isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "Bad column '" + spec + "', expected name:TYPE[:noidx]");
+                }
+                boolean indexed = !(parts.length >= 3 && parts[2].trim().equalsIgnoreCase("noidx"));
+                cols.add(new StreamLakeTableConfig.Column(id++, parts[0].trim(),
+                        parts[1].trim().toUpperCase(), indexed));
+            }
+            StreamLakeTableConfig cfg = new StreamLakeTableConfig();
+            cfg.setColumns(cols);
+            cfg.setSetMaxCardinality(maxCardinality);
+            cfg.setBloomFpp(bloomFpp);
+            cfg.setPageIndexMaxEntriesPerLedger(pageIndexMaxEntries);
+            cfg.setSegmentMaxEntriesPerLedger(segmentMaxEntries);
+            cfg.setReplicationFactor(rf);
+            cfg.setAsyncSegmentBuildViaSystemTopic(asyncBuild);
+            getAdmin().streamLake().register(ns.getTenant(), ns.getLocalName(), table, cfg);
+            print("Registered StreamLake table " + ns + "/" + table + " with " + cols.size()
+                    + " columns (rf=" + rf + ").");
+        }
+    }
+
+    @Command(description = "Show a StreamLake table's on-storage layout: data-ledger counts, the "
+            + "catalog/page-index/segment ledgers, ingested rows and event-time range.")
+    private class Info extends CliCommand {
+        @Parameters(index = "0", description = "tenant/namespace", arity = "1")
+        private String namespace;
+
+        @Parameters(index = "1", description = "table (topic short name in the namespace)", arity = "1")
+        private String table;
+
+        @Option(names = {"-j", "--json"}, description = "print raw JSON")
+        private boolean json;
+
+        @Override
+        void run() throws Exception {
+            NamespaceName ns = NamespaceName.get(validateNamespace(namespace));
+            StreamLakeTableInfo info =
+                    getAdmin().streamLake().getInfo(ns.getTenant(), ns.getLocalName(), table);
+            if (json) {
+                print(ObjectMapperFactory.getMapper().getObjectMapper()
+                        .writerWithDefaultPrettyPrinter().writeValueAsString(info));
+                return;
+            }
+            print("StreamLake table: " + info.getTopic());
+            print(String.format("  data ledgers      : %,d total  (%,d segmented, %,d not-yet-segmented)",
+                    info.getDataLedgers(), info.getDataLedgersSegmented(), info.getDataLedgersOpen()));
+            print(String.format("  page-index ledgers: %,d  ids=%s",
+                    info.getPageIndexLedgers(), info.getPageIndexLedgerIds()));
+            print(String.format("  segment ledgers   : %,d  ids=%s",
+                    info.getSegmentLedgers(), info.getSegmentLedgerIds()));
+            print("  catalog ledger    : " + info.getCatalogLedgerId());
+            print(String.format("  data pages        : %,d (data-ledger entries; rows = pages x "
+                    + "rowsPerPage)", info.getDataPages()));
+            print(String.format("  event-time range  : %,d .. %,d (epoch ms)",
+                    info.getMinEventTime(), info.getMaxEventTime()));
+        }
     }
 
     @Command(description = "Run a StreamLake SQL query over a namespace's tables and print the result. "
