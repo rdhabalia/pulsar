@@ -14,8 +14,15 @@ case "$cmd" in
     ZK_DIR="${SL_ZK_DIR:-$PULSAR_HOME/data/zk}"
     BK_DIR="${SL_BK_DIR:-$PULSAR_HOME/data/bk}"
     mkdir -p "$ZK_DIR" "$BK_DIR" "$PULSAR_HOME/logs" "$PULSAR_HOME/data"
+    # --no-stream-storage / --no-functions-worker: the StreamLake demo does not use the BookKeeper
+    # stream storage (table service, port 4181) or Pulsar Functions. Leaving stream storage on makes the
+    # embedded bookie register in ZK under /stream/servers/available; after an unclean stop, that stale
+    # ephemeral znode blocks the next start ("Failed to initialize a registration state service ...
+    # ephemeral znode ... expired"). Disabling it avoids that entirely (and starts faster).
     nohup "$PULSAR_HOME/bin/pulsar" standalone \
       --num-bookies 1 \
+      --no-stream-storage \
+      --no-functions-worker \
       --zookeeper-dir "$ZK_DIR" \
       --bookkeeper-dir "$BK_DIR" \
       > "$PULSAR_HOME/logs/standalone.out" 2>&1 &
