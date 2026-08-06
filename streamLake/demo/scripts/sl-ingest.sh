@@ -20,6 +20,9 @@ EMP_GB="${SL_EMP_GB:-500}"
 ROWS_PER_PAGE="${SL_ROWS_PER_PAGE:-1000}"
 PERSON_START="${SL_PERSON_START:-0}"
 EMP_START="${SL_EMP_START:-0}"
+THREADS="${SL_THREADS:-8}"              # parallel producers (parallelizes Arrow encode + send)
+CLIENT_MEM_MB="${SL_CLIENT_MEM_MB:-512}" # pulsar client memory limit (more in-flight = faster)
+INGEST_XMX="${SL_INGEST_XMX:-4g}"       # ingest JVM heap
 
 OUT="$INGEST_DIR/out"
 mkdir -p "$OUT"
@@ -62,12 +65,13 @@ ARROW_OPTS="-Dio.netty.tryReflectionSetAccessible=true \
 
 run() {  # run <table> <target-gb> <start-id>
   local table="$1" gb="$2" start="$3"
-  echo "==> ingesting $table to ~${gb}GB (startId=$start)…"
+  echo "==> ingesting $table to ~${gb}GB (startId=$start, threads=$THREADS)…"
   # shellcheck disable=SC2086
-  "$JAVA" -Xmx2g $ARROW_OPTS -cp "$PULSAR_HOME/lib/*:$OUT" StreamLakeIngest \
+  "$JAVA" -Xmx"$INGEST_XMX" $ARROW_OPTS -cp "$PULSAR_HOME/lib/*:$OUT" StreamLakeIngest \
     --service-url "$SERVICE_URL" --admin-url "$ADMIN_URL" \
     --tenant "$TENANT" --namespace "$NAMESPACE" --table "$table" \
-    --target-gb "$gb" --rows-per-page "$ROWS_PER_PAGE" --start-id "$start"
+    --target-gb "$gb" --rows-per-page "$ROWS_PER_PAGE" --start-id "$start" \
+    --threads "$THREADS" --client-mem-mb "$CLIENT_MEM_MB"
 }
 
 run Person   "$PERSON_GB" "$PERSON_START"

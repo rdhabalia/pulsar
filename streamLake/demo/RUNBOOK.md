@@ -271,6 +271,26 @@ streamlake-demo/scripts/sl-info.sh
 Change per‑page density with `SL_ROWS_PER_PAGE` (default 1000) and RF/rollovers at register time
 (`SL_RF`, `SL_PI_MAX`, `SL_SEG_MAX`) — see §11.
 
+### Faster ingestion (throughput tuning)
+The load generator runs **parallel producers** (so Arrow encode + compression run on many threads). The
+biggest levers:
+- **`SL_THREADS`** (default 8) — parallel producers; raise toward the core count, e.g. 16–32.
+- **`SL_JOURNAL_SYNC=false`** (the default) — the bookie skips a per‑write `fsync`, a large win on
+  write‑heavy load (set `true` to keep full crash durability). Applied by `sl-configure.sh`, so to change
+  it: re‑run `sl-configure.sh` and restart the server.
+- **`SL_CLIENT_MEM_MB`** (default 512) — pulsar client in‑flight memory; more = more overlap.
+- **`SL_ROWS_PER_PAGE`** (default 1000) — bigger pages (e.g. 4000) = fewer, larger messages (but coarser
+  query pruning).
+- Bump broker + bookie heap/direct‑memory in `conf/pulsar_env.sh` / `conf/bkenv.sh` (§4 tip), and the
+  ingest heap via **`SL_INGEST_XMX`** (default 4g).
+
+```bash
+SL_THREADS=24 SL_ROWS_PER_PAGE=4000 SL_CLIENT_MEM_MB=1024 streamlake-demo/scripts/sl-ingest.sh
+```
+The data goes to **one non‑partitioned topic** (one managed ledger), so the broker append + single bookie
+are the ultimate ceiling — the parallel producers + no‑`fsync` journal are what move the needle on a
+single host. If you need more, run multiple bookies / a partitioned topic (out of scope for this demo).
+
 ---
 
 ## 10. Stop the broker / reset / troubleshoot

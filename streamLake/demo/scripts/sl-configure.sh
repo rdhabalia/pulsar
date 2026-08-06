@@ -39,6 +39,12 @@ for f in "$bkconf" "$conf"; do
   set_key "$f" ledgerDirectories  "$SL_LEDGER_DIRS"
   # DbLedgerStorage scales to many ledgers (our page-index/segment ledgers):
   set_key "$f" ledgerStorageClass "org.apache.bookkeeper.bookie.storage.ldb.DbLedgerStorage"
+  # Faster ingest for the demo (single bookie on NVMe): skip per-write journal fsync + bigger caches.
+  # journalSyncData=false trades some crash-durability for a large throughput gain -- fine for a demo,
+  # NOT for production. Set SL_JOURNAL_SYNC=true to keep fsync.
+  set_key "$f" journalSyncData                    "${SL_JOURNAL_SYNC:-false}"
+  set_key "$f" dbStorage_writeCacheMaxSizeMb      "${SL_WRITE_CACHE_MB:-1024}"
+  set_key "$f" dbStorage_readAheadCacheMaxSizeMb  "256"
 done
 
 # --- broker: enable topic-level policies + system topics (StreamLake tuning is TOPIC-POLICY level,

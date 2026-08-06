@@ -20,10 +20,13 @@
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.api.CompressionType;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.PulsarClient;
+import org.apache.pulsar.client.api.SizeUnit;
 import org.apache.pulsar.client.streaminglake.StreamLakeProducer;
 import org.apache.pulsar.client.streaminglake.StreamLakeSchema;
 import org.apache.pulsar.client.streaminglake.StreamLakeTopicSchema;
@@ -59,67 +62,104 @@ public final class StreamLakeIngest {
         String tenant = a.getOrDefault("tenant", "public");
         String namespace = a.getOrDefault("namespace", "default");
         String table = a.getOrDefault("table", "Person");
-        int rowsPerPage = Integer.parseInt(a.getOrDefault("rows-per-page", "1000"));
-        long startId = Long.parseLong(a.getOrDefault("start-id", "0"));
+        final int rowsPerPage = Integer.parseInt(a.getOrDefault("rows-per-page", "1000"));
+        final long startId = Long.parseLong(a.getOrDefault("start-id", "0"));
         long maxRows = a.containsKey("rows") ? Long.parseLong(a.get("rows")) : Long.MAX_VALUE;
-        long targetBytes = a.containsKey("target-gb")
+        final long targetBytes = a.containsKey("target-gb")
                 ? (long) (Double.parseDouble(a.get("target-gb")) * (1L << 30)) : -1;
-        long reportEvery = Long.parseLong(a.getOrDefault("report-every", "1000000"));
+        final int threads = Math.max(1, Integer.parseInt(a.getOrDefault("threads", "8")));
+        long clientMemMb = Long.parseLong(a.getOrDefault("client-mem-mb", "512"));
 
-        boolean isPerson = table.equalsIgnoreCase("Person");
+        final boolean isPerson = table.equalsIgnoreCase("Person");
         if (!isPerson && !table.equalsIgnoreCase("Employee")) {
             throw new IllegalArgumentException("--table must be Person or Employee, was " + table);
         }
-        String topic = "persistent://" + tenant + "/" + namespace + "/" + table;
-        StreamLakeTopicSchema ts = new StreamLakeTopicSchema(
+        final String topic = "persistent://" + tenant + "/" + namespace + "/" + table;
+        final StreamLakeTopicSchema ts = new StreamLakeTopicSchema(
                 isPerson ? personSchema() : employeeSchema(), Arrays.asList(0, 1, 2), 64, 0.01);
 
-        System.out.printf("StreamLake ingest -> %s  (target=%s, rowsPerPage=%d, startId=%d)%n",
-                topic, targetBytes > 0 ? gb(targetBytes) : (maxRows + " rows"), rowsPerPage, startId);
+        System.out.printf("StreamLake ingest -> %s  (target=%s, threads=%d, rowsPerPage=%d, startId=%d)%n",
+                topic, targetBytes > 0 ? gb(targetBytes) : (maxRows + " rows"), threads, rowsPerPage, startId);
 
-        try (PulsarClient client = PulsarClient.builder().serviceUrl(serviceUrl).build();
-                PulsarAdmin admin = PulsarAdmin.builder().serviceHttpUrl(adminUrl).build();
-                Producer<byte[]> raw = client.newProducer().topic(topic)
-                        .enableBatching(false).blockIfQueueFull(true)
-                        .compressionType(CompressionType.ZSTD).create();
-                StreamLakeProducer p = new StreamLakeProducer(raw, ts, rowsPerPage, 1 << 30, 0)) {
+        try (PulsarClient client = PulsarClient.builder().serviceUrl(serviceUrl)
+                        .ioThreads(threads).memoryLimit(clientMemMb, SizeUnit.MEGA_BYTES).build();
+                PulsarAdmin admin = PulsarAdmin.builder().serviceHttpUrl(adminUrl).build()) {
 
-            long t0 = System.nanoTime();
-            // Idempotent re-runs: if this table is already at/over its size target, do nothing (so
-            // re-running after a completed load does not append duplicate ids).
-            if (targetBytes > 0) {
-                long cur = storageSize(admin, topic);
-                if (cur >= targetBytes) {
-                    System.out.printf("%s already at %s (>= target %s); nothing to do.%n",
-                            table, gb(cur), gb(targetBytes));
-                    return;
-                }
+            // Idempotent re-runs: if already at/over the size target, do nothing (no duplicate ids).
+            if (targetBytes > 0 && storageSize(admin, topic) >= targetBytes) {
+                System.out.printf("%s already at %s (>= target %s); nothing to do.%n",
+                        table, gb(storageSize(admin, topic)), gb(targetBytes));
+                return;
             }
-            long i = startId;
-            long written = 0;
-            long lastReport = 0;
-            while (written < maxRows) {
-                p.addRow(isPerson
-                        ? new Object[]{i, "person-" + i, 20 + (int) (i % 50)}
-                        : new Object[]{9_000_000_000L + i, i, 30_000L + (i % 50) * 1000L});
-                i++;
-                written++;
-                if (written - lastReport >= reportEvery) {
-                    lastReport = written;
+
+            final AtomicBoolean stop = new AtomicBoolean(false);
+            final AtomicLong written = new AtomicLong(0);
+            final long t0 = System.nanoTime();
+            final long perThreadMax = maxRows == Long.MAX_VALUE ? Long.MAX_VALUE : maxRows / threads;
+            final long finalMaxRows = maxRows;
+
+            // Monitor: poll storage/rows, print throughput, and set the stop flag at the target.
+            Thread monitor = new Thread(() -> {
+                while (!stop.get()) {
+                    try {
+                        Thread.sleep(3000);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                    long w = written.get();
                     long storage = targetBytes > 0 ? storageSize(admin, topic) : -1;
                     double secs = (System.nanoTime() - t0) / 1e9;
-                    System.out.printf("  %,d rows  %.0f rows/s  %s%n", written, written / secs,
+                    System.out.printf("  %,d rows  %.0f rows/s  %s%n", w, w / Math.max(1e-9, secs),
                             storage >= 0 ? "storage=" + gb(storage) : "");
                     if (targetBytes > 0 && storage >= targetBytes) {
-                        break;
+                        stop.set(true);
+                    }
+                    if (finalMaxRows != Long.MAX_VALUE && w >= finalMaxRows) {
+                        stop.set(true);
                     }
                 }
+            }, "sl-ingest-monitor");
+            monitor.setDaemon(true);
+            monitor.start();
+
+            // Workers: each writes a strided slice of the id space (unique ids, uniform distribution),
+            // each with its own producer so the Arrow encoding + compression run in parallel.
+            Thread[] workers = new Thread[threads];
+            for (int t = 0; t < threads; t++) {
+                final int tid = t;
+                workers[t] = new Thread(() -> {
+                    try (Producer<byte[]> raw = client.newProducer().topic(topic)
+                                    .enableBatching(false).blockIfQueueFull(true)
+                                    .compressionType(CompressionType.ZSTD).create();
+                            StreamLakeProducer p =
+                                    new StreamLakeProducer(raw, ts, rowsPerPage, 1 << 30, 0)) {
+                        long local = 0;
+                        for (long k = startId + tid; !stop.get() && local < perThreadMax; k += threads) {
+                            p.addRow(isPerson
+                                    ? new Object[]{k, "person-" + k, 20 + (int) (k % 50)}
+                                    : new Object[]{9_000_000_000L + k, k, 30_000L + (k % 50) * 1000L});
+                            local++;
+                            written.incrementAndGet();
+                        }
+                        p.flush();
+                    } catch (Exception e) {
+                        System.err.println("ingest worker " + tid + " failed: " + e);
+                        stop.set(true);
+                    }
+                }, "sl-ingest-" + t);
+                workers[t].start();
             }
-            p.flush();
+            for (Thread w : workers) {
+                w.join();
+            }
+            stop.set(true);
+            monitor.interrupt();
+
+            long total = written.get();
             double secs = (System.nanoTime() - t0) / 1e9;
-            long finalStorage = storageSize(admin, topic);
             System.out.printf("DONE %s: wrote %,d rows in %.0fs (%.0f rows/s); storage=%s; nextStartId=%d%n",
-                    table, written, secs, written / secs, gb(finalStorage), i);
+                    table, total, secs, total / Math.max(1e-9, secs), gb(storageSize(admin, topic)),
+                    startId + total);
         }
     }
 
