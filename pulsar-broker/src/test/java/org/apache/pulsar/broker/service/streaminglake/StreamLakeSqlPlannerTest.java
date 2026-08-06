@@ -296,4 +296,31 @@ public class StreamLakeSqlPlannerTest {
         assertTrue(hasColumn(jp.rightPredicate(), 1), "right keeps its personId bound");
         assertTrue(hasColumn(jp.leftPredicate(), 0), "left gains the mirrored personId bound");
     }
+
+    // ---- event-time (date) pruning via the __event_time pseudo column ---------------------------
+
+    @Test
+    public void eventTimeBetweenBecomesDateWindowNotRowFilter() {
+        // __event_time is not a schema column; a BETWEEN on it drives the [fromMs,toMs] ledger-prune
+        // window and leaves no row predicate.
+        StreamLakeSqlPlanner.Plan plan = StreamLakeSqlPlanner.plan(
+                "SELECT id FROM employee WHERE " + StreamLakeSqlPlanner.EVENT_TIME_COLUMN
+                        + " BETWEEN 1700000000000 AND 1700000100000 AND deptId = 1",
+                schema(), StreamLakeSqlPlanner.EVENT_TIME_COLUMN);
+        assertEquals(plan.fromMs(), 1700000000000L);
+        assertEquals(plan.toMs(), 1700000100000L);
+        // Only deptId survives as a row predicate; __event_time was consumed by the window.
+        assertEquals(plan.predicate().columns().size(), 1);
+    }
+
+    @Test
+    public void eventTimeComparisonsNarrowWindowFromBothSides() {
+        StreamLakeSqlPlanner.Plan plan = StreamLakeSqlPlanner.plan(
+                "SELECT id FROM employee WHERE " + StreamLakeSqlPlanner.EVENT_TIME_COLUMN + " >= 100 AND "
+                        + StreamLakeSqlPlanner.EVENT_TIME_COLUMN + " < 200",
+                schema(), StreamLakeSqlPlanner.EVENT_TIME_COLUMN);
+        assertEquals(plan.fromMs(), 100L);
+        assertEquals(plan.toMs(), 200L);
+        assertEquals(plan.predicate().columns().size(), 0, "no row predicate; both bounds are the window");
+    }
 }

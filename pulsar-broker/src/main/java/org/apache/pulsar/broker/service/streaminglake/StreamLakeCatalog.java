@@ -144,7 +144,22 @@ public class StreamLakeCatalog implements AutoCloseable {
         try {
             cat.loadAndRotate();
         } catch (Exception e) {
-            log.warn("StreamLake catalog falling back to in-memory for {}: {}",
+            // A load failure when a catalog ledger was previously persisted is almost always transient
+            // (e.g. a bookie operation timeout during recovery). Falling back to an EMPTY writable catalog
+            // would silently make every query return 0 rows / 0 candidate ledgers -- and a later rotate
+            // could overwrite the durable pointer -- so fail loudly and let the topic-load retry once the
+            // bookie is healthy. Only start fresh when there is genuinely no prior catalog (a new topic).
+            boolean hadPriorCatalog;
+            try {
+                hadPriorCatalog = metaStore.read().catalogLedgerId != null;
+            } catch (Exception ignore) {
+                hadPriorCatalog = false;
+            }
+            if (hadPriorCatalog) {
+                throw new IllegalStateException("StreamLake catalog load failed for " + metaStore.name()
+                        + " but a catalog ledger exists; refusing to serve an empty catalog (retryable)", e);
+            }
+            log.warn("StreamLake catalog starting fresh (no prior catalog) for {}: {}",
                     metaStore.name(), e.toString());
             cat.writeLedger = null;
         }

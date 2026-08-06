@@ -100,7 +100,10 @@ public final class StreamLakeQueryCoordinator {
             return s == null ? null : s.schema();
         };
         StreamLakeQueryMetrics metrics = new StreamLakeQueryMetrics();
-        StreamLakeSqlPlanner.Planned planned = StreamLakeSqlPlanner.planStatement(query, schemas, t -> null);
+        // Expose the pseudo event-time column so `WHERE __event_time BETWEEN ms1 AND ms2` prunes whole
+        // data ledgers by the catalog's per-ledger ingest-time bounds (single-table + GROUP BY paths).
+        StreamLakeSqlPlanner.Planned planned = StreamLakeSqlPlanner.planStatement(
+                query, schemas, t -> StreamLakeSqlPlanner.EVENT_TIME_COLUMN);
         if (planned.isJoin()) {
             return prepareJoin(planned.join(), explain, metrics);
         }

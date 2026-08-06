@@ -63,6 +63,15 @@ import org.apache.pulsar.client.streaminglake.StreamLakeType;
  */
 public final class StreamLakeSqlPlanner {
 
+    /**
+     * Pseudo event-time column name. A {@code WHERE __event_time BETWEEN <ms1> AND <ms2>} predicate (or
+     * {@code >=}/{@code <=}/{@code >}/{@code <}) is translated into the executor's [fromMs, toMs] date
+     * window — which prunes whole data ledgers by the catalog's per-ledger event-time (ingest-time)
+     * bounds — and is dropped from the row predicate. It is not a stored column, so no schema change is
+     * needed; the values are epoch milliseconds.
+     */
+    public static final String EVENT_TIME_COLUMN = "__event_time";
+
     private StreamLakeSqlPlanner() {
     }
 
