@@ -19,29 +19,62 @@
 package org.apache.pulsar.client.streaminglake;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import org.apache.pulsar.client.api.CompressionType;
+import org.apache.pulsar.common.compression.CompressionCodec;
+import org.apache.pulsar.common.compression.CompressionCodecProvider;
 
 /**
- * Framing for a StreamLake message payload: the Arrow IPC batch followed by the binary stats footer,
- * with a fixed trailer so the broker can slice the footer off the tail (without parsing Arrow) to
- * append to the page-index ledger, and the consumer can recover the Arrow bytes to decode.
+ * Framing for a StreamLake message payload: the (self-compressed) Arrow IPC batch followed by the
+ * binary stats footer, with a fixed trailer so the broker can slice the footer off the tail (without
+ * parsing Arrow) to append to the page-index ledger, and the consumer/query tier can recover the
+ * Arrow bytes to decode.
  *
- * <p>Layout: {@code [arrow IPC][stats footer][footerLength int32][MAGIC 'SLP1']}.
+ * <p>Layout: {@code [arrow IPC (maybe ZSTD)][stats footer][footerLen int32][arrowRawLen int32]
+ * [codec int8][MAGIC 'SLP2']}.
+ *
+ * <p><b>Why the Arrow region is self-compressed here instead of via Pulsar message compression.</b>
+ * The broker's durability barrier slices this stats footer off the entry tail <em>without decoding</em>
+ * (see {@link #hasFooter(ByteBuf)} / {@link #statsFooter(ByteBuf)}). If Pulsar compressed the whole
+ * payload, the trailing MAGIC would be buried inside the compressed blob and the footer would be
+ * invisible to the broker, so no page-index/catalog entry would be written and the data would be
+ * unqueryable. We therefore compress only the Arrow bytes here and keep the footer + trailer in the
+ * clear, and StreamLake producers must run with {@code compressionType(NONE)} so Pulsar does not
+ * re-compress (and re-bury) the tail.
  */
 public final class StreamLakeBatchPayload {
 
-    private static final byte[] MAGIC = {'S', 'L', 'P', '1'};
-    private static final int TRAILER = 4 + 4; // footerLength(int32) + magic(4)
+    private static final byte[] MAGIC = {'S', 'L', 'P', '2'};
+    // footerLen(int32) + arrowRawLen(int32) + codec(int8) + magic(4)
+    private static final int TRAILER = 4 + 4 + 1 + MAGIC.length;
+    private static final byte CODEC_NONE = 0;
+    private static final byte CODEC_ZSTD = 1;
+    private static final CompressionCodec ZSTD =
+            CompressionCodecProvider.getCompressionCodec(CompressionType.ZSTD);
 
     private StreamLakeBatchPayload() {
     }
 
     public static byte[] combine(byte[] arrowIpc, byte[] statsFooter) {
-        ByteBuffer bb = ByteBuffer.allocate(arrowIpc.length + statsFooter.length + TRAILER);
-        bb.put(arrowIpc);
+        // Self-compress the (potentially large) Arrow region so the data ledger stays small even with
+        // Pulsar message compression off; keep the raw form when it does not shrink (tiny pages).
+        byte codec = CODEC_NONE;
+        byte[] stored = arrowIpc;
+        byte[] compressed = zstd(arrowIpc);
+        if (compressed.length < arrowIpc.length) {
+            stored = compressed;
+            codec = CODEC_ZSTD;
+        }
+        ByteBuffer bb = ByteBuffer.allocate(stored.length + statsFooter.length + TRAILER);
+        bb.put(stored);
         bb.put(statsFooter);
         bb.putInt(statsFooter.length);
+        bb.putInt(arrowIpc.length);
+        bb.put(codec);
         bb.put(MAGIC);
         return bb.array();
     }
@@ -70,13 +103,56 @@ public final class StreamLakeBatchPayload {
     /** The Arrow IPC batch bytes (as consumed by the StreamLake decoder). */
     public static byte[] arrowBatch(byte[] payload) {
         int end = payload.length - TRAILER - footerLength(payload);
-        return Arrays.copyOfRange(payload, 0, end);
+        byte[] region = Arrays.copyOfRange(payload, 0, end);
+        if (codecOf(payload) == CODEC_ZSTD) {
+            return unzstd(region, arrowRawLength(payload));
+        }
+        return region;
     }
 
     private static int footerLength(byte[] payload) {
-        int off = payload.length - TRAILER;
-        return ((payload[off] & 0xFF) << 24) | ((payload[off + 1] & 0xFF) << 16)
-                | ((payload[off + 2] & 0xFF) << 8) | (payload[off + 3] & 0xFF);
+        return readInt(payload, payload.length - TRAILER);
+    }
+
+    private static int arrowRawLength(byte[] payload) {
+        return readInt(payload, payload.length - TRAILER + 4);
+    }
+
+    private static byte codecOf(byte[] payload) {
+        return payload[payload.length - MAGIC.length - 1];
+    }
+
+    private static int readInt(byte[] b, int off) {
+        return ((b[off] & 0xFF) << 24) | ((b[off + 1] & 0xFF) << 16)
+                | ((b[off + 2] & 0xFF) << 8) | (b[off + 3] & 0xFF);
+    }
+
+    // ---- Arrow-region compression (see class javadoc: the footer/trailer stay uncompressed) --------
+
+    private static byte[] zstd(byte[] raw) {
+        ByteBuf out = ZSTD.encode(Unpooled.wrappedBuffer(raw));
+        try {
+            byte[] b = new byte[out.readableBytes()];
+            out.getBytes(out.readerIndex(), b);
+            return b;
+        } finally {
+            out.release();
+        }
+    }
+
+    private static byte[] unzstd(byte[] compressed, int rawLen) {
+        try {
+            ByteBuf out = ZSTD.decode(Unpooled.wrappedBuffer(compressed), rawLen);
+            try {
+                byte[] b = new byte[out.readableBytes()];
+                out.getBytes(out.readerIndex(), b);
+                return b;
+            } finally {
+                out.release();
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("StreamLake Arrow decompression failed", e);
+        }
     }
 
     // ---- ByteBuf tail views (broker slices the footer from a persisted entry without a full copy) --

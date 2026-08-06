@@ -35,8 +35,14 @@ import org.slf4j.LoggerFactory;
  * (one message = one columnar batch = one BookKeeper entry).
  *
  * <p>Flush triggers: {@code maxRows} reached, estimated {@code maxBytes} reached, or {@code maxDelayMs}
- * elapsed since the oldest buffered row (a background flusher, so low-rate producers stay fresh). The
- * wrapped producer should be created with Pulsar batching disabled and message compression enabled.
+ * elapsed since the oldest buffered row (a background flusher, so low-rate producers stay fresh).
+ *
+ * <p><b>The wrapped producer MUST be created with batching disabled and message compression set to
+ * {@code NONE}.</b> StreamLake compresses the Arrow region itself inside {@link StreamLakeBatchPayload}
+ * and leaves the stats footer + trailer in the clear so the broker can slice the footer off the entry
+ * tail without decoding. If Pulsar message compression were on, it would compress the whole payload and
+ * bury that trailing footer marker, so the broker would never index the page and the data would be
+ * unqueryable (0 candidate ledgers at query time).
  *
  * <p>Thread-safe; {@link #close()} flushes the remainder and releases the Arrow allocator. It does not
  * close the wrapped producer (the caller owns it).

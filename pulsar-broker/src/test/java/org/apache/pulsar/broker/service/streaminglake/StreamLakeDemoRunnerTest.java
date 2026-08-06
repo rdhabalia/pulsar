@@ -198,7 +198,7 @@ public class StreamLakeDemoRunnerTest extends StreamLakeRealBookieTestBase {
     private void loadPerson(String topic, long rows, int rowsPerPage) throws Exception {
         StreamLakeTopicSchema ts = new StreamLakeTopicSchema(personSchema(), Arrays.asList(0, 1, 2), 64, 0.01);
         Producer<byte[]> raw = pulsarClient.newProducer().topic(topic)
-                .enableBatching(false).compressionType(CompressionType.ZSTD).create();
+                .enableBatching(false).compressionType(CompressionType.NONE).create();
         try (StreamLakeProducer p = new StreamLakeProducer(raw, ts, rowsPerPage, 1 << 30, 0)) {
             for (long i = 0; i < rows; i++) {
                 p.addRow(new Object[]{i, "person-" + i, 20 + (int) (i % 50)});
@@ -211,7 +211,7 @@ public class StreamLakeDemoRunnerTest extends StreamLakeRealBookieTestBase {
     private void loadEmployee(String topic, long rows, int rowsPerPage) throws Exception {
         StreamLakeTopicSchema ts = new StreamLakeTopicSchema(employeeSchema(), Arrays.asList(0, 1, 2), 64, 0.01);
         Producer<byte[]> raw = pulsarClient.newProducer().topic(topic)
-                .enableBatching(false).compressionType(CompressionType.ZSTD).create();
+                .enableBatching(false).compressionType(CompressionType.NONE).create();
         try (StreamLakeProducer p = new StreamLakeProducer(raw, ts, rowsPerPage, 1 << 30, 0)) {
             for (long i = 0; i < rows; i++) {
                 p.addRow(new Object[]{9_000_000_000L + i, i, 30_000L + (i % 50) * 1000L});

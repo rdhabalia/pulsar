@@ -358,7 +358,7 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
     private void loadPerson(String topic) throws Exception {
         StreamLakeTopicSchema ts = new StreamLakeTopicSchema(personSchema(), Arrays.asList(0, 1, 2), 64, 0.01);
         Producer<byte[]> raw = pulsarClient.newProducer().topic(topic)
-                .enableBatching(false).compressionType(CompressionType.ZSTD).create();
+                .enableBatching(false).compressionType(CompressionType.NONE).create();
         try (StreamLakeProducer p = new StreamLakeProducer(raw, ts, ROWS_PER_PAGE, 1 << 30, 0)) {
             for (long i = 0; i < ROWS; i++) {
                 p.addRow(new Object[]{i, "person-" + i, 20 + (int) (i % 50)});
@@ -371,7 +371,7 @@ public class StreamLakeSqlJoinQueryTest extends StreamLakeRealBookieTestBase {
     private void loadEmployee(String topic) throws Exception {
         StreamLakeTopicSchema ts = new StreamLakeTopicSchema(employeeSchema(), Arrays.asList(0, 1, 2), 64, 0.01);
         Producer<byte[]> raw = pulsarClient.newProducer().topic(topic)
-                .enableBatching(false).compressionType(CompressionType.ZSTD).create();
+                .enableBatching(false).compressionType(CompressionType.NONE).create();
         try (StreamLakeProducer p = new StreamLakeProducer(raw, ts, ROWS_PER_PAGE, 1 << 30, 0)) {
             for (long i = 0; i < ROWS; i++) {
                 p.addRow(new Object[]{9_000_000_000L + i, i, 30_000L + (i % 50) * 1000L});

@@ -130,7 +130,11 @@ public final class StreamLakeIngest {
                 workers[t] = new Thread(() -> {
                     try (Producer<byte[]> raw = client.newProducer().topic(topic)
                                     .enableBatching(false).blockIfQueueFull(true)
-                                    .compressionType(CompressionType.ZSTD).create();
+                                    // NONE on purpose: StreamLakeProducer self-compresses the Arrow
+                                    // region and keeps the stats footer uncompressed at the tail so the
+                                    // broker can index the page. Pulsar compression here would bury the
+                                    // footer and make the data unqueryable.
+                                    .compressionType(CompressionType.NONE).create();
                             StreamLakeProducer p =
                                     new StreamLakeProducer(raw, ts, rowsPerPage, 1 << 30, 0)) {
                         long local = 0;

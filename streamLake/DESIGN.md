@@ -158,15 +158,23 @@ high‑cardinality columns (e.g. `email`) fall back to **one bloom per page**, c
 
 ### 1.5 Wire framing — `StreamLakeBatchPayload.combine()`
 
-The footer goes on the **tail** so the broker can slice it without touching Arrow:
+The footer goes on the **tail** so the broker can slice it without touching Arrow. The Arrow region is
+self-compressed (ZSTD) by the client, but the footer + trailer stay **uncompressed** — and StreamLake
+producers run with Pulsar message compression `NONE` — so the trailing marker is always visible to the
+broker's no-decode footer slice:
 
 ```
-[ arrow IPC bytes ][ stats footer ][ footerLength : int32 ][ MAGIC 'SLP1'(4) ]
+[ arrow IPC bytes (maybe ZSTD) ][ stats footer ][ footerLen : int32 ][ arrowRawLen : int32 ][ codec : int8 ][ MAGIC 'SLP2'(4) ]
 ```
 
 * `hasFooter(payload)` → check trailing magic.
-* `statsFooter(payload)` → read `footerLength`, copy `[len-8-footerLength, len-8)`.
-* `arrowBatch(payload)` → `[0, len-8-footerLength)`.
+* `statsFooter(payload)` → read `footerLen`, copy `[len-TRAILER-footerLen, len-TRAILER)` (TRAILER = 13).
+* `arrowBatch(payload)` → `[0, len-TRAILER-footerLen)`, then ZSTD-decompress when `codec == ZSTD`.
+
+> **Why not Pulsar message compression?** It would compress the whole payload including the trailing
+> marker, so the broker could not find/slice the footer, no page-index/catalog entry would be written,
+> and the data would be unqueryable. Compressing only the Arrow bytes keeps the data ledger small while
+> preserving the broker's zero-decode footer slice.
 
 ### 1.6 Send + 1.7 Broker dumb pipe — `PersistentTopic`
 
