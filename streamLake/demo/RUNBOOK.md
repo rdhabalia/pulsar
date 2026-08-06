@@ -305,12 +305,16 @@ Stopping **keeps all data on disk** — restart with `sl-start.sh start` and the
 (no re-ingest needed). Ingestion running in `tmux`/`nohup` is a separate process; stop it from its
 session or `kill` its `java` PID.
 
-**Full reset (start over with an empty cluster):**
+**Full reset (start over with an empty cluster)** — one safe command: it stops the server + any load
+generator, waits for them to exit (so files are closed), then wipes the data **and** the metadata:
 ```bash
-streamlake-demo/scripts/sl-start.sh stop
-rm -rf "$SL_STORAGE_DIR"/{zk,bk} "$PULSAR_HOME/data"    # e.g. SL_STORAGE_DIR=/grid/x/dfs-data/tmp/test
-SL_STORAGE_DIR="$SL_STORAGE_DIR" SL_PERSON_GB=500 SL_EMP_GB=500 streamlake-demo/scripts/sl-demo.sh
+SL_STORAGE_DIR=/grid/x/dfs-data/tmp/test streamlake-demo/scripts/sl-reset.sh   # add --yes to skip prompt
+# then start fresh:
+SL_STORAGE_DIR=/grid/x/dfs-data/tmp/test SL_PERSON_GB=500 SL_EMP_GB=500 streamlake-demo/scripts/sl-demo.sh
 ```
+> Common mistake it prevents: deleting the storage disk but **not** `$PULSAR_HOME/data` (the standalone
+> metadata) — the topic then survives and the next ingest just tops up the old data. `sl-reset.sh`
+> removes both, and only *after* all processes exit (deleting a live bookie's files corrupts it).
 - **`LedgerNotExistException` on a query:** data ledgers were trimmed. `sl-register.sh` sets infinite
   retention; if you registered manually, run
   `pulsar-admin namespaces set-retention public/default --size -1 --time -1`.
@@ -395,6 +399,7 @@ All scripts live in `streamlake-demo/scripts/`. Order of use and dependencies:
 | `sl-info.sh` | remote | **yes** | **yes** |
 | `sl-queries.sh` | remote | **yes** | **yes** |
 | `sl-demo.sh` | remote | runs all of the above in order | — |
+| `sl-reset.sh` | remote | stops it | — |
 
 `sl-demo.sh` runs the whole chain; the individual scripts are for running or re‑running a single phase.
 
@@ -524,4 +529,15 @@ All scripts live in `streamlake-demo/scripts/`. Order of use and dependencies:
   ```
 - **Expect:** the prompts (§4), then the banners of each phase, ending with the **ingestion summary** and
   the **queries** to copy‑paste. Stop later with `sl-start.sh stop`.
+
+### `sl-reset.sh` — safe full reset (remote host)
+- **Means:** stop the server + any load generator, wait for them to exit, then wipe **both** the data
+  (bookie ledgers/journal + zk — from `SL_STORAGE_DIR` and `conf/bookkeeper.conf`) **and** the standalone
+  metadata (`$PULSAR_HOME/data`). Refuses unsafe paths (root, `$HOME`, single‑segment) and prompts first.
+- **Run:**
+  ```bash
+  SL_STORAGE_DIR=/mnt/nvme streamlake-demo/scripts/sl-reset.sh          # add --yes (or SL_YES=1) to skip the prompt
+  ```
+- **Expect:** it stops the processes, lists the exact paths it will delete, asks to confirm, deletes them,
+  and prints the fresh‑start command. Afterwards the cluster is empty — re‑run `sl-demo.sh` to rebuild it.
 
