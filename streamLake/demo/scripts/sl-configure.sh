@@ -67,6 +67,13 @@ for f in "$bkconf" "$conf"; do
   set_key "$f" dbStorage_readAheadCacheMaxSizeMb  "256"
 done
 
+# --- BookKeeper client read headroom on a single busy bookie ---
+# StreamLake opens read many small metadata entries (page-index footers, catalog) at topic load. Give the
+# bookie client a longer op timeout so a bookie briefly busy (e.g. startup entry-log index rebuild after
+# an unclean stop) does not trip the default 30s and fail the topic load with "Bookie operation timeout".
+# (The broker also now reads these in bounded batches so it never floods the bookie in the first place.)
+set_key "$conf" bookkeeperClientTimeoutInSeconds "${SL_BK_CLIENT_TIMEOUT:-120}"
+
 # --- broker: enable topic-level policies + system topics (StreamLake tuning is TOPIC-POLICY level,
 #     applied per topic via StreamingLakeConfig -- not broker-global keys; see demo.md §7) ---
 set_key "$conf" systemTopicEnabled            "true"

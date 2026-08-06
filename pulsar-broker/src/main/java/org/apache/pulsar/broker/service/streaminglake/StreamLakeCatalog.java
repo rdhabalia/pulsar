@@ -49,6 +49,8 @@ public class StreamLakeCatalog implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(StreamLakeCatalog.class);
     private static final byte[] PASSWORD = "streamlake-catalog".getBytes();
+    // Bounded entries per readEntries() on load, so a large catalog ledger can't flood the bookie.
+    private static final int LOAD_READ_BATCH = 500;
     // id, createTs, minEt, maxEt, rows, state, + segment offset (ledgerId,start,end) + page-index range.
     private static final int ENTRY_SIZE = 8 + 8 + 8 + 8 + 8 + 1 + 8 + 8 + 8 + 8 + 8 + 8;
 
@@ -269,14 +271,20 @@ public class StreamLakeCatalog implements AutoCloseable {
         if (oldId != null) {
             try {
                 LedgerHandle old = bk.openLedger(oldId, BookKeeper.DigestType.CRC32, PASSWORD);
-                long lac = old.getLastAddConfirmed();
-                if (lac >= 0) {
-                    Enumeration<LedgerEntry> en = old.readEntries(0, lac);
-                    while (en.hasMoreElements()) {
-                        mergeEntry(en.nextElement().getEntry());
+                try {
+                    long lac = old.getLastAddConfirmed();
+                    // Bounded batches so a large catalog ledger cannot flood the bookie on load (same
+                    // "too many read requests" flow-control that stalls a big page-index replay).
+                    for (long start = 0; start <= lac; start += LOAD_READ_BATCH) {
+                        long end = Math.min(start + LOAD_READ_BATCH - 1, lac);
+                        Enumeration<LedgerEntry> en = old.readEntries(start, end);
+                        while (en.hasMoreElements()) {
+                            mergeEntry(en.nextElement().getEntry());
+                        }
                     }
+                } finally {
+                    old.close();
                 }
-                old.close();
             } catch (BKException.BKNoSuchLedgerExistsException
                     | BKException.BKNoSuchLedgerExistsOnMetadataServerException e) {
                 oldId = null; // pointer dangled; start fresh

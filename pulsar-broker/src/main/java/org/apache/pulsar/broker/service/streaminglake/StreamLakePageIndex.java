@@ -59,6 +59,9 @@ public class StreamLakePageIndex implements AutoCloseable {
     private static final int HEADER = 1 + 8 + 8; // type + dataLedgerId + dataEntryId
     private static final long DEFAULT_MAX_HEAD_BYTES = 4L * 1024 * 1024;
     private static final int DEFAULT_MAX_ENTRIES = 1_000_000;
+    // Max page-index entries pulled per readEntries() during replay. Bounds in-flight bookie reads so a
+    // large ledger's replay cannot trip the bookie's "too many read requests" flow control (-> timeout).
+    private static final int REPLAY_READ_BATCH = 500;
 
     /** One stored footer: the data-ledger entry it describes, and its stats-footer bytes. */
     public static final class PageFooter {
@@ -299,15 +302,24 @@ public class StreamLakePageIndex implements AutoCloseable {
         for (long ledgerId : chain) {
             try {
                 LedgerHandle lh = bk.openLedger(ledgerId, BookKeeper.DigestType.CRC32, PASSWORD);
-                long lac = lh.getLastAddConfirmed();
-                if (lac >= 0) {
-                    Enumeration<LedgerEntry> en = lh.readEntries(0, lac);
-                    while (en.hasMoreElements()) {
-                        LedgerEntry le = en.nextElement();
-                        parseRef(ledgerId, le.getEntryId(), le.getEntry());
+                try {
+                    long lac = lh.getLastAddConfirmed();
+                    // Read in bounded batches. One page-index ledger can hold one footer per data page
+                    // (hundreds of thousands of entries for a big data ledger); a single readEntries(0,
+                    // lac) issues all those reads at once and overwhelms a bookie ("Too many read
+                    // requests in progress, disabling autoread" -> operation timeout), which then skips
+                    // the ledger and leaves its footers unindexed. Batching caps in-flight reads.
+                    for (long start = 0; start <= lac; start += REPLAY_READ_BATCH) {
+                        long end = Math.min(start + REPLAY_READ_BATCH - 1, lac);
+                        Enumeration<LedgerEntry> en = lh.readEntries(start, end);
+                        while (en.hasMoreElements()) {
+                            LedgerEntry le = en.nextElement();
+                            parseRef(ledgerId, le.getEntryId(), le.getEntry());
+                        }
                     }
+                } finally {
+                    lh.close();
                 }
-                lh.close();
             } catch (BKException.BKNoSuchLedgerExistsException
                     | BKException.BKNoSuchLedgerExistsOnMetadataServerException e) {
                 // a chain entry was already GC'd; skip it
