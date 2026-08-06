@@ -14,6 +14,13 @@ case "$cmd" in
     ZK_DIR="${SL_ZK_DIR:-$PULSAR_HOME/data/zk}"
     BK_DIR="${SL_BK_DIR:-$PULSAR_HOME/data/bk}"
     mkdir -p "$ZK_DIR" "$BK_DIR" "$PULSAR_HOME/logs" "$PULSAR_HOME/data"
+    # Heap + direct memory for the single standalone JVM (broker + embedded bookie share it). Direct
+    # memory feeds BookKeeper/Netty read+write buffers, so it is set >= heap. Override with SL_HEAP /
+    # SL_DIRECT_MEM (e.g. SL_HEAP=8g on a smaller box). PULSAR_MEM is read by bin/pulsar at launch.
+    SL_HEAP="${SL_HEAP:-24g}"
+    SL_DIRECT_MEM="${SL_DIRECT_MEM:-32g}"
+    export PULSAR_MEM="${PULSAR_MEM:--Xms${SL_HEAP} -Xmx${SL_HEAP} -XX:MaxDirectMemorySize=${SL_DIRECT_MEM}}"
+    echo "  memory  : PULSAR_MEM='$PULSAR_MEM'"
     # --no-stream-storage / --no-functions-worker: the StreamLake demo does not use the BookKeeper
     # stream storage (table service, port 4181) or Pulsar Functions. Leaving stream storage on makes the
     # embedded bookie register in ZK under /stream/servers/available; after an unclean stop, that stale
