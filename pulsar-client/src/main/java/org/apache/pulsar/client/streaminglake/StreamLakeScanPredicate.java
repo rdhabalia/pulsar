@@ -199,6 +199,22 @@ public final class StreamLakeScanPredicate {
             return this;
         }
 
+        /** The column predicates accumulated so far (read-only view, e.g. for equi-join pushdown). */
+        public List<ColumnPredicate> columns() {
+            return columns;
+        }
+
+        /**
+         * Re-target an existing predicate onto another column. Used for equi-join transitive pushdown: a
+         * range/IN on one side's join key also constrains the other side's join key (they are equal), so
+         * the pruning predicate can be mirrored across the join.
+         */
+        public Builder copyColumnAs(ColumnPredicate cp, int newColumnIndex) {
+            columns.add(new ColumnPredicate(newColumnIndex, cp.type, cp.lo, cp.loInclusive,
+                    cp.hi, cp.hiInclusive, cp.inValues));
+            return this;
+        }
+
         public StreamLakeScanPredicate build() {
             return new StreamLakeScanPredicate(new ArrayList<>(columns));
         }

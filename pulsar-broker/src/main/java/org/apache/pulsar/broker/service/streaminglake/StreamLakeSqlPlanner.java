@@ -602,6 +602,7 @@ public final class StreamLakeSqlPlanner {
         if (select.getWhere() != null) {
             translateJoinWhere(select.getWhere(), byAlias, left, right, leftPred, rightPred);
         }
+        pushDownJoinKeyPredicates(leftPred, rightPred, left, right, leftKey, rightKey);
 
         int leftWidth = left.schema.columns().size();
         int rightWidth = right.schema.columns().size();
@@ -609,6 +610,35 @@ public final class StreamLakeSqlPlanner {
         List<String> names = joinColumnNames(projection, left, right, leftWidth, rightWidth);
         return new JoinPlan(left.table, right.table, leftPred.build(), rightPred.build(), leftKey,
                 rightKey, leftWidth, rightWidth, projection, names);
+    }
+
+    /**
+     * Equi-join transitive predicate pushdown. For an INNER join {@code left.k = right.k}, every output
+     * row has {@code left.k == right.k}, so a range/IN/equality on one side's join key equally constrains
+     * the other side's join key. We mirror such key predicates to the opposite side so BOTH sides can
+     * page-prune. Without this, a selective bound like {@code p.personId BETWEEN 0 AND 100000} prunes only
+     * the left table and the right side scans (and, for a grace join, spills) its entire dataset.
+     *
+     * <p>Guarded to matching key types (both encode identically) so the copied encoded bounds compare
+     * correctly against the target column's stats.
+     */
+    private static void pushDownJoinKeyPredicates(StreamLakeScanPredicate.Builder leftPred,
+            StreamLakeScanPredicate.Builder rightPred, Side left, Side right, int leftKey, int rightKey) {
+        if (left.cols.type(leftKey) != right.cols.type(rightKey)) {
+            return;
+        }
+        List<StreamLakeScanPredicate.ColumnPredicate> leftCols = new ArrayList<>(leftPred.columns());
+        List<StreamLakeScanPredicate.ColumnPredicate> rightCols = new ArrayList<>(rightPred.columns());
+        for (StreamLakeScanPredicate.ColumnPredicate cp : leftCols) {
+            if (cp.columnIndex() == leftKey) {
+                rightPred.copyColumnAs(cp, rightKey);
+            }
+        }
+        for (StreamLakeScanPredicate.ColumnPredicate cp : rightCols) {
+            if (cp.columnIndex() == rightKey) {
+                leftPred.copyColumnAs(cp, leftKey);
+            }
+        }
     }
 
     private static Side side(SqlNode node, Function<String, StreamLakeSchema> schemaByTable, boolean isLeft) {

@@ -32,6 +32,7 @@ import org.apache.bookkeeper.client.PulsarMockBookKeeper;
 import org.apache.bookkeeper.common.util.OrderedExecutor;
 import org.apache.bookkeeper.mledger.ManagedLedger;
 import org.apache.pulsar.client.streaminglake.StreamLakeArrowBatchEncoder;
+import org.apache.pulsar.client.streaminglake.StreamLakeScanPredicate;
 import org.apache.pulsar.client.streaminglake.StreamLakeSchema;
 import org.apache.pulsar.client.streaminglake.StreamLakeStatsBuilder;
 import org.apache.pulsar.client.streaminglake.StreamLakeType;
@@ -237,5 +238,62 @@ public class StreamLakeSqlPlannerTest {
                 "SELECT ID, SALARY FROM employee WHERE DEPTID = 1", schema());
         assertEquals(plan.projection(), new int[]{0, 2});
         assertFalse(plan.descending());
+    }
+
+    // ---- equi-join transitive predicate pushdown -------------------------------------------------
+
+    private static StreamLakeSchema personSchema() {
+        return new StreamLakeSchema(Arrays.asList(
+                new StreamLakeSchema.Column("personId", StreamLakeType.INT64),
+                new StreamLakeSchema.Column("name", StreamLakeType.STRING),
+                new StreamLakeSchema.Column("age", StreamLakeType.INT32)));
+    }
+
+    private static StreamLakeSchema employeeSchema() {
+        return new StreamLakeSchema(Arrays.asList(
+                new StreamLakeSchema.Column("empId", StreamLakeType.INT64),
+                new StreamLakeSchema.Column("personId", StreamLakeType.INT64),
+                new StreamLakeSchema.Column("salary", StreamLakeType.INT64)));
+    }
+
+    private static StreamLakeSqlPlanner.JoinPlan planPersonEmployeeJoin(String sql) {
+        Map<String, StreamLakeSchema> schemas = new HashMap<>();
+        schemas.put("person", personSchema());
+        schemas.put("employee", employeeSchema());
+        StreamLakeSqlPlanner.Planned planned = StreamLakeSqlPlanner.planStatement(
+                sql, t -> schemas.get(t.toLowerCase(java.util.Locale.ROOT)), t -> null);
+        assertTrue(planned.isJoin());
+        return planned.join();
+    }
+
+    private static boolean hasColumn(StreamLakeScanPredicate pred, int columnIndex) {
+        return pred.columns().stream().anyMatch(c -> c.columnIndex() == columnIndex);
+    }
+
+    @Test
+    public void joinKeyRangeIsMirroredToOtherSideForPruning() {
+        // Only Person carries the personId range; without transitive pushdown the Employee side has no
+        // personId bound and would scan/spill its whole dataset (the "No space left on device" bug).
+        StreamLakeSqlPlanner.JoinPlan jp = planPersonEmployeeJoin(
+                "SELECT * FROM Person p JOIN Employee e ON p.personId = e.personId "
+                        + "WHERE p.personId BETWEEN 0 AND 100000 AND p.age BETWEEN 30 AND 40 "
+                        + "AND e.salary >= 40000");
+        // Person (left) keeps personId(0) + age(2).
+        assertTrue(hasColumn(jp.leftPredicate(), 0), "left keeps its personId bound");
+        assertTrue(hasColumn(jp.leftPredicate(), 2), "left keeps its age bound");
+        // Employee (right) keeps salary(2) AND gains the mirrored personId(1) bound.
+        assertTrue(hasColumn(jp.rightPredicate(), 2), "right keeps its salary bound");
+        assertTrue(hasColumn(jp.rightPredicate(), 1),
+                "right gains the mirrored personId bound so it can page-prune too");
+    }
+
+    @Test
+    public void joinKeyRangeMirrorsFromRightToLeft() {
+        // Symmetric: a bound on the right table's join key is mirrored onto the left table's key.
+        StreamLakeSqlPlanner.JoinPlan jp = planPersonEmployeeJoin(
+                "SELECT * FROM Person p JOIN Employee e ON p.personId = e.personId "
+                        + "WHERE e.personId BETWEEN 0 AND 100000");
+        assertTrue(hasColumn(jp.rightPredicate(), 1), "right keeps its personId bound");
+        assertTrue(hasColumn(jp.leftPredicate(), 0), "left gains the mirrored personId bound");
     }
 }
