@@ -22,6 +22,8 @@ PERSON_START="${SL_PERSON_START:-0}"
 EMP_START="${SL_EMP_START:-0}"
 THREADS="${SL_THREADS:-8}"              # parallel producers (parallelizes Arrow encode + send)
 CLIENT_MEM_MB="${SL_CLIENT_MEM_MB:-512}" # pulsar client memory limit (more in-flight = faster)
+MAX_PENDING="${SL_MAX_PENDING:-1000}"  # bounded in-flight sends per producer (backpressure; lower if
+                                       # the broker can't keep up -> "Message send timed out")
 INGEST_XMX="${SL_INGEST_XMX:-4g}"       # ingest JVM heap
 
 OUT="$INGEST_DIR/out"
@@ -71,7 +73,7 @@ run() {  # run <table> <target-gb> <start-id>
     --service-url "$SERVICE_URL" --admin-url "$ADMIN_URL" \
     --tenant "$TENANT" --namespace "$NAMESPACE" --table "$table" \
     --target-gb "$gb" --rows-per-page "$ROWS_PER_PAGE" --start-id "$start" \
-    --threads "$THREADS" --client-mem-mb "$CLIENT_MEM_MB"
+    --threads "$THREADS" --client-mem-mb "$CLIENT_MEM_MB" --max-pending "$MAX_PENDING"
 }
 
 run Person   "$PERSON_GB" "$PERSON_START"

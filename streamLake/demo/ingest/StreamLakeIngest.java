@@ -20,6 +20,7 @@
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import org.apache.pulsar.client.admin.PulsarAdmin;
@@ -69,6 +70,8 @@ public final class StreamLakeIngest {
                 ? (long) (Double.parseDouble(a.get("target-gb")) * (1L << 30)) : -1;
         final int threads = Math.max(1, Integer.parseInt(a.getOrDefault("threads", "8")));
         long clientMemMb = Long.parseLong(a.getOrDefault("client-mem-mb", "512"));
+        // Bounded in-flight queue per producer = real backpressure (see the producer builder below).
+        final int maxPending = Math.max(1, Integer.parseInt(a.getOrDefault("max-pending", "1000")));
 
         final boolean isPerson = table.equalsIgnoreCase("Person");
         if (!isPerson && !table.equalsIgnoreCase("Employee")) {
@@ -129,7 +132,15 @@ public final class StreamLakeIngest {
                 final int tid = t;
                 workers[t] = new Thread(() -> {
                     try (Producer<byte[]> raw = client.newProducer().topic(topic)
-                                    .enableBatching(false).blockIfQueueFull(true)
+                                    .enableBatching(false)
+                                    // Real backpressure: bound the in-flight queue and block the
+                                    // ingest thread when it is full, instead of piling millions of
+                                    // sends into an unbounded queue. sendTimeout(0) disables the 30s
+                                    // send timeout so a broker that is slower than the producers (it now
+                                    // does real page-index footer writes on the ack path) throttles us
+                                    // rather than failing messages ("Message send timed out").
+                                    .maxPendingMessages(maxPending).blockIfQueueFull(true)
+                                    .sendTimeout(0, TimeUnit.SECONDS)
                                     // NONE on purpose: StreamLakeProducer self-compresses the Arrow
                                     // region and keeps the stats footer uncompressed at the tail so the
                                     // broker can index the page. Pulsar compression here would bury the
