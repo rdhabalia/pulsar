@@ -24,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.apache.pulsar.client.api.Producer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,6 +63,11 @@ public final class StreamLakeProducer implements AutoCloseable {
     private final List<Object[]> buffer = new ArrayList<>();
     private long bufferedBytes;
     private long oldestRowNanos;
+
+    // Send-failure accounting so callers can verify completeness: a nonzero count means one or more
+    // page sends never persisted, so rows are missing (do not trust the attempted-row count alone).
+    private final AtomicLong sendFailures = new AtomicLong();
+    private volatile Throwable lastSendFailure;
 
     public StreamLakeProducer(Producer<byte[]> producer, StreamLakeTopicSchema topicSchema) {
         this(producer, topicSchema, 1000, 1024 * 1024, 10);
@@ -115,7 +121,30 @@ public final class StreamLakeProducer implements AutoCloseable {
                 topicSchema.indexedColumns(), topicSchema.setMaxCardinality(), topicSchema.bloomFpp())
                 .encode();
         byte[] payload = StreamLakeBatchPayload.combine(arrow, footer);
-        return producer.sendAsync(payload).thenAccept(id -> { });
+        CompletableFuture<Void> f = producer.sendAsync(payload).thenAccept(id -> { });
+        // Record (do not swallow) send failures so callers can detect missing data. whenComplete leaves
+        // the returned future's outcome unchanged for any caller that also inspects it.
+        f.whenComplete((v, ex) -> {
+            if (ex != null) {
+                sendFailures.incrementAndGet();
+                lastSendFailure = ex;
+            }
+        });
+        return f;
+    }
+
+    /**
+     * Number of page sends that failed to persist. A nonzero value means the corresponding rows are
+     * missing from the topic — the data is incomplete regardless of how many rows were buffered. Final
+     * only after the wrapped producer has flushed all in-flight sends (e.g. {@code producer.flush()}).
+     */
+    public long sendFailures() {
+        return sendFailures.get();
+    }
+
+    /** The most recent send failure (for diagnostics), or {@code null} if every send succeeded. */
+    public Throwable lastSendFailure() {
+        return lastSendFailure;
     }
 
     private void flushIfStaleQuietly() {

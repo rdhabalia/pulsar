@@ -97,6 +97,7 @@ public final class StreamLakeIngest {
 
             final AtomicBoolean stop = new AtomicBoolean(false);
             final AtomicLong written = new AtomicLong(0);
+            final AtomicLong failedPages = new AtomicLong(0);
             final long t0 = System.nanoTime();
             final long perThreadMax = maxRows == Long.MAX_VALUE ? Long.MAX_VALUE : maxRows / threads;
             final long finalMaxRows = maxRows;
@@ -157,6 +158,16 @@ public final class StreamLakeIngest {
                             written.incrementAndGet();
                         }
                         p.flush();
+                        // Barrier: wait until every in-flight send has persisted or failed, then the
+                        // producer's failure count is final. A nonzero count means rows are missing.
+                        raw.flush();
+                        long f = p.sendFailures();
+                        if (f > 0) {
+                            failedPages.addAndGet(f);
+                            stop.set(true);
+                            System.err.printf("ingest worker %d: %,d page-send(s) FAILED (%s)%n",
+                                    tid, f, String.valueOf(p.lastSendFailure()));
+                        }
                     } catch (Exception e) {
                         System.err.println("ingest worker " + tid + " failed: " + e);
                         stop.set(true);
@@ -171,10 +182,20 @@ public final class StreamLakeIngest {
             monitor.interrupt();
 
             long total = written.get();
+            long fails = failedPages.get();
             double secs = (System.nanoTime() - t0) / 1e9;
-            System.out.printf("DONE %s: wrote %,d rows in %.0fs (%.0f rows/s); storage=%s; nextStartId=%d%n",
+            System.out.printf("DONE %s: attempted %,d rows in %.0fs (%.0f rows/s); storage=%s; "
+                            + "nextStartId=%d%n",
                     table, total, secs, total / Math.max(1e-9, secs), gb(storageSize(admin, topic)),
                     startId + total);
+            if (fails > 0) {
+                System.err.printf("INCOMPLETE %s: %,d page-send(s) failed -> ~%,d rows are MISSING. "
+                                + "Lower --threads / --max-pending (more backpressure) or raise broker "
+                                + "capacity, then reset + re-ingest. (Deploy the sendTimeout=0 build so "
+                                + "a slow broker throttles instead of dropping.)%n",
+                        table, fails, fails * (long) rowsPerPage);
+                System.exit(1);
+            }
         }
     }
 
