@@ -52,10 +52,10 @@ done
 set_key "$conf" systemTopicEnabled            "true"
 set_key "$conf" topicLevelPoliciesEnabled     "true"
 set_key "$conf" brokerDeleteInactiveTopicsEnabled "false"
-# NOTE: the StreamLake query-broker local scratch dir ($SL_QUERY_LOCAL_DIR) is created above and is
-# reserved for the dedicated query-executor tier (storage engine still under discussion, see demo.md
-# §7 "Deferred"); it is NOT yet a wired broker ServiceConfiguration key, so we do not write it into
-# standalone.conf. Segment cache size etc. are StreamingLakeConfig (topic policy) fields.
+# StreamLake hash-join spill dir (server-side): send join partition/spill files to the big local disk
+# instead of the JVM temp dir (/tmp, often small or RAM-backed -> "No space left on device" on large
+# joins). The broker creates it if missing. This is a broker ServiceConfiguration key, applied here.
+set_key "$conf" streamLakeJoinSpillDir        "$SL_QUERY_LOCAL_DIR"
 
 echo "Configured:"
 echo "  journal (NVMe)   : $SL_JOURNAL_DIR"

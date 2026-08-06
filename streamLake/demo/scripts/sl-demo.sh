@@ -59,8 +59,8 @@ echo "==> waiting for the broker to become healthy…"
 until "$PULSAR_HOME/bin/pulsar-admin" brokers healthcheck >/dev/null 2>&1; do sleep 2; done
 echo "    broker healthy."
 
-# ---- 3. register the two StreamLake tables (spill joins to the big disk, not /tmp) ----
-SL_NAMESPACE="$NS" SL_QUERY_LOCAL_DIR="$STORAGE_DIR/streamlake" "$SCRIPT_DIR/sl-register.sh"
+# ---- 3. register the two StreamLake tables ----
+SL_NAMESPACE="$NS" "$SCRIPT_DIR/sl-register.sh"
 
 # ---- 4. ingest ----
 SL_NAMESPACE="$NS" SL_PERSON_GB="$PERSON_GB" SL_EMP_GB="$EMP_GB" "$SCRIPT_DIR/sl-ingest.sh"

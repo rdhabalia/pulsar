@@ -60,12 +60,14 @@ public final class StreamLakeQueryService {
     private final Executor readExecutor;
     private final StreamLakeSchema schema;
     private final StreamLakeStatistics statistics;
+    private final String brokerJoinSpillDir;
 
     private volatile StreamLakePruner pruner;
     private volatile StreamLakeQueryExecutor executor;
 
     private StreamLakeQueryService(ManagedLedger managedLedger, StreamLakeSegmentService segmentService,
-            StreamLakePageIndex pageIndex, StreamingLakeConfig cfg, Executor readExecutor) {
+            StreamLakePageIndex pageIndex, StreamingLakeConfig cfg, Executor readExecutor,
+            String brokerJoinSpillDir) {
         this.managedLedger = managedLedger;
         this.segmentService = segmentService;
         this.pageIndex = pageIndex;
@@ -73,12 +75,14 @@ public final class StreamLakeQueryService {
         this.readExecutor = readExecutor;
         this.schema = StreamLakeTopicSchema.fromConfig(cfg).schema();
         this.statistics = new StreamLakeStatistics(cfg.getEstimatedRowsPerPage(), cfg.getEstimatedPageBytes());
+        this.brokerJoinSpillDir = brokerJoinSpillDir == null ? "" : brokerJoinSpillDir;
     }
 
     public static StreamLakeQueryService create(ManagedLedger managedLedger,
             StreamLakeSegmentService segmentService, StreamLakePageIndex pageIndex, StreamingLakeConfig cfg,
-            Executor readExecutor) {
-        return new StreamLakeQueryService(managedLedger, segmentService, pageIndex, cfg, readExecutor);
+            Executor readExecutor, String brokerJoinSpillDir) {
+        return new StreamLakeQueryService(managedLedger, segmentService, pageIndex, cfg, readExecutor,
+                brokerJoinSpillDir);
     }
 
     /** The topic's StreamLake config (join strategy, budgets, RocksDB sizes, ...). */
@@ -109,8 +113,15 @@ public final class StreamLakeQueryService {
         return cfg.getJoinMaxBuildRows();
     }
 
-    /** Directory for join spill / partition / RocksDB files (empty = JVM temp). */
+    /**
+     * Directory for join spill / partition / RocksDB files. The broker-wide
+     * {@code streamLakeJoinSpillDir} takes precedence (join spill is a server-side storage concern); a
+     * per-topic {@code joinSpillDir} is an optional override. Empty on both means the JVM temp dir.
+     */
     public String joinSpillDir() {
+        if (brokerJoinSpillDir != null && !brokerJoinSpillDir.isEmpty()) {
+            return brokerJoinSpillDir;
+        }
         return cfg.getJoinSpillDir();
     }
 
@@ -137,10 +148,10 @@ public final class StreamLakeQueryService {
     public StreamLakeJoinTable newBuildTable(Backend backend) {
         switch (backend) {
             case ROCKSDB:
-                return new RocksDbJoinTable(cfg.getJoinSpillDir(), cfg.getRocksdbBlockCacheBytes(),
+                return new RocksDbJoinTable(joinSpillDir(), cfg.getRocksdbBlockCacheBytes(),
                         cfg.getRocksdbWriteBufferBytes());
             case SPILL:
-                return new SpillingJoinTable(cfg.getJoinMaxBuildRows(), cfg.getJoinSpillDir());
+                return new SpillingJoinTable(cfg.getJoinMaxBuildRows(), joinSpillDir());
             default:
                 return new OnHeapJoinTable(cfg.getJoinMaxBuildRows());
         }

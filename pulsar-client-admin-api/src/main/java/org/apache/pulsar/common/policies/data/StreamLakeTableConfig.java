@@ -86,7 +86,6 @@ public class StreamLakeTableConfig {
     private int segmentMaxEntriesPerLedger = 200_000;
     private int replicationFactor = 1;
     private boolean asyncSegmentBuildViaSystemTopic;
-    private String joinSpillDir = "";
 
     public List<Column> getColumns() {
         return columns;
@@ -142,18 +141,5 @@ public class StreamLakeTableConfig {
 
     public void setAsyncSegmentBuildViaSystemTopic(boolean asyncSegmentBuildViaSystemTopic) {
         this.asyncSegmentBuildViaSystemTopic = asyncSegmentBuildViaSystemTopic;
-    }
-
-    /**
-     * Broker-local directory for hash-join spill/partition files. Empty (default) uses the broker JVM
-     * temp dir (typically {@code /tmp}); point it at a large/fast local disk so big joins do not fill a
-     * small {@code /tmp}. Files are deleted after the join completes.
-     */
-    public String getJoinSpillDir() {
-        return joinSpillDir;
-    }
-
-    public void setJoinSpillDir(String joinSpillDir) {
-        this.joinSpillDir = joinSpillDir;
     }
 }

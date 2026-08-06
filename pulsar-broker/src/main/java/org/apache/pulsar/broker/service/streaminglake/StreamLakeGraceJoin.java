@@ -78,9 +78,16 @@ public final class StreamLakeGraceJoin {
             int partitions, String spillDir, long maxPartitionBuildRows,
             StreamLakeQueryExecutor.RowConsumer out) throws Exception {
         int n = Math.max(1, partitions);
-        Path dir = (spillDir == null || spillDir.isEmpty())
-                ? Files.createTempDirectory("sl-grace")
-                : Files.createTempDirectory(Paths.get(spillDir), "sl-grace");
+        Path dir;
+        if (spillDir == null || spillDir.isEmpty()) {
+            dir = Files.createTempDirectory("sl-grace");
+        } else {
+            // Server-side spill root (configured via streamLakeJoinSpillDir); create it if absent so the
+            // operator never fails just because the directory has not been made yet.
+            Path root = Paths.get(spillDir);
+            Files.createDirectories(root);
+            dir = Files.createTempDirectory(root, "sl-grace");
+        }
         Path[] buildPath = new Path[n];
         Path[] probePath = new Path[n];
         DataOutputStream[] buildOut = new DataOutputStream[n];

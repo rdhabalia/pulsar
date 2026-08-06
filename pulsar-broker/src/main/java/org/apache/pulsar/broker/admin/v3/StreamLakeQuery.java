@@ -172,7 +172,6 @@ public class StreamLakeQuery extends AdminResource {
                 .pageIndexMaxEntriesPerLedger(req.getPageIndexMaxEntriesPerLedger())
                 .segmentMaxEntriesPerLedger(req.getSegmentMaxEntriesPerLedger())
                 .asyncSegmentBuildViaSystemTopic(req.isAsyncSegmentBuildViaSystemTopic())
-                .joinSpillDir(req.getJoinSpillDir() == null ? "" : req.getJoinSpillDir())
                 .columns(cols).build();
     }
 

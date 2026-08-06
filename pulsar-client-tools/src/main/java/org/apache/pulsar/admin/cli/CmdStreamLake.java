@@ -82,11 +82,6 @@ public class CmdStreamLake extends CmdBase {
         @Option(names = "--async-build", description = "build segments via the system topic (Phase F)")
         private boolean asyncBuild;
 
-        @Option(names = "--join-spill-dir", description = "broker-local directory for hash-join spill "
-                + "files (default: broker JVM temp, typically /tmp). Point at a large/fast local disk so "
-                + "big joins do not fill /tmp.")
-        private String joinSpillDir = "";
-
         @Override
         void run() throws Exception {
             NamespaceName ns = NamespaceName.get(validateNamespace(namespace));
@@ -110,7 +105,6 @@ public class CmdStreamLake extends CmdBase {
             cfg.setSegmentMaxEntriesPerLedger(segmentMaxEntries);
             cfg.setReplicationFactor(rf);
             cfg.setAsyncSegmentBuildViaSystemTopic(asyncBuild);
-            cfg.setJoinSpillDir(joinSpillDir);
             getAdmin().streamLake().register(ns.getTenant(), ns.getLocalName(), table, cfg);
             print("Registered StreamLake table " + ns + "/" + table + " with " + cols.size()
                     + " columns (rf=" + rf + ").");

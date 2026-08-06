@@ -2457,6 +2457,16 @@ public class ServiceConfiguration implements PulsarConfiguration {
             doc = "How frequently to refresh the stats. (seconds). Default is 60 seconds")
     private int managedLedgerStatsPeriodSeconds = 60;
 
+    @FieldContext(
+        category = CATEGORY_STORAGE_ML,
+        doc = "Broker-local directory for StreamLake hash-join spill / partition files. Empty (default) "
+            + "uses the broker JVM temp dir (java.io.tmpdir, typically /tmp), which is often small or "
+            + "RAM-backed and can fill up on large joins ('No space left on device'). Point this at a "
+            + "large/fast local disk. The broker creates the directory if it does not exist. Spill files "
+            + "are deleted after each join completes."
+    )
+    private String streamLakeJoinSpillDir = "";
+
     //
     //
     @FieldContext(
