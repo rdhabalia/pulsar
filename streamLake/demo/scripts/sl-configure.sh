@@ -3,7 +3,9 @@
 # Sets the bookie NVMe journal + multi-TB HDD ledger dirs, the StreamLake query-broker local dir, and
 # the StreamLake broker defaults. Idempotent: re-running rewrites the managed keys.
 #
-# Usage:
+# Usage (either give SL_STORAGE_DIR and let the dirs derive, or set each dir explicitly):
+#   PULSAR_HOME=/opt/pulsar SL_STORAGE_DIR=/grid/x/dfs-data/tmp/test ./sl-configure.sh
+# or
 #   PULSAR_HOME=/opt/pulsar \
 #   SL_JOURNAL_DIR=/mnt/nvme/bk/journal \
 #   SL_LEDGER_DIRS=/data1/bk/ledgers,/data2/bk/ledgers \
@@ -12,6 +14,13 @@
 set -euo pipefail
 
 PULSAR_HOME="${PULSAR_HOME:?set PULSAR_HOME to the unpacked Pulsar dir}"
+# One-var convenience (matches sl-demo.sh): derive the three dirs from SL_STORAGE_DIR unless each is set.
+SL_STORAGE_DIR="${SL_STORAGE_DIR:-}"
+if [ -n "$SL_STORAGE_DIR" ]; then
+  SL_JOURNAL_DIR="${SL_JOURNAL_DIR:-$SL_STORAGE_DIR/bk/journal}"
+  SL_LEDGER_DIRS="${SL_LEDGER_DIRS:-$SL_STORAGE_DIR/bk/ledgers}"
+  SL_QUERY_LOCAL_DIR="${SL_QUERY_LOCAL_DIR:-$SL_STORAGE_DIR/streamlake}"
+fi
 SL_JOURNAL_DIR="${SL_JOURNAL_DIR:-/mnt/nvme/bk/journal}"      # small, fast NVMe (write-ahead log)
 SL_LEDGER_DIRS="${SL_LEDGER_DIRS:-/data/bk/ledgers}"          # large, cheap HDD (multi-TB bulk data)
 SL_QUERY_LOCAL_DIR="${SL_QUERY_LOCAL_DIR:-/mnt/nvme/streamlake}"  # query-broker spill/scratch (NVMe)
@@ -31,7 +40,18 @@ set_key() {  # set_key <file> <key> <value>  — replaces or appends "key=value"
   fi
 }
 
-mkdir -p "$SL_JOURNAL_DIR" ${SL_LEDGER_DIRS//,/ } "$SL_QUERY_LOCAL_DIR"
+# Fail LOUDLY (with guidance) instead of silently mis-pointing the bookie if the storage dirs are not
+# creatable -- e.g. SL_STORAGE_DIR was unset so these fell back to the /mnt/nvme /data defaults.
+if ! mkdir -p "$SL_JOURNAL_DIR" ${SL_LEDGER_DIRS//,/ } "$SL_QUERY_LOCAL_DIR" 2>/dev/null; then
+  echo "ERROR: cannot create the storage dirs:" >&2
+  echo "         journal : $SL_JOURNAL_DIR" >&2
+  echo "         ledgers : $SL_LEDGER_DIRS" >&2
+  echo "         query   : $SL_QUERY_LOCAL_DIR" >&2
+  echo "       Set SL_STORAGE_DIR=/your/data/disk (or SL_JOURNAL_DIR / SL_LEDGER_DIRS /" >&2
+  echo "       SL_QUERY_LOCAL_DIR) to a writable path and re-run. (The values above are the" >&2
+  echo "       built-in defaults, used because nothing was provided.)" >&2
+  exit 1
+fi
 
 # --- bookie storage: NVMe journal + multi-TB HDD ledger dirs ---
 for f in "$bkconf" "$conf"; do
