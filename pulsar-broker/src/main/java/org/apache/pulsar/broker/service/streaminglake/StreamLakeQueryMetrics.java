@@ -19,6 +19,8 @@
 package org.apache.pulsar.broker.service.streaminglake;
 
 import org.apache.pulsar.common.policies.data.StreamLakeQueryStats;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Per-query, broker-side execution counters for a StreamLake query, accumulated by the
@@ -31,6 +33,9 @@ import org.apache.pulsar.common.policies.data.StreamLakeQueryStats;
  */
 public final class StreamLakeQueryMetrics {
 
+    private static final Logger log = LoggerFactory.getLogger(StreamLakeQueryMetrics.class);
+    private static final long PROGRESS_LOG_INTERVAL_NANOS = 1_000_000_000L; // at most once/sec
+
     private long rowsRead;
     private long bytesRead;
     private long pagesRead;
@@ -38,7 +43,21 @@ public final class StreamLakeQueryMetrics {
     private long pagesScanned;
     private long pagesKept;
     private long candidateLedgers;
+    // Per-tier storage reads for progress logging / a debuggable footer.
+    private long segmentsLoaded;
+    private long segmentBytes;
+    private long pageIndexReads;
+    private long pageIndexBytes;
     private int readConcurrency = 1;
+
+    private String queryTag = "";
+    private final long startNanos = System.nanoTime();
+    private long lastProgressLogNanos;
+
+    /** A short label (e.g. truncated SQL) so progress/summary log lines can be tied to the query. */
+    public void setQueryTag(String queryTag) {
+        this.queryTag = queryTag == null ? "" : queryTag;
+    }
 
     /** Count one row decoded from a data page (whether or not it passed the predicate). */
     public void incRowsRead() {
@@ -54,16 +73,64 @@ public final class StreamLakeQueryMetrics {
         }
     }
 
-    /** Fold a pruner's per-level counters (pages scanned/kept, candidate ledgers) into the totals. */
+    /** Fold a pruner's per-level counters (pages, candidate ledgers, per-tier reads) into the totals. */
     public void addPruneStats(StreamLakePruner.Stats s) {
         pagesScanned += s.pagesScanned;
         pagesKept += s.pagesKept;
         candidateLedgers += s.candidateLedgers;
+        segmentsLoaded += s.segmentsLoaded;
+        segmentBytes += s.segmentBytes;
+        pageIndexReads += s.pageIndexReads;
+        pageIndexBytes += s.pageIndexBytes;
     }
 
     /** The executor's read-ahead depth (pages held concurrently), for the peak-buffer estimate. */
     public void setReadConcurrency(int readConcurrency) {
         this.readConcurrency = Math.max(1, readConcurrency);
+    }
+
+    /**
+     * Emit a throttled INFO progress line (at most once/sec unless {@code force}) so a slow query shows
+     * what it is reading. {@code liveStats} is the currently-pruning side's cumulative pruner stats (not
+     * yet folded in via {@link #addPruneStats}); the data-page counters come from this instance.
+     */
+    public void logProgress(StreamLakePruner.Stats liveStats, boolean force) {
+        long now = System.nanoTime();
+        if (!force && now - lastProgressLogNanos < PROGRESS_LOG_INTERVAL_NANOS) {
+            return;
+        }
+        lastProgressLogNanos = now;
+        long candLedgers = liveStats != null ? liveStats.candidateLedgers : candidateLedgers;
+        long segLoaded = (liveStats != null ? liveStats.segmentsLoaded : 0) + segmentsLoaded;
+        long segBytes = (liveStats != null ? liveStats.segmentBytes : 0) + segmentBytes;
+        long piReads = (liveStats != null ? liveStats.pageIndexReads : 0) + pageIndexReads;
+        long piBytes = (liveStats != null ? liveStats.pageIndexBytes : 0) + pageIndexBytes;
+        log.info("StreamLake query [{}] progress: candidateLedgers={} pageIndex(reads={}, {}) "
+                        + "segments(loaded={}, {}) dataPages(read={}, {}) rows={} elapsed={}ms",
+                queryTag, candLedgers, piReads, human(piBytes), segLoaded, human(segBytes),
+                pagesRead, human(bytesRead), rowsRead, (now - startNanos) / 1_000_000);
+    }
+
+    /** Emit the final one-line summary of everything this query read (call once at the end). */
+    public void logSummary() {
+        log.info("StreamLake query [{}] done: candidateLedgers={} pageIndex(reads={}, {}) "
+                        + "segments(loaded={}, {}) dataPages(read={}, {}) rowsRead={} elapsed={}ms",
+                queryTag, candidateLedgers, pageIndexReads, human(pageIndexBytes), segmentsLoaded,
+                human(segmentBytes), pagesRead, human(bytesRead), rowsRead,
+                (System.nanoTime() - startNanos) / 1_000_000);
+    }
+
+    private static String human(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+        if (bytes < 1024 * 1024) {
+            return String.format("%.1f KB", bytes / 1024.0);
+        }
+        if (bytes < 1024L * 1024 * 1024) {
+            return String.format("%.1f MB", bytes / (1024.0 * 1024));
+        }
+        return String.format("%.2f GB", bytes / (1024.0 * 1024 * 1024));
     }
 
     /** Snapshot the broker-measured counters into a wire {@link StreamLakeQueryStats}. */

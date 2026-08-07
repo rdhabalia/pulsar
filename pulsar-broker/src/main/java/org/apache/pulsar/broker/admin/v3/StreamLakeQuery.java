@@ -272,6 +272,7 @@ public class StreamLakeQuery extends AdminResource {
         stats.setRowsReturned(rows[0]);
         stats.setBytesReturned(bytes[0]);
         stats.setElapsedMs((System.nanoTime() - t0) / 1_000_000);
+        prepared.metrics().logSummary();
         w.write(MAPPER.writeValueAsString(stats));
         w.write('\n');
         w.flush();

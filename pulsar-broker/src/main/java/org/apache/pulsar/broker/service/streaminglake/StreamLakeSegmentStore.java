@@ -67,12 +67,20 @@ public class StreamLakeSegmentStore implements AutoCloseable {
         public final long dataLedgerId;
         public final long[] pageEntryIds;
         public final Map<Integer, StreamLakeColumnSegment> columns;
+        /** Total segment-ledger bytes read to load this segment (directory + column blobs). */
+        public final long sizeBytes;
 
         public LedgerSegment(long dataLedgerId, long[] pageEntryIds,
                 Map<Integer, StreamLakeColumnSegment> columns) {
+            this(dataLedgerId, pageEntryIds, columns, 0);
+        }
+
+        public LedgerSegment(long dataLedgerId, long[] pageEntryIds,
+                Map<Integer, StreamLakeColumnSegment> columns, long sizeBytes) {
             this.dataLedgerId = dataLedgerId;
             this.pageEntryIds = pageEntryIds;
             this.columns = columns;
+            this.sizeBytes = sizeBytes;
         }
 
         public int numPages() {
@@ -215,9 +223,11 @@ public class StreamLakeSegmentStore implements AutoCloseable {
         try {
             long[] pageEntryIds = null;
             Map<Integer, StreamLakeColumnSegment> cols = new HashMap<>();
+            long bytesRead = 0;
             java.util.Enumeration<LedgerEntry> en = lh.readEntries(startEntry, endEntry);
             while (en.hasMoreElements()) {
                 byte[] data = en.nextElement().getEntry();
+                bytesRead += data.length;
                 ByteBuffer bb = ByteBuffer.wrap(data);
                 byte type = bb.get();
                 bb.getLong(); // dataLedgerId (already known)
@@ -238,7 +248,7 @@ public class StreamLakeSegmentStore implements AutoCloseable {
             if (pageEntryIds == null) {
                 return null;
             }
-            LedgerSegment seg = new LedgerSegment(dataLedgerId, pageEntryIds, cols);
+            LedgerSegment seg = new LedgerSegment(dataLedgerId, pageEntryIds, cols, bytesRead);
             cache.put(dataLedgerId, seg);
             return seg;
         } finally {

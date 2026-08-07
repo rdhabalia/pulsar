@@ -273,11 +273,12 @@ public class StreamLakeQueryExecutor {
     private void forEachPage(long fromMs, long toMs, StreamLakeScanPredicate predicate, PageConsumer consumer)
             throws Exception {
         StreamLakePruner.Stats stats = new StreamLakePruner.Stats();
+        StreamLakePruner.ProgressListener progress = s -> metrics.logProgress(s, false);
         if (readExecutor == null || readConcurrency <= 1) {
             pruner.prune(fromMs, toMs, predicate, stats, p -> {
                 byte[] arrow = pageReader.readArrowBatch(p.ledgerId, p.entryId);
                 deliver(consumer, p, arrow);
-            });
+            }, progress);
             metrics.addPruneStats(stats);
             return;
         }
@@ -291,7 +292,7 @@ public class StreamLakeQueryExecutor {
                 if (inFlight.size() >= window) {
                     deliver(consumer, pending.poll(), await(inFlight.poll()));
                 }
-            });
+            }, progress);
             while (!inFlight.isEmpty()) {
                 deliver(consumer, pending.poll(), await(inFlight.poll()));
             }

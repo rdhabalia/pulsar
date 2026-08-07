@@ -100,6 +100,7 @@ public final class StreamLakeQueryCoordinator {
             return s == null ? null : s.schema();
         };
         StreamLakeQueryMetrics metrics = new StreamLakeQueryMetrics();
+        metrics.setQueryTag(shortTag(query));
         // Expose the pseudo event-time column so `WHERE __event_time BETWEEN ms1 AND ms2` prunes whole
         // data ledgers by the catalog's per-ledger ingest-time bounds (single-table + GROUP BY paths).
         StreamLakeSqlPlanner.Planned planned = StreamLakeSqlPlanner.planStatement(
@@ -240,6 +241,12 @@ public final class StreamLakeQueryCoordinator {
 
     private static Prepared planRow(String text, StreamLakeQueryMetrics metrics) {
         return new Prepared(List.of("plan"), sink -> sink.row(new Object[]{text}), metrics);
+    }
+
+    /** A compact single-line label for a query, for progress/summary log lines. */
+    private static String shortTag(String sql) {
+        String s = sql.replaceAll("\\s+", " ").trim();
+        return s.length() > 80 ? s.substring(0, 80) + "…" : s;
     }
 
     /** Buffered convenience: collect the streamed rows into a {@link StreamLakeQueryResult}. */

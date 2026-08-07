@@ -57,6 +57,12 @@ public class StreamLakePruner {
         public int segmentsSkipped;
         public int pagesScanned;
         public int pagesKept;
+        // Per-tier storage reads (for progress logging / debugging a slow query): how many segment and
+        // page-index units were consulted and how many footer/segment bytes that pulled in.
+        public long segmentsLoaded;
+        public long segmentBytes;
+        public long pageIndexReads;
+        public long pageIndexBytes;
     }
 
     private final StreamLakeCatalog catalog;
@@ -79,6 +85,14 @@ public class StreamLakePruner {
         void accept(PagePointer page) throws Exception;
     }
 
+    /**
+     * Called once after each candidate data ledger is pruned, with the cumulative {@code stats}, so a
+     * caller can log progress (which ledger / how many bytes read so far) while a slow query runs.
+     */
+    public interface ProgressListener {
+        void afterLedger(Stats stats) throws Exception;
+    }
+
     public List<PagePointer> prune(long fromMs, long toMs, StreamLakeScanPredicate predicate) throws Exception {
         return prune(fromMs, toMs, predicate, new Stats());
     }
@@ -99,10 +113,21 @@ public class StreamLakePruner {
      */
     public void prune(long fromMs, long toMs, StreamLakeScanPredicate predicate, Stats stats, PageSink sink)
             throws Exception {
+        prune(fromMs, toMs, predicate, stats, sink, null);
+    }
+
+    /** As {@link #prune(long, long, StreamLakeScanPredicate, Stats, PageSink)} with a per-ledger progress
+     * callback (nullable) for logging while a slow scan runs. */
+    public void prune(long fromMs, long toMs, StreamLakeScanPredicate predicate, Stats stats, PageSink sink,
+            ProgressListener progress) throws Exception {
         int[] candidateCount = {0};
         catalog.forEachCandidateLedger(fromMs, toMs, ledgerId -> {
             candidateCount[0]++;
+            stats.candidateLedgers = candidateCount[0];
             pruneLedger(ledgerId, predicate, stats, sink);
+            if (progress != null) {
+                progress.afterLedger(stats);
+            }
         });
         stats.candidateLedgers = candidateCount[0];
     }
@@ -121,7 +146,10 @@ public class StreamLakePruner {
 
         if (seg == null) {
             // Not segmented yet (recent data): fall back to a per-page footer prune of this ledger.
-            for (StreamLakePageIndex.PageFooter f : pageIndex.footersFor(ledgerId)) {
+            List<StreamLakePageIndex.PageFooter> footers = pageIndex.footersFor(ledgerId);
+            stats.pageIndexReads += footers.size();
+            for (StreamLakePageIndex.PageFooter f : footers) {
+                stats.pageIndexBytes += f.stats.length;
                 stats.pagesScanned++;
                 if (predicate.matches(StreamLakeBatchStats.decode(f.stats))) {
                     stats.pagesKept++;
@@ -134,6 +162,8 @@ public class StreamLakePruner {
         // Segmented: prune to exact pages from the column segments alone (no page-footer read).
         // Per predicate column, AND together each column segment's surviving page positions.
         stats.segmentsTotal++;
+        stats.segmentsLoaded++;
+        stats.segmentBytes += seg.sizeBytes;
         int numPages = seg.numPages();
         boolean[] surviving = new boolean[numPages];
         Arrays.fill(surviving, true);
@@ -154,8 +184,11 @@ public class StreamLakePruner {
         // exact footer (incl. set(N)) rejects. Always safe -- the footer test is never a false negative.
         if (anyCollapsed && info.pageIndexLedgerId >= 0) {
             Map<Long, byte[]> statsByEntry = new HashMap<>();
-            for (StreamLakePageIndex.PageFooter f : pageIndex.readRange(info.pageIndexLedgerId,
-                    info.pageIndexStartEntry, info.pageIndexEndEntry)) {
+            List<StreamLakePageIndex.PageFooter> footers = pageIndex.readRange(info.pageIndexLedgerId,
+                    info.pageIndexStartEntry, info.pageIndexEndEntry);
+            stats.pageIndexReads += footers.size();
+            for (StreamLakePageIndex.PageFooter f : footers) {
+                stats.pageIndexBytes += f.stats.length;
                 statsByEntry.put(f.dataEntryId, f.stats);
             }
             for (int i = 0; i < numPages; i++) {
