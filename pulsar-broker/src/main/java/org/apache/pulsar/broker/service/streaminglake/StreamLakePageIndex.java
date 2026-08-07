@@ -220,17 +220,23 @@ public class StreamLakePageIndex implements AutoCloseable {
             }
         }
         List<PageFooter> out = new ArrayList<>();
-        Enumeration<LedgerEntry> en = lh.readEntries(startEntry, endEntry);
-        while (en.hasMoreElements()) {
-            byte[] data = en.nextElement().getEntry();
-            if (data.length < HEADER || data[0] != ENTRY_FOOTER) {
-                continue;
+        // Bounded batches: a big data ledger's page-index range can be hundreds of thousands of footers;
+        // a single readEntries(start,end) would issue them all at once and overwhelm the bookie ("too
+        // many read requests" -> operation timeout), which fails the whole query. Cap in-flight reads.
+        for (long from = startEntry; from <= endEntry; from += REPLAY_READ_BATCH) {
+            long to = Math.min(from + REPLAY_READ_BATCH - 1, endEntry);
+            Enumeration<LedgerEntry> en = lh.readEntries(from, to);
+            while (en.hasMoreElements()) {
+                byte[] data = en.nextElement().getEntry();
+                if (data.length < HEADER || data[0] != ENTRY_FOOTER) {
+                    continue;
+                }
+                ByteBuffer bb = ByteBuffer.wrap(data);
+                bb.get();           // type
+                bb.getLong();       // dataLedgerId
+                long dataEntryId = bb.getLong();
+                out.add(new PageFooter(dataEntryId, footerBody(data)));
             }
-            ByteBuffer bb = ByteBuffer.wrap(data);
-            bb.get();           // type
-            bb.getLong();       // dataLedgerId
-            long dataEntryId = bb.getLong();
-            out.add(new PageFooter(dataEntryId, footerBody(data)));
         }
         return out;
     }

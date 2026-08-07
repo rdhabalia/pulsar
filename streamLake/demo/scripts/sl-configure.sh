@@ -84,6 +84,17 @@ done
 # (The broker also now reads these in bounded batches so it never floods the bookie in the first place.)
 set_key "$conf" bookkeeperClientTimeoutInSeconds "${SL_BK_CLIENT_TIMEOUT:-120}"
 
+# --- data-ledger sizing: keep StreamLake "row groups" bounded ---
+# A StreamLake data ledger is a row group; its per-page column stats live in one segment whose per-column
+# array collapses to a coarse whole-segment stat once it exceeds segmentColumnMaxBytes (2MB). By default a
+# managed ledger will not roll until managedLedgerMinLedgerRolloverTimeMinutes (10) even after hitting
+# managedLedgerMaxEntriesPerLedger (50000); under fast ingest that makes ~300k-page ledgers whose key
+# column (e.g. personId INT64 -> ~5MB) COLLAPSES, so every query must read that ledger's whole page-index
+# range (GBs of footers) instead of pruning per page. Rolling at 50k pages keeps each column's stats
+# (~800KB) under the cap -> no collapse -> queries prune to a handful of pages. SL_LEDGER_ROLL_MINUTES
+# overrides (default 0 = roll as soon as the entry/size cap is hit).
+set_key "$conf" managedLedgerMinLedgerRolloverTimeMinutes "${SL_LEDGER_ROLL_MINUTES:-0}"
+
 # --- broker: enable topic-level policies + system topics (StreamLake tuning is TOPIC-POLICY level,
 #     applied per topic via StreamingLakeConfig -- not broker-global keys; see demo.md §7) ---
 set_key "$conf" systemTopicEnabled            "true"
