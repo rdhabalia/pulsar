@@ -65,6 +65,16 @@ for f in "$bkconf" "$conf"; do
   set_key "$f" journalSyncData                    "${SL_JOURNAL_SYNC:-false}"
   set_key "$f" dbStorage_writeCacheMaxSizeMb      "${SL_WRITE_CACHE_MB:-1024}"
   set_key "$f" dbStorage_readAheadCacheMaxSizeMb  "256"
+  # Disable bookie entry-log GC/compaction for the demo. StreamLake runs with infinite retention and
+  # never deletes ledgers, so compaction has nothing to reclaim -- but its GarbageCollectorThread still
+  # scans every entry log and competes for disk I/O with query reads, which on a single bookie stalls
+  # topic load / queries ("GarbageCollectorThread ... Extracted entry log meta" while a query times out).
+  # 0 disables each. Set SL_DISABLE_BK_GC=false to restore defaults.
+  if [ "${SL_DISABLE_BK_GC:-true}" = "true" ]; then
+    set_key "$f" minorCompactionInterval "0"
+    set_key "$f" majorCompactionInterval "0"
+    set_key "$f" gcWaitTime              "86400000"
+  fi
 done
 
 # --- BookKeeper client read headroom on a single busy bookie ---
