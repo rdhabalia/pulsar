@@ -63,17 +63,41 @@ public class StreamLakePruner {
         public long segmentBytes;
         public long pageIndexReads;
         public long pageIndexBytes;
+        // Candidate data ledgers skipped because they were still OPEN (actively written) while open-ledger
+        // querying is disabled -- this is what avoids the full page-index footer read of a not-yet-segmented
+        // Candidate data ledgers skipped because they have no segment yet (still OPEN/CLOSED, not
+        // SEGMENTED) while segment-sourced querying is on: the segment tier is the source of truth, so a
+        // ledger with no segment yields no result rather than triggering a full page-index footer scan.
+        // Non-zero here explains a query that returns slightly stale (but far cheaper) results.
+        public long unsegmentedLedgersSkipped;
     }
 
     private final StreamLakeCatalog catalog;
     private final StreamLakeSegmentStore segmentStore;
     private final StreamLakePageIndex pageIndex;
+    private final boolean includeUnsegmentedLedgers;
 
     public StreamLakePruner(StreamLakeCatalog catalog, StreamLakeSegmentStore segmentStore,
             StreamLakePageIndex pageIndex) {
+        this(catalog, segmentStore, pageIndex, true);
+    }
+
+    /**
+     * @param includeUnsegmentedLedgers when {@code false}, the <b>segment tier is the source of truth</b>:
+     *     any data ledger that is not yet SEGMENTED (the actively-written OPEN ledger, or a just-rolled
+     *     CLOSED ledger whose segment has not been built) is skipped during candidate selection, so a scan
+     *     reads <b>no</b> page-index footers for it -- never bypassing the segment tier to footer-scan raw
+     *     data (the query's dominant cost). The tradeoff is bounded staleness: rows only in a not-yet-
+     *     segmented ledger are not visible until its segment is built. The write path is never touched;
+     *     this is a read-side candidate filter only. When {@code true}, an unsegmented ledger falls back
+     *     to a per-page footer prune (read-your-writes freshness, but slower).
+     */
+    public StreamLakePruner(StreamLakeCatalog catalog, StreamLakeSegmentStore segmentStore,
+            StreamLakePageIndex pageIndex, boolean includeUnsegmentedLedgers) {
         this.catalog = catalog;
         this.segmentStore = segmentStore;
         this.pageIndex = pageIndex;
+        this.includeUnsegmentedLedgers = includeUnsegmentedLedgers;
     }
 
     /**
@@ -122,6 +146,16 @@ public class StreamLakePruner {
             ProgressListener progress) throws Exception {
         int[] candidateCount = {0};
         catalog.forEachCandidateLedger(fromMs, toMs, ledgerId -> {
+            if (!includeUnsegmentedLedgers) {
+                StreamLakeCatalog.LedgerInfo li = catalog.get(ledgerId);
+                if (li == null || !li.hasSegment()) {
+                    // Segment tier is the source of truth: a ledger with no segment (OPEN or just-CLOSED,
+                    // not yet SEGMENTED) is not queried -- we never bypass the segment tier to footer-scan
+                    // the whole ledger (the query's dominant cost). Trades bounded staleness for speed.
+                    stats.unsegmentedLedgersSkipped++;
+                    return;
+                }
+            }
             candidateCount[0]++;
             stats.candidateLedgers = candidateCount[0];
             pruneLedger(ledgerId, predicate, stats, sink);

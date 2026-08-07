@@ -208,6 +208,55 @@ public class StreamLakePrunerTest {
         assertEquals(ledgerCount[0], 2L, "spanning 2 distinct ledgers");
     }
 
+    @Test
+    public void segmentTierIsSourceOfTruthSkipsUnsegmentedLedger() throws Exception {
+        StreamLakeMetaStore ms = metaStore();
+        StreamLakePageIndex pageIndex = StreamLakePageIndex.open(bk, ml, ms);
+        StreamLakeSegmentStore segStore = StreamLakeSegmentStore.open(bk, ml, ms);
+        StreamLakeCatalog catalog = StreamLakeCatalog.open(bk, ml, ms);
+
+        // Two closed ledgers, four pages each; segment ONLY ledger 100. Ledger 200 stays unsegmented
+        // (no segment built) -- it is the analogue of the actively-written / not-yet-segmented tail.
+        for (int i = 0; i < 4; i++) {
+            pageIndex.appendFooter(100L, i, footer(i * 10, i * 10 + 9));
+            pageIndex.appendFooter(200L, i, footer(i * 10, i * 10 + 9));
+        }
+        catalog.upsert(new StreamLakeCatalog.LedgerInfo(100L, 1L, DAY1, DAY1 + 3600_000, 40,
+                StreamLakeCatalog.State.CLOSED));
+        catalog.upsert(new StreamLakeCatalog.LedgerInfo(200L, 1L, DAY2, DAY2 + 3600_000, 40,
+                StreamLakeCatalog.State.CLOSED));
+        new StreamLakeSegmentBuilder(pageIndex, segStore, catalog, 2L * 1024 * 1024, 0.01)
+                .buildForLedger(100L); // ledger 200 intentionally left unsegmented
+
+        StreamLakeScanPredicate pred = StreamLakeScanPredicate.builder()
+                .range(0, StreamLakeType.INT32, 0, 39).build();
+
+        // includeUnsegmented = true (legacy default): the unsegmented ledger 200 is footer-scanned, so
+        // both ledgers contribute and the page-index is read for 200's four footers.
+        StreamLakePruner.Stats withOpen = new StreamLakePruner.Stats();
+        List<StreamLakePruner.PagePointer> all =
+                new StreamLakePruner(catalog, segStore, pageIndex, true)
+                        .prune(DAY1, DAY2 + 3600_000, pred, withOpen);
+        assertEquals(all.size(), 8, "both ledgers' pages when unsegmented ledgers are included");
+        assertEquals(withOpen.candidateLedgers, 2, "both ledgers are candidates");
+        assertEquals(withOpen.unsegmentedLedgersSkipped, 0, "none skipped when included");
+        assertEquals(withOpen.pageIndexReads, 4, "ledger 200's four footers were read (the costly path)");
+
+        // includeUnsegmented = false (segment tier is the source of truth): the unsegmented ledger 200 is
+        // skipped entirely -- no footers read for it -- so only the segmented ledger 100 yields pages.
+        StreamLakePruner.Stats segOnly = new StreamLakePruner.Stats();
+        List<StreamLakePruner.PagePointer> segmented =
+                new StreamLakePruner(catalog, segStore, pageIndex, false)
+                        .prune(DAY1, DAY2 + 3600_000, pred, segOnly);
+        assertEquals(segmented.size(), 4, "only the segmented ledger's pages are returned");
+        for (StreamLakePruner.PagePointer p : segmented) {
+            assertEquals(p.ledgerId, 100L, "no page comes from the unsegmented ledger 200");
+        }
+        assertEquals(segOnly.candidateLedgers, 1, "only the segmented ledger is a candidate");
+        assertEquals(segOnly.unsegmentedLedgersSkipped, 1, "the unsegmented ledger 200 was skipped");
+        assertEquals(segOnly.pageIndexReads, 0, "no page-index footers read: segment tier alone pruned");
+    }
+
     private static StreamLakePruner pruner(StreamLakeCatalog c, StreamLakeSegmentStore s,
             StreamLakePageIndex p) {
         return new StreamLakePruner(c, s, p);

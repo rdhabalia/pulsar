@@ -826,7 +826,9 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                     StreamingLakeConfig cfg = getStreamingLakeConfig();
                     qs = StreamLakeQueryService.create(ledger, getOrCreateStreamLakeSegmentService(),
                             getOrCreateStreamLakePageIndex(), cfg, brokerService.getPulsar().getExecutor(),
-                            brokerService.getPulsar().getConfiguration().getStreamLakeJoinSpillDir());
+                            brokerService.getPulsar().getConfiguration().getStreamLakeJoinSpillDir(),
+                            brokerService.getPulsar().getConfiguration()
+                                    .isStreamLakeQueryIncludeUnsegmentedLedgers());
                     streamLakeQueryService = qs;
                 }
             }

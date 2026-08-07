@@ -2467,6 +2467,20 @@ public class ServiceConfiguration implements PulsarConfiguration {
     )
     private String streamLakeJoinSpillDir = "";
 
+    @FieldContext(
+        category = CATEGORY_STORAGE_ML,
+        doc = "Whether a StreamLake query reads data ledgers that are not yet SEGMENTED. When false "
+            + "(default) the segment tier is the source of truth: query traversal is segment -> page-index "
+            + "-> data, and a data ledger with no segment yet (the actively-written OPEN ledger, or a "
+            + "just-rolled CLOSED ledger whose segment is still building) is skipped -- the query never "
+            + "bypasses the segment tier to footer-scan the whole ledger (the dominant cost of a selective "
+            + "scan). The tradeoff is bounded staleness: rows only in a not-yet-segmented ledger are not "
+            + "visible until its segment is built. The write path is never affected. Set true to trade "
+            + "latency for read-your-writes freshness (an unsegmented ledger then falls back to a per-page "
+            + "footer prune)."
+    )
+    private boolean streamLakeQueryIncludeUnsegmentedLedgers = false;
+
     //
     //
     @FieldContext(
