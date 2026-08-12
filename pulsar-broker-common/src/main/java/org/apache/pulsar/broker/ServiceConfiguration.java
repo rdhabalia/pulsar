@@ -2481,6 +2481,18 @@ public class ServiceConfiguration implements PulsarConfiguration {
     )
     private boolean streamLakeQueryIncludeUnsegmentedLedgers = false;
 
+    @FieldContext(
+        category = CATEGORY_STORAGE_ML,
+        doc = "Whether a StreamLake query uses each segmented data ledger's coarse whole-ledger summary "
+            + "(one min/max per column, written as the first entry of the segment) as a ledger-level zone "
+            + "map. When true (default) a candidate ledger whose summary min/max cannot overlap the query "
+            + "predicate is rejected by that single small read, without loading the full per-page segment -- "
+            + "removing the per-candidate segment-load cost on selective queries over many ledgers. Always "
+            + "conservative (never drops a matching ledger). Set false to force a full segment load per "
+            + "candidate (debugging)."
+    )
+    private boolean streamLakeQueryUseSegmentSummary = true;
+
     //
     //
     @FieldContext(

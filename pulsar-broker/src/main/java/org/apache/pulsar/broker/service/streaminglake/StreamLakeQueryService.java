@@ -62,13 +62,15 @@ public final class StreamLakeQueryService {
     private final StreamLakeStatistics statistics;
     private final String brokerJoinSpillDir;
     private final boolean brokerQueryIncludeUnsegmentedLedgers;
+    private final boolean brokerQueryUseSegmentSummary;
 
     private volatile StreamLakePruner pruner;
     private volatile StreamLakeQueryExecutor executor;
 
     private StreamLakeQueryService(ManagedLedger managedLedger, StreamLakeSegmentService segmentService,
             StreamLakePageIndex pageIndex, StreamingLakeConfig cfg, Executor readExecutor,
-            String brokerJoinSpillDir, boolean brokerQueryIncludeUnsegmentedLedgers) {
+            String brokerJoinSpillDir, boolean brokerQueryIncludeUnsegmentedLedgers,
+            boolean brokerQueryUseSegmentSummary) {
         this.managedLedger = managedLedger;
         this.segmentService = segmentService;
         this.pageIndex = pageIndex;
@@ -78,14 +80,15 @@ public final class StreamLakeQueryService {
         this.statistics = new StreamLakeStatistics(cfg.getEstimatedRowsPerPage(), cfg.getEstimatedPageBytes());
         this.brokerJoinSpillDir = brokerJoinSpillDir == null ? "" : brokerJoinSpillDir;
         this.brokerQueryIncludeUnsegmentedLedgers = brokerQueryIncludeUnsegmentedLedgers;
+        this.brokerQueryUseSegmentSummary = brokerQueryUseSegmentSummary;
     }
 
     public static StreamLakeQueryService create(ManagedLedger managedLedger,
             StreamLakeSegmentService segmentService, StreamLakePageIndex pageIndex, StreamingLakeConfig cfg,
             Executor readExecutor, String brokerJoinSpillDir,
-            boolean brokerQueryIncludeUnsegmentedLedgers) {
+            boolean brokerQueryIncludeUnsegmentedLedgers, boolean brokerQueryUseSegmentSummary) {
         return new StreamLakeQueryService(managedLedger, segmentService, pageIndex, cfg, readExecutor,
-                brokerJoinSpillDir, brokerQueryIncludeUnsegmentedLedgers);
+                brokerJoinSpillDir, brokerQueryIncludeUnsegmentedLedgers, brokerQueryUseSegmentSummary);
     }
 
     /** The topic's StreamLake config (join strategy, budgets, RocksDB sizes, ...). */
@@ -178,7 +181,7 @@ public final class StreamLakeQueryService {
                 p = pruner;
                 if (p == null) {
                     p = new StreamLakePruner(segmentService.catalog(), segmentService.segmentStore(),
-                            pageIndex, brokerQueryIncludeUnsegmentedLedgers);
+                            pageIndex, brokerQueryIncludeUnsegmentedLedgers, brokerQueryUseSegmentSummary);
                     pruner = p;
                 }
             }

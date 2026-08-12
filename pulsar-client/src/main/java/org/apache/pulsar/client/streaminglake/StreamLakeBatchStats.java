@@ -108,6 +108,20 @@ public final class StreamLakeBatchStats {
         this.columns = columns;
     }
 
+    /**
+     * Build a batch-stats holder from explicit per-column stats -- used to synthesize a coarse
+     * whole-ledger summary (one min/max per column) that reuses the same {@code encode}/{@code decode}
+     * and {@link StreamLakeScanPredicate#matches} pruning path as a real per-page footer.
+     */
+    public static StreamLakeBatchStats of(List<ColumnStats> columns) {
+        return new StreamLakeBatchStats(columns);
+    }
+
+    /** A single column's min/max-only stats (no exact-set / bloom), for a coarse zone-map entry. */
+    public static ColumnStats minMaxColumn(int columnIndex, StreamLakeType type, byte[] min, byte[] max) {
+        return new ColumnStats(columnIndex, type, min, max, min == null ? 0 : 1, null, null);
+    }
+
     public List<ColumnStats> columns() {
         return columns;
     }

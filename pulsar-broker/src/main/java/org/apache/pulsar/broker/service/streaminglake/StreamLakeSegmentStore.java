@@ -28,6 +28,7 @@ import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerEntry;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.mledger.ManagedLedger;
+import org.apache.pulsar.client.streaminglake.StreamLakeBatchStats;
 import org.apache.pulsar.client.streaminglake.StreamLakeColumnSegment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,6 +59,10 @@ public class StreamLakeSegmentStore implements AutoCloseable {
     private static final byte[] PASSWORD = "streamlake-seg".getBytes();
     private static final byte ENTRY_DIRECTORY = (byte) 'D';
     private static final byte ENTRY_COLUMN = (byte) 'C';
+    // A single coarse whole-ledger min/max-per-column stats entry, written first in each segment so a
+    // query can reject a data ledger by reading just this one small entry (no full segment load).
+    private static final byte ENTRY_SUMMARY = (byte) 'S';
+    private static final int DEFAULT_SUMMARY_CACHE_MAX = 65_536;
     private static final long DEFAULT_MAX_HEAD_BYTES = 4L * 1024 * 1024;
     private static final int DEFAULT_CACHE_MAX_ENTRIES = 512;
     private static final int DEFAULT_MAX_ENTRIES_PER_LEDGER = 200_000;
@@ -99,6 +104,9 @@ public class StreamLakeSegmentStore implements AutoCloseable {
     // Bounded LRU of loaded segments (keyed by data ledger id): segments are read on demand via their
     // catalog offset, not replayed en masse, so resident memory is O(cache) not O(all data ledgers).
     private final Map<Long, LedgerSegment> cache;
+    // Bounded LRU of coarse per-ledger summaries (keyed by data ledger id): tiny (one min/max per column),
+    // so a much larger cap is affordable -- lets repeat/selective queries reject ledgers with zero reads.
+    private final Map<Long, StreamLakeBatchStats> summaryCache;
     private final List<Long> chain = new ArrayList<>();
     private LedgerHandle head;
     private long headBytes;
@@ -120,6 +128,12 @@ public class StreamLakeSegmentStore implements AutoCloseable {
             @Override
             protected boolean removeEldestEntry(Map.Entry<Long, LedgerSegment> eldest) {
                 return size() > cap;
+            }
+        };
+        this.summaryCache = new LinkedHashMap<Long, StreamLakeBatchStats>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<Long, StreamLakeBatchStats> eldest) {
+                return size() > DEFAULT_SUMMARY_CACHE_MAX;
             }
         };
     }
@@ -181,21 +195,28 @@ public class StreamLakeSegmentStore implements AutoCloseable {
      */
     public synchronized long[] appendLedgerSegment(long dataLedgerId, long[] pageEntryIds,
             List<StreamLakeColumnSegment> columns) throws Exception {
+        // Coarse whole-ledger summary (one min/max per column), written FIRST so a query can reject this
+        // data ledger by reading only this small entry instead of loading all the per-column entries.
+        StreamLakeBatchStats summary = buildSummary(columns);
+        byte[] summaryEntryBytes = encodeSummary(dataLedgerId, summary);
         byte[] dir = encodeDirectory(dataLedgerId, pageEntryIds);
         byte[][] colEntries = new byte[columns.size()][];
-        long total = dir.length;
+        long total = (long) summaryEntryBytes.length + dir.length;
         for (int c = 0; c < columns.size(); c++) {
             colEntries[c] = encodeColumn(dataLedgerId, columns.get(c));
             total += colEntries[c].length;
         }
-        // Keep the whole segment in one ledger so its offset is a single contiguous range.
-        ensureHeadFor((int) Math.min(Integer.MAX_VALUE, total), 1 + columns.size());
+        // Keep the whole segment (summary + directory + columns) in one ledger so its offset is a single
+        // contiguous range [startEntry(=summary) .. endEntry].
+        ensureHeadFor((int) Math.min(Integer.MAX_VALUE, total), 2 + columns.size());
         long segmentLedgerId = head.getId();
-        long startEntry = addToHead(dir);
+        long startEntry = addToHead(summaryEntryBytes);
+        headBytes += summaryEntryBytes.length;
+        headEntryCount++;
+        long endEntry = addToHead(dir);
         headBytes += dir.length;
         headEntryCount++;
         Map<Integer, StreamLakeColumnSegment> cols = new HashMap<>();
-        long endEntry = startEntry;
         for (int c = 0; c < columns.size(); c++) {
             endEntry = addToHead(colEntries[c]);
             headBytes += colEntries[c].length;
@@ -203,7 +224,59 @@ public class StreamLakeSegmentStore implements AutoCloseable {
             cols.put(columns.get(c).columnIndex(), columns.get(c));
         }
         cache.put(dataLedgerId, new LedgerSegment(dataLedgerId, pageEntryIds, cols));
+        summaryCache.put(dataLedgerId, summary);
         return new long[]{segmentLedgerId, startEntry, endEntry};
+    }
+
+    /** Coarse whole-ledger stats (one min/max per column, no set/bloom) for the segment's summary entry. */
+    private static StreamLakeBatchStats buildSummary(List<StreamLakeColumnSegment> columns) {
+        List<StreamLakeBatchStats.ColumnStats> cs = new ArrayList<>(columns.size());
+        for (StreamLakeColumnSegment c : columns) {
+            cs.add(StreamLakeBatchStats.minMaxColumn(c.columnIndex(), c.type(), c.wholeMin(), c.wholeMax()));
+        }
+        return StreamLakeBatchStats.of(cs);
+    }
+
+    /**
+     * Load a data ledger's coarse summary (whole-ledger min/max per column) from the FIRST entry of its
+     * segment range -- a single small read used to reject a ledger without loading the full segment.
+     * Returns {@code null} if there is no summary (then the caller falls back to the full segment).
+     */
+    public synchronized StreamLakeBatchStats loadSummary(long dataLedgerId, long segmentLedgerId,
+            long summaryEntry) throws Exception {
+        StreamLakeBatchStats cached = summaryCache.get(dataLedgerId);
+        if (cached != null) {
+            return cached;
+        }
+        if (segmentLedgerId < 0 || summaryEntry < 0) {
+            return null;
+        }
+        LedgerHandle lh = bk.openLedger(segmentLedgerId, BookKeeper.DigestType.CRC32, PASSWORD);
+        try {
+            java.util.Enumeration<LedgerEntry> en = lh.readEntries(summaryEntry, summaryEntry);
+            if (!en.hasMoreElements()) {
+                return null;
+            }
+            byte[] data = en.nextElement().getEntry();
+            if (data.length < 1 + 8 + 4 || data[0] != ENTRY_SUMMARY) {
+                return null;
+            }
+            ByteBuffer bb = ByteBuffer.wrap(data);
+            bb.get();           // type
+            bb.getLong();       // dataLedgerId (already known)
+            int blobLen = bb.getInt();
+            byte[] blob = new byte[blobLen];
+            bb.get(blob);
+            StreamLakeBatchStats summary = StreamLakeBatchStats.decode(blob);
+            summaryCache.put(dataLedgerId, summary);
+            return summary;
+        } finally {
+            try {
+                lh.close();
+            } catch (Exception ignore) {
+                // best-effort
+            }
+        }
     }
 
     /**
@@ -294,6 +367,16 @@ public class StreamLakeSegmentStore implements AutoCloseable {
         byte[] blob = cseg.encode();
         ByteBuffer bb = ByteBuffer.allocate(1 + 8 + 4 + blob.length);
         bb.put(ENTRY_COLUMN);
+        bb.putLong(dataLedgerId);
+        bb.putInt(blob.length);
+        bb.put(blob);
+        return bb.array();
+    }
+
+    private static byte[] encodeSummary(long dataLedgerId, StreamLakeBatchStats summary) {
+        byte[] blob = summary.encode();
+        ByteBuffer bb = ByteBuffer.allocate(1 + 8 + 4 + blob.length);
+        bb.put(ENTRY_SUMMARY);
         bb.putLong(dataLedgerId);
         bb.putInt(blob.length);
         bb.put(blob);

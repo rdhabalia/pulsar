@@ -257,6 +257,49 @@ public class StreamLakePrunerTest {
         assertEquals(segOnly.pageIndexReads, 0, "no page-index footers read: segment tier alone pruned");
     }
 
+    @Test
+    public void summaryEntrySkipsNonOverlappingLedger() throws Exception {
+        StreamLakeMetaStore ms = metaStore();
+        StreamLakePageIndex pageIndex = StreamLakePageIndex.open(bk, ml, ms);
+        StreamLakeSegmentStore segStore = StreamLakeSegmentStore.open(bk, ml, ms);
+        StreamLakeCatalog catalog = StreamLakeCatalog.open(bk, ml, ms);
+
+        // Ledger 100 covers deptId 0..39; ledger 200 covers deptId 100..139. Both segmented, same day.
+        for (int i = 0; i < 4; i++) {
+            pageIndex.appendFooter(100L, i, footer(i * 10, i * 10 + 9));
+            pageIndex.appendFooter(200L, i, footer(100 + i * 10, 100 + i * 10 + 9));
+        }
+        catalog.upsert(new StreamLakeCatalog.LedgerInfo(100L, 1L, DAY1, DAY1 + 3600_000, 40,
+                StreamLakeCatalog.State.CLOSED));
+        catalog.upsert(new StreamLakeCatalog.LedgerInfo(200L, 1L, DAY1, DAY1 + 3600_000, 40,
+                StreamLakeCatalog.State.CLOSED));
+        StreamLakeSegmentBuilder builder = new StreamLakeSegmentBuilder(
+                pageIndex, segStore, catalog, 2L * 1024 * 1024, 0.01);
+        builder.buildForLedger(100L);
+        builder.buildForLedger(200L);
+
+        // deptId = 25 lives only in ledger 100's [0,39]; ledger 200's whole-ledger summary [100,139]
+        // rejects it outright -- so ledger 200's full segment is never loaded.
+        StreamLakeScanPredicate pred = StreamLakeScanPredicate.builder()
+                .eq(0, StreamLakeType.INT32, 25).build();
+        StreamLakePruner.Stats stats = new StreamLakePruner.Stats();
+        List<StreamLakePruner.PagePointer> pages = pruner(catalog, segStore, pageIndex)
+                .prune(DAY1, DAY1 + 1000, pred, stats);
+
+        assertEquals(pages.size(), 1, "only ledger 100's matching page survives");
+        assertEquals(pages.get(0).ledgerId, 100L, "the surviving page is in ledger 100");
+        assertEquals(stats.ledgersSkippedBySummary, 1, "ledger 200 rejected by summary, no segment load");
+        assertEquals(stats.segmentsLoaded, 1, "only ledger 100's segment was loaded");
+
+        // With the summary disabled, both segments load (ledger 200 pruned to zero pages by its columns).
+        StreamLakePruner.Stats noSummary = new StreamLakePruner.Stats();
+        List<StreamLakePruner.PagePointer> pages2 = new StreamLakePruner(catalog, segStore, pageIndex,
+                true, false).prune(DAY1, DAY1 + 1000, pred, noSummary);
+        assertEquals(pages2.size(), 1, "same result without the summary optimization");
+        assertEquals(noSummary.ledgersSkippedBySummary, 0, "summary disabled -> none skipped by summary");
+        assertEquals(noSummary.segmentsLoaded, 2, "both segments loaded when the summary is off");
+    }
+
     private static StreamLakePruner pruner(StreamLakeCatalog c, StreamLakeSegmentStore s,
             StreamLakePageIndex p) {
         return new StreamLakePruner(c, s, p);

@@ -49,6 +49,7 @@ public final class StreamLakeQueryMetrics {
     private long pageIndexReads;
     private long pageIndexBytes;
     private long unsegmentedLedgersSkipped;
+    private long ledgersSkippedBySummary;
     private int readConcurrency = 1;
 
     private String queryTag = "";
@@ -84,6 +85,7 @@ public final class StreamLakeQueryMetrics {
         pageIndexReads += s.pageIndexReads;
         pageIndexBytes += s.pageIndexBytes;
         unsegmentedLedgersSkipped += s.unsegmentedLedgersSkipped;
+        ledgersSkippedBySummary += s.ledgersSkippedBySummary;
     }
 
     /** The executor's read-ahead depth (pages held concurrently), for the peak-buffer estimate. */
@@ -109,21 +111,23 @@ public final class StreamLakeQueryMetrics {
         long piBytes = (liveStats != null ? liveStats.pageIndexBytes : 0) + pageIndexBytes;
         long unsegSkipped = (liveStats != null ? liveStats.unsegmentedLedgersSkipped : 0)
                 + unsegmentedLedgersSkipped;
+        long summarySkipped = (liveStats != null ? liveStats.ledgersSkippedBySummary : 0)
+                + ledgersSkippedBySummary;
         log.info("StreamLake query [{}] progress: candidateLedgers={} unsegmentedSkipped={} "
-                        + "pageIndex(reads={}, {}) segments(loaded={}, {}) dataPages(read={}, {}) "
-                        + "rows={} elapsed={}ms",
-                queryTag, candLedgers, unsegSkipped, piReads, human(piBytes), segLoaded, human(segBytes),
-                pagesRead, human(bytesRead), rowsRead, (now - startNanos) / 1_000_000);
+                        + "summarySkipped={} pageIndex(reads={}, {}) segments(loaded={}, {}) "
+                        + "dataPages(read={}, {}) rows={} elapsed={}ms",
+                queryTag, candLedgers, unsegSkipped, summarySkipped, piReads, human(piBytes), segLoaded,
+                human(segBytes), pagesRead, human(bytesRead), rowsRead, (now - startNanos) / 1_000_000);
     }
 
     /** Emit the final one-line summary of everything this query read (call once at the end). */
     public void logSummary() {
         log.info("StreamLake query [{}] done: candidateLedgers={} unsegmentedSkipped={} "
-                        + "pageIndex(reads={}, {}) segments(loaded={}, {}) dataPages(read={}, {}) "
-                        + "rowsRead={} elapsed={}ms",
-                queryTag, candidateLedgers, unsegmentedLedgersSkipped, pageIndexReads,
-                human(pageIndexBytes), segmentsLoaded, human(segmentBytes), pagesRead, human(bytesRead),
-                rowsRead, (System.nanoTime() - startNanos) / 1_000_000);
+                        + "summarySkipped={} pageIndex(reads={}, {}) segments(loaded={}, {}) "
+                        + "dataPages(read={}, {}) rowsRead={} elapsed={}ms",
+                queryTag, candidateLedgers, unsegmentedLedgersSkipped, ledgersSkippedBySummary,
+                pageIndexReads, human(pageIndexBytes), segmentsLoaded, human(segmentBytes), pagesRead,
+                human(bytesRead), rowsRead, (System.nanoTime() - startNanos) / 1_000_000);
     }
 
     private static String human(long bytes) {

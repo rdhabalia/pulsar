@@ -87,6 +87,40 @@ public final class StreamLakeColumnSegment {
         return numPages;
     }
 
+    public StreamLakeType type() {
+        return type;
+    }
+
+    /** The whole-ledger min over all pages (the collapsed min when the column collapsed); {@code null}
+     * if the column is all-null. Used to synthesize the segment's coarse zone-map summary. */
+    public byte[] wholeMin() {
+        if (collapsed) {
+            return cMin;
+        }
+        byte[] m = null;
+        for (byte[] pm : pageMin) {
+            if (pm != null && (m == null || UNSIGNED.compare(pm, m) < 0)) {
+                m = pm;
+            }
+        }
+        return m;
+    }
+
+    /** The whole-ledger max over all pages (the collapsed max when the column collapsed); {@code null}
+     * if the column is all-null. */
+    public byte[] wholeMax() {
+        if (collapsed) {
+            return cMax;
+        }
+        byte[] m = null;
+        for (byte[] pm : pageMax) {
+            if (pm != null && (m == null || UNSIGNED.compare(pm, m) > 0)) {
+                m = pm;
+            }
+        }
+        return m;
+    }
+
     /**
      * Build a column segment from the per-page stats of a data ledger (position i = page i). Text
      * columns store a per-page bloom (built from the page's exact set, or reusing its bloom); the

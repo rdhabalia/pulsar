@@ -63,23 +63,30 @@ public class StreamLakePruner {
         public long segmentBytes;
         public long pageIndexReads;
         public long pageIndexBytes;
-        // Candidate data ledgers skipped because they were still OPEN (actively written) while open-ledger
-        // querying is disabled -- this is what avoids the full page-index footer read of a not-yet-segmented
         // Candidate data ledgers skipped because they have no segment yet (still OPEN/CLOSED, not
         // SEGMENTED) while segment-sourced querying is on: the segment tier is the source of truth, so a
         // ledger with no segment yields no result rather than triggering a full page-index footer scan.
         // Non-zero here explains a query that returns slightly stale (but far cheaper) results.
         public long unsegmentedLedgersSkipped;
+        // Candidate data ledgers rejected by their coarse whole-ledger summary (one tiny read) without
+        // loading the full segment -- the ledger-level zone map above the per-page segment stats.
+        public long ledgersSkippedBySummary;
     }
 
     private final StreamLakeCatalog catalog;
     private final StreamLakeSegmentStore segmentStore;
     private final StreamLakePageIndex pageIndex;
     private final boolean includeUnsegmentedLedgers;
+    private final boolean useSegmentSummary;
 
     public StreamLakePruner(StreamLakeCatalog catalog, StreamLakeSegmentStore segmentStore,
             StreamLakePageIndex pageIndex) {
         this(catalog, segmentStore, pageIndex, true);
+    }
+
+    public StreamLakePruner(StreamLakeCatalog catalog, StreamLakeSegmentStore segmentStore,
+            StreamLakePageIndex pageIndex, boolean includeUnsegmentedLedgers) {
+        this(catalog, segmentStore, pageIndex, includeUnsegmentedLedgers, true);
     }
 
     /**
@@ -91,13 +98,19 @@ public class StreamLakePruner {
      *     segmented ledger are not visible until its segment is built. The write path is never touched;
      *     this is a read-side candidate filter only. When {@code true}, an unsegmented ledger falls back
      *     to a per-page footer prune (read-your-writes freshness, but slower).
+     * @param useSegmentSummary when {@code true} (default), a segmented candidate ledger is first tested
+     *     against its coarse whole-ledger summary (one small read) and skipped outright if the predicate's
+     *     min/max cannot overlap it -- avoiding the full per-page segment load for ledgers that cannot
+     *     match. Always conservative (never a false negative); set {@code false} to force a full segment
+     *     load per candidate (debugging).
      */
     public StreamLakePruner(StreamLakeCatalog catalog, StreamLakeSegmentStore segmentStore,
-            StreamLakePageIndex pageIndex, boolean includeUnsegmentedLedgers) {
+            StreamLakePageIndex pageIndex, boolean includeUnsegmentedLedgers, boolean useSegmentSummary) {
         this.catalog = catalog;
         this.segmentStore = segmentStore;
         this.pageIndex = pageIndex;
         this.includeUnsegmentedLedgers = includeUnsegmentedLedgers;
+        this.useSegmentSummary = useSegmentSummary;
     }
 
     /**
@@ -173,6 +186,19 @@ public class StreamLakePruner {
     private void pruneLedger(long ledgerId, StreamLakeScanPredicate predicate, Stats stats, PageSink sink)
             throws Exception {
         StreamLakeCatalog.LedgerInfo info = catalog.get(ledgerId);
+
+        // Ledger-level zone map: before loading the full per-page segment, test the coarse whole-ledger
+        // summary (one tiny read). If the predicate's min/max cannot overlap it, drop the whole data
+        // ledger without loading its segment. Conservative -- a missing/covering summary never excludes.
+        if (useSegmentSummary && info != null && info.hasSegment()) {
+            StreamLakeBatchStats summary = segmentStore.loadSummary(ledgerId, info.segmentLedgerId,
+                    info.segmentStartEntry);
+            if (summary != null && !predicate.matches(summary)) {
+                stats.ledgersSkippedBySummary++;
+                return;
+            }
+        }
+
         StreamLakeSegmentStore.LedgerSegment seg = (info != null && info.hasSegment())
                 ? segmentStore.load(ledgerId, info.segmentLedgerId, info.segmentStartEntry,
                         info.segmentEndEntry)
