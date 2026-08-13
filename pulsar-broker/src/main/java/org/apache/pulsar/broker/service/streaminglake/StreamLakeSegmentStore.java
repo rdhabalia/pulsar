@@ -107,6 +107,10 @@ public class StreamLakeSegmentStore implements AutoCloseable {
     // Bounded LRU of coarse per-ledger summaries (keyed by data ledger id): tiny (one min/max per column),
     // so a much larger cap is affordable -- lets repeat/selective queries reject ledgers with zero reads.
     private final Map<Long, StreamLakeBatchStats> summaryCache;
+    // Cached read handles keyed by segment-ledger id: many data ledgers' segments/summaries live in one
+    // segment ledger, so opening it once and reusing the handle across candidates avoids an openLedger
+    // round-trip per candidate (the cost that otherwise dwarfs the tiny summary read).
+    private final Map<Long, LedgerHandle> readHandles = new HashMap<>();
     private final List<Long> chain = new ArrayList<>();
     private LedgerHandle head;
     private long headBytes;
@@ -237,6 +241,20 @@ public class StreamLakeSegmentStore implements AutoCloseable {
         return StreamLakeBatchStats.of(cs);
     }
 
+    /** A cached read handle for a segment ledger. Reuses the write {@code head} for the active head so a
+     * query never fences the ledger the builder is still appending to; other ledgers are opened once. */
+    private LedgerHandle readHandle(long segmentLedgerId) throws Exception {
+        if (head != null && head.getId() == segmentLedgerId) {
+            return head;
+        }
+        LedgerHandle lh = readHandles.get(segmentLedgerId);
+        if (lh == null) {
+            lh = bk.openLedger(segmentLedgerId, BookKeeper.DigestType.CRC32, PASSWORD);
+            readHandles.put(segmentLedgerId, lh);
+        }
+        return lh;
+    }
+
     /**
      * Load a data ledger's coarse summary (whole-ledger min/max per column) from the FIRST entry of its
      * segment range -- a single small read used to reject a ledger without loading the full segment.
@@ -251,32 +269,24 @@ public class StreamLakeSegmentStore implements AutoCloseable {
         if (segmentLedgerId < 0 || summaryEntry < 0) {
             return null;
         }
-        LedgerHandle lh = bk.openLedger(segmentLedgerId, BookKeeper.DigestType.CRC32, PASSWORD);
-        try {
-            java.util.Enumeration<LedgerEntry> en = lh.readEntries(summaryEntry, summaryEntry);
-            if (!en.hasMoreElements()) {
-                return null;
-            }
-            byte[] data = en.nextElement().getEntry();
-            if (data.length < 1 + 8 + 4 || data[0] != ENTRY_SUMMARY) {
-                return null;
-            }
-            ByteBuffer bb = ByteBuffer.wrap(data);
-            bb.get();           // type
-            bb.getLong();       // dataLedgerId (already known)
-            int blobLen = bb.getInt();
-            byte[] blob = new byte[blobLen];
-            bb.get(blob);
-            StreamLakeBatchStats summary = StreamLakeBatchStats.decode(blob);
-            summaryCache.put(dataLedgerId, summary);
-            return summary;
-        } finally {
-            try {
-                lh.close();
-            } catch (Exception ignore) {
-                // best-effort
-            }
+        LedgerHandle lh = readHandle(segmentLedgerId);
+        java.util.Enumeration<LedgerEntry> en = lh.readEntries(summaryEntry, summaryEntry);
+        if (!en.hasMoreElements()) {
+            return null;
         }
+        byte[] data = en.nextElement().getEntry();
+        if (data.length < 1 + 8 + 4 || data[0] != ENTRY_SUMMARY) {
+            return null;
+        }
+        ByteBuffer bb = ByteBuffer.wrap(data);
+        bb.get();           // type
+        bb.getLong();       // dataLedgerId (already known)
+        int blobLen = bb.getInt();
+        byte[] blob = new byte[blobLen];
+        bb.get(blob);
+        StreamLakeBatchStats summary = StreamLakeBatchStats.decode(blob);
+        summaryCache.put(dataLedgerId, summary);
+        return summary;
     }
 
     /**
@@ -292,45 +302,37 @@ public class StreamLakeSegmentStore implements AutoCloseable {
         if (segmentLedgerId < 0 || startEntry < 0 || endEntry < startEntry) {
             return null;
         }
-        LedgerHandle lh = bk.openLedger(segmentLedgerId, BookKeeper.DigestType.CRC32, PASSWORD);
-        try {
-            long[] pageEntryIds = null;
-            Map<Integer, StreamLakeColumnSegment> cols = new HashMap<>();
-            long bytesRead = 0;
-            java.util.Enumeration<LedgerEntry> en = lh.readEntries(startEntry, endEntry);
-            while (en.hasMoreElements()) {
-                byte[] data = en.nextElement().getEntry();
-                bytesRead += data.length;
-                ByteBuffer bb = ByteBuffer.wrap(data);
-                byte type = bb.get();
-                bb.getLong(); // dataLedgerId (already known)
-                if (type == ENTRY_DIRECTORY) {
-                    int numPages = bb.getInt();
-                    pageEntryIds = new long[numPages];
-                    for (int i = 0; i < numPages; i++) {
-                        pageEntryIds[i] = bb.getLong();
-                    }
-                } else if (type == ENTRY_COLUMN) {
-                    int blobLen = bb.getInt();
-                    byte[] blob = new byte[blobLen];
-                    bb.get(blob);
-                    StreamLakeColumnSegment cseg = StreamLakeColumnSegment.decode(blob);
-                    cols.put(cseg.columnIndex(), cseg);
+        LedgerHandle lh = readHandle(segmentLedgerId);
+        long[] pageEntryIds = null;
+        Map<Integer, StreamLakeColumnSegment> cols = new HashMap<>();
+        long bytesRead = 0;
+        java.util.Enumeration<LedgerEntry> en = lh.readEntries(startEntry, endEntry);
+        while (en.hasMoreElements()) {
+            byte[] data = en.nextElement().getEntry();
+            bytesRead += data.length;
+            ByteBuffer bb = ByteBuffer.wrap(data);
+            byte type = bb.get();
+            bb.getLong(); // dataLedgerId (already known)
+            if (type == ENTRY_DIRECTORY) {
+                int numPages = bb.getInt();
+                pageEntryIds = new long[numPages];
+                for (int i = 0; i < numPages; i++) {
+                    pageEntryIds[i] = bb.getLong();
                 }
-            }
-            if (pageEntryIds == null) {
-                return null;
-            }
-            LedgerSegment seg = new LedgerSegment(dataLedgerId, pageEntryIds, cols, bytesRead);
-            cache.put(dataLedgerId, seg);
-            return seg;
-        } finally {
-            try {
-                lh.close();
-            } catch (Exception ignore) {
-                // best-effort
+            } else if (type == ENTRY_COLUMN) {
+                int blobLen = bb.getInt();
+                byte[] blob = new byte[blobLen];
+                bb.get(blob);
+                StreamLakeColumnSegment cseg = StreamLakeColumnSegment.decode(blob);
+                cols.put(cseg.columnIndex(), cseg);
             }
         }
+        if (pageEntryIds == null) {
+            return null;
+        }
+        LedgerSegment seg = new LedgerSegment(dataLedgerId, pageEntryIds, cols, bytesRead);
+        cache.put(dataLedgerId, seg);
+        return seg;
     }
 
     @Override
@@ -343,6 +345,14 @@ public class StreamLakeSegmentStore implements AutoCloseable {
             }
             head = null;
         }
+        for (LedgerHandle lh : readHandles.values()) {
+            try {
+                lh.close();
+            } catch (Exception ignore) {
+                // best-effort
+            }
+        }
+        readHandles.clear();
     }
 
     /** Number of segments currently resident in the bounded LRU cache (observability/tests). */
