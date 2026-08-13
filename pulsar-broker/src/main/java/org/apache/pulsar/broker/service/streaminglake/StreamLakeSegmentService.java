@@ -65,25 +65,39 @@ public final class StreamLakeSegmentService implements AutoCloseable {
      */
     @FunctionalInterface
     public interface SegmentBuildDispatcher {
-        CompletableFuture<Void> dispatch(long dataLedgerId);
+        CompletableFuture<Void> dispatch(long dataLedgerId, long sizeBytes);
     }
 
     private final String topicName;
+    private final ManagedLedger managedLedger;
     private final StreamLakeCatalog catalog;
     private final StreamLakeSegmentStore segmentStore;
     private final StreamLakeSegmentBuilder builder;
     private final Executor buildExecutor;
     private final SegmentBuildDispatcher dispatcher;
 
-    private StreamLakeSegmentService(String topicName, StreamLakeCatalog catalog,
-            StreamLakeSegmentStore segmentStore, StreamLakeSegmentBuilder builder, Executor buildExecutor,
-            SegmentBuildDispatcher dispatcher) {
+    private StreamLakeSegmentService(String topicName, ManagedLedger managedLedger,
+            StreamLakeCatalog catalog, StreamLakeSegmentStore segmentStore, StreamLakeSegmentBuilder builder,
+            Executor buildExecutor, SegmentBuildDispatcher dispatcher) {
         this.topicName = topicName;
+        this.managedLedger = managedLedger;
         this.catalog = catalog;
         this.segmentStore = segmentStore;
         this.builder = builder;
         this.buildExecutor = buildExecutor;
         this.dispatcher = dispatcher;
+    }
+
+    /** The closed data ledger's on-storage byte size from the managed ledger (0 if unknown). Called on the
+     * owning broker (which holds the managed ledger) so the size can be recorded durably in the catalog. */
+    private long ledgerSize(long ledgerId) {
+        try {
+            org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo.LedgerInfo li =
+                    managedLedger.getLedgersInfo().get(ledgerId);
+            return li != null ? li.getSize() : 0;
+        } catch (RuntimeException e) {
+            return 0;
+        }
     }
 
     // Mutated only on the topic ordered executor (single-threaded per topic); guarded for visibility.
@@ -109,12 +123,12 @@ public final class StreamLakeSegmentService implements AutoCloseable {
         StreamLakeCatalog catalog = StreamLakeCatalog.open(bk, ml, metaStore);
         StreamLakeSegmentBuilder builder = new StreamLakeSegmentBuilder(pageIndex, segmentStore, catalog,
                 cfg.getSegmentColumnMaxBytes(), cfg.getBloomFpp());
-        StreamLakeSegmentService service = new StreamLakeSegmentService(ml.getName(), catalog, segmentStore,
-                builder, buildExecutor, dispatcher);
+        StreamLakeSegmentService service = new StreamLakeSegmentService(ml.getName(), ml, catalog,
+                segmentStore, builder, buildExecutor, dispatcher);
         buildExecutor.execute(() -> {
             try {
                 // Recover any ledger that closed but never got segmented last run.
-                List<Long> built = builder.buildAllClosed();
+                List<Long> built = builder.buildAllClosed(service::ledgerSize);
                 if (!built.isEmpty()) {
                     log.info("StreamLake recovered {} unsegmented ledger(s) for {}", built.size(), ml.getName());
                 }
@@ -186,8 +200,10 @@ public final class StreamLakeSegmentService implements AutoCloseable {
         if (dispatcher != null) {
             // Phase F: hand the build to a system-topic consumer (off this broker). If the dispatch
             // itself fails (e.g. system topic unavailable) fall back to an inline build so a segment is
-            // never lost.
-            dispatcher.dispatch(ledgerId).exceptionally(ex -> {
+            // never lost. The data ledger's size travels in the message so the (possibly remote) builder
+            // can record it without access to this broker's managed ledger.
+            long sizeBytes = ledgerSize(ledgerId);
+            dispatcher.dispatch(ledgerId, sizeBytes).exceptionally(ex -> {
                 log.warn("StreamLake async segment-build dispatch failed for {} ledger {}: {}; "
                         + "building inline", topicName, ledgerId, ex.toString());
                 buildExecutor.execute(() -> buildInline(ledgerId));
@@ -200,7 +216,7 @@ public final class StreamLakeSegmentService implements AutoCloseable {
 
     private void buildInline(long ledgerId) {
         try {
-            builder.buildForLedger(ledgerId);
+            builder.buildForLedger(ledgerId, ledgerSize(ledgerId));
         } catch (Exception e) {
             log.warn("StreamLake segment build failed for {} ledger {}: {}",
                     topicName, ledgerId, e.toString());

@@ -143,8 +143,25 @@ public class CmdStreamLake extends CmdBase {
             print("  catalog ledger    : " + info.getCatalogLedgerId());
             print(String.format("  data pages        : %,d (data-ledger entries; rows = pages x "
                     + "rowsPerPage)", info.getDataPages()));
+            print(String.format("  total records     : %,d (exact, from segmented ledgers)",
+                    info.getTotalRecords()));
+            print(String.format("  size              : %s (%,d bytes, data ledgers, from segmented)",
+                    humanBytes(info.getSizeBytes()), info.getSizeBytes()));
             print(String.format("  event-time range  : %,d .. %,d (epoch ms)",
                     info.getMinEventTime(), info.getMaxEventTime()));
+        }
+
+        private static String humanBytes(long bytes) {
+            if (bytes < 1024) {
+                return bytes + " B";
+            }
+            if (bytes < 1024L * 1024) {
+                return String.format("%.1f KiB", bytes / 1024.0);
+            }
+            if (bytes < 1024L * 1024 * 1024) {
+                return String.format("%.1f MiB", bytes / (1024.0 * 1024));
+            }
+            return String.format("%.2f GiB", bytes / (1024.0 * 1024 * 1024));
         }
     }
 

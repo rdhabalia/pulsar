@@ -51,8 +51,9 @@ public class StreamLakeCatalog implements AutoCloseable {
     private static final byte[] PASSWORD = "streamlake-catalog".getBytes();
     // Bounded entries per readEntries() on load, so a large catalog ledger can't flood the bookie.
     private static final int LOAD_READ_BATCH = 500;
-    // id, createTs, minEt, maxEt, rows, state, + segment offset (ledgerId,start,end) + page-index range.
-    private static final int ENTRY_SIZE = 8 + 8 + 8 + 8 + 8 + 1 + 8 + 8 + 8 + 8 + 8 + 8;
+    // id, createTs, minEt, maxEt, rows, state, + segment offset (ledgerId,start,end) + page-index range
+    // + sizeBytes + recordCount.
+    private static final int ENTRY_SIZE = 8 + 8 + 8 + 8 + 8 + 1 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8;
 
     /** Lifecycle of a data ledger in the StreamLake catalog. */
     public enum State {
@@ -82,6 +83,11 @@ public class StreamLakeCatalog implements AutoCloseable {
         public final long pageIndexLedgerId;
         public final long pageIndexStartEntry;
         public final long pageIndexEndEntry;
+        // Table-stats: this data ledger's on-storage byte size and exact record (row) count, captured at
+        // segment-build time (size from the owning broker's managed ledger; records summed from the
+        // per-page footer row counts). 0 until segmented. Aggregated by a catalog scan for `info`.
+        public final long sizeBytes;
+        public final long recordCount;
 
         public LedgerInfo(long dataLedgerId, long createTs, long minEventTime, long maxEventTime,
                           long rowCount, State state) {
@@ -93,6 +99,15 @@ public class StreamLakeCatalog implements AutoCloseable {
                           long rowCount, State state, long segmentLedgerId, long segmentStartEntry,
                           long segmentEndEntry, long pageIndexLedgerId, long pageIndexStartEntry,
                           long pageIndexEndEntry) {
+            this(dataLedgerId, createTs, minEventTime, maxEventTime, rowCount, state,
+                    segmentLedgerId, segmentStartEntry, segmentEndEntry,
+                    pageIndexLedgerId, pageIndexStartEntry, pageIndexEndEntry, 0, 0);
+        }
+
+        public LedgerInfo(long dataLedgerId, long createTs, long minEventTime, long maxEventTime,
+                          long rowCount, State state, long segmentLedgerId, long segmentStartEntry,
+                          long segmentEndEntry, long pageIndexLedgerId, long pageIndexStartEntry,
+                          long pageIndexEndEntry, long sizeBytes, long recordCount) {
             this.dataLedgerId = dataLedgerId;
             this.createTs = createTs;
             this.minEventTime = minEventTime;
@@ -105,6 +120,8 @@ public class StreamLakeCatalog implements AutoCloseable {
             this.pageIndexLedgerId = pageIndexLedgerId;
             this.pageIndexStartEntry = pageIndexStartEntry;
             this.pageIndexEndEntry = pageIndexEndEntry;
+            this.sizeBytes = sizeBytes;
+            this.recordCount = recordCount;
         }
 
         /** True when the segment offset is set (the data ledger has been segmented). */
@@ -115,13 +132,14 @@ public class StreamLakeCatalog implements AutoCloseable {
         LedgerInfo withState(State newState) {
             return new LedgerInfo(dataLedgerId, createTs, minEventTime, maxEventTime, rowCount, newState,
                     segmentLedgerId, segmentStartEntry, segmentEndEntry,
-                    pageIndexLedgerId, pageIndexStartEntry, pageIndexEndEntry);
+                    pageIndexLedgerId, pageIndexStartEntry, pageIndexEndEntry, sizeBytes, recordCount);
         }
 
         LedgerInfo segmented(long segLedgerId, long segStart, long segEnd,
-                             long piLedgerId, long piStart, long piEnd) {
+                             long piLedgerId, long piStart, long piEnd, long sizeBytes, long recordCount) {
             return new LedgerInfo(dataLedgerId, createTs, minEventTime, maxEventTime, rowCount,
-                    State.SEGMENTED, segLedgerId, segStart, segEnd, piLedgerId, piStart, piEnd);
+                    State.SEGMENTED, segLedgerId, segStart, segEnd, piLedgerId, piStart, piEnd,
+                    sizeBytes, recordCount);
         }
     }
 
@@ -192,13 +210,15 @@ public class StreamLakeCatalog implements AutoCloseable {
      * query loads exactly that segment on demand without replaying the whole segment chain.
      */
     public synchronized void markSegmented(long dataLedgerId, long segLedgerId, long segStart, long segEnd,
-            long piLedgerId, long piStart, long piEnd) {
+            long piLedgerId, long piStart, long piEnd, long sizeBytes, long recordCount) {
         LedgerInfo cur = infos.get(dataLedgerId);
         if (cur == null) {
             cur = new LedgerInfo(dataLedgerId, System.currentTimeMillis(), Long.MAX_VALUE, Long.MIN_VALUE,
-                    0, State.SEGMENTED, segLedgerId, segStart, segEnd, piLedgerId, piStart, piEnd);
+                    0, State.SEGMENTED, segLedgerId, segStart, segEnd, piLedgerId, piStart, piEnd,
+                    sizeBytes, recordCount);
         } else {
-            cur = cur.segmented(segLedgerId, segStart, segEnd, piLedgerId, piStart, piEnd);
+            cur = cur.segmented(segLedgerId, segStart, segEnd, piLedgerId, piStart, piEnd,
+                    sizeBytes, recordCount);
         }
         infos.put(dataLedgerId, cur);
         appendDurably(cur);
@@ -336,7 +356,8 @@ public class StreamLakeCatalog implements AutoCloseable {
         bb.putLong(i.dataLedgerId).putLong(i.createTs).putLong(i.minEventTime)
                 .putLong(i.maxEventTime).putLong(i.rowCount).put((byte) i.state.ordinal())
                 .putLong(i.segmentLedgerId).putLong(i.segmentStartEntry).putLong(i.segmentEndEntry)
-                .putLong(i.pageIndexLedgerId).putLong(i.pageIndexStartEntry).putLong(i.pageIndexEndEntry);
+                .putLong(i.pageIndexLedgerId).putLong(i.pageIndexStartEntry).putLong(i.pageIndexEndEntry)
+                .putLong(i.sizeBytes).putLong(i.recordCount);
         return bb.array();
     }
 
@@ -354,7 +375,9 @@ public class StreamLakeCatalog implements AutoCloseable {
         long piLedgerId = bb.getLong();
         long piStart = bb.getLong();
         long piEnd = bb.getLong();
+        long sizeBytes = bb.getLong();
+        long recordCount = bb.getLong();
         return new LedgerInfo(id, createTs, minEt, maxEt, rows, state,
-                segLedgerId, segStart, segEnd, piLedgerId, piStart, piEnd);
+                segLedgerId, segStart, segEnd, piLedgerId, piStart, piEnd, sizeBytes, recordCount);
     }
 }

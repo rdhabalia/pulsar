@@ -106,7 +106,7 @@ public final class StreamLakeSegmentBuildQueue implements AutoCloseable {
      * the request is durably enqueued (not when the segment is built); the caller falls back to an
      * inline build if it fails.
      */
-    public CompletableFuture<Void> publish(String dataTopic, long dataLedgerId) {
+    public CompletableFuture<Void> publish(String dataTopic, long dataLedgerId, long sizeBytes) {
         if (closed) {
             return CompletableFuture.failedFuture(new IllegalStateException("build queue closed"));
         }
@@ -116,7 +116,8 @@ public final class StreamLakeSegmentBuildQueue implements AutoCloseable {
         } catch (Exception e) {
             return CompletableFuture.failedFuture(e);
         }
-        byte[] payload = (dataTopic + SEP + dataLedgerId).getBytes(StandardCharsets.UTF_8);
+        byte[] payload = (dataTopic + SEP + dataLedgerId + SEP + sizeBytes)
+                .getBytes(StandardCharsets.UTF_8);
         return p.newMessage().key(dataTopic).value(payload).sendAsync().thenApply(id -> null);
     }
 
@@ -160,15 +161,17 @@ public final class StreamLakeSegmentBuildQueue implements AutoCloseable {
 
     private void onBuildRequest(Consumer<byte[]> c, Message<byte[]> msg) {
         String body = new String(msg.getValue(), StandardCharsets.UTF_8);
-        int sep = body.indexOf(SEP);
-        if (sep <= 0) {
+        String[] parts = body.split(String.valueOf(SEP), -1);
+        if (parts.length < 2 || parts[0].isEmpty()) {
             c.acknowledgeAsync(msg); // malformed: drop
             return;
         }
-        String dataTopic = body.substring(0, sep);
+        String dataTopic = parts[0];
         final long ledgerId;
+        final long sizeBytes;
         try {
-            ledgerId = Long.parseLong(body.substring(sep + 1));
+            ledgerId = Long.parseLong(parts[1]);
+            sizeBytes = parts.length > 2 ? Long.parseLong(parts[2]) : 0;
         } catch (NumberFormatException e) {
             c.acknowledgeAsync(msg);
             return;
@@ -183,7 +186,7 @@ public final class StreamLakeSegmentBuildQueue implements AutoCloseable {
         // redelivery safe). A failure negatively-acks for retry.
         pulsar.getExecutor().execute(() -> {
             try {
-                builder.buildForLedger(ledgerId);
+                builder.buildForLedger(ledgerId, sizeBytes);
                 c.acknowledgeAsync(msg);
             } catch (Exception e) {
                 log.warn("StreamLake async segment build failed for {} ledger {}: {}",

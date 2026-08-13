@@ -39,6 +39,8 @@ public class StreamLakeTableInfo {
     private List<Long> pageIndexLedgerIds = new ArrayList<>();
     private List<Long> segmentLedgerIds = new ArrayList<>();
     private long dataPages;
+    private long totalRecords;
+    private long sizeBytes;
     private long minEventTime;
     private long maxEventTime;
 
@@ -117,6 +119,22 @@ public class StreamLakeTableInfo {
 
     public void setDataPages(long dataPages) {
         this.dataPages = dataPages;
+    }
+
+    public long getTotalRecords() {
+        return totalRecords;
+    }
+
+    public void setTotalRecords(long totalRecords) {
+        this.totalRecords = totalRecords;
+    }
+
+    public long getSizeBytes() {
+        return sizeBytes;
+    }
+
+    public void setSizeBytes(long sizeBytes) {
+        this.sizeBytes = sizeBytes;
     }
 
     public long getMinEventTime() {

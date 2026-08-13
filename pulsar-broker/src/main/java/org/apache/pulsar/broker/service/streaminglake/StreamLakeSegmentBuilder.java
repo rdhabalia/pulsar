@@ -58,6 +58,15 @@ public class StreamLakeSegmentBuilder {
 
     /** Build (and durably store) the column-oriented segment for one data ledger, then mark SEGMENTED. */
     public synchronized void buildForLedger(long dataLedgerId) throws Exception {
+        buildForLedger(dataLedgerId, 0);
+    }
+
+    /**
+     * As {@link #buildForLedger(long)}, recording the data ledger's on-storage {@code sizeBytes} (supplied
+     * by the owning broker that closed it) plus the exact record count summed from the per-page footers,
+     * into the catalog -- so a table's total size and records are a plain catalog scan on any broker.
+     */
+    public synchronized void buildForLedger(long dataLedgerId, long sizeBytes) throws Exception {
         StreamLakeCatalog.LedgerInfo info = catalog.get(dataLedgerId);
         if (info != null && info.state == StreamLakeCatalog.State.SEGMENTED) {
             return; // idempotent
@@ -73,12 +82,14 @@ public class StreamLakeSegmentBuilder {
         int numPages = footers.size();
         long[] pageEntryIds = new long[numPages];
         List<StreamLakeBatchStats> perPage = new ArrayList<>(numPages);
+        long recordCount = 0;
         // first-seen column order + type (columns are the union of what the pages index).
         Map<Integer, StreamLakeType> columnTypes = new LinkedHashMap<>();
         for (int i = 0; i < numPages; i++) {
             pageEntryIds[i] = footers.get(i).dataEntryId;
             StreamLakeBatchStats stats = StreamLakeBatchStats.decode(footers.get(i).stats);
             perPage.add(stats);
+            recordCount += stats.rowCount(); // exact rows, summed from the per-page footers
             for (StreamLakeBatchStats.ColumnStats cs : stats.columns()) {
                 columnTypes.putIfAbsent(cs.columnIndex(), cs.type());
             }
@@ -96,14 +107,14 @@ public class StreamLakeSegmentBuilder {
         }
 
         // Capture the data ledger's page-index range (for on-demand exact-set precision) before it is
-        // evicted, then record the segment offset + page-index range in the catalog manifest.
+        // evicted, then record the segment offset + page-index range + size/records in the catalog manifest.
         long[] piRange = pageIndex.getFooterRange(dataLedgerId);
         long[] segOffset = segmentStore.appendLedgerSegment(dataLedgerId, pageEntryIds, columns);
         catalog.markSegmented(dataLedgerId, segOffset[0], segOffset[1], segOffset[2],
-                piRange[0], piRange[1], piRange[2]);
+                piRange[0], piRange[1], piRange[2], sizeBytes, recordCount);
         pageIndex.releaseRefs(dataLedgerId);
-        log.info("StreamLake built segment for data ledger {} ({} pages, {} columns)",
-                dataLedgerId, numPages, columns.size());
+        log.info("StreamLake built segment for data ledger {} ({} pages, {} records, {} bytes, {} columns)",
+                dataLedgerId, numPages, recordCount, sizeBytes, columns.size());
     }
 
     /**
@@ -111,10 +122,14 @@ public class StreamLakeSegmentBuilder {
      * is the core loop a sharded trigger consumer runs; returns the ledgers it segmented.
      */
     public synchronized List<Long> buildAllClosed() {
+        return buildAllClosed(id -> 0);
+    }
+
+    public synchronized List<Long> buildAllClosed(java.util.function.LongUnaryOperator sizeProvider) {
         List<Long> built = new ArrayList<>();
         for (long dataLedgerId : catalog.closedUnsegmented()) {
             try {
-                buildForLedger(dataLedgerId);
+                buildForLedger(dataLedgerId, sizeProvider.applyAsLong(dataLedgerId));
                 built.add(dataLedgerId);
             } catch (Exception e) {
                 log.warn("StreamLake segment build failed for ledger {}: {}", dataLedgerId, e.toString());

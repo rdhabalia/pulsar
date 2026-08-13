@@ -67,6 +67,6 @@ public final class StreamLakeStatsBuilder {
                 out.add(new StreamLakeBatchStats.ColumnStats(col, type, min, max, distinctCount, null, bloom));
             }
         }
-        return new StreamLakeBatchStats(out);
+        return new StreamLakeBatchStats(out, rows.size());
     }
 }

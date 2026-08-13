@@ -793,7 +793,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                         StreamLakeSegmentBuildQueue queue = brokerService.getStreamLakeSegmentBuildQueue(
                                 TopicName.get(topic).getNamespaceObject(),
                                 cfg.getSegmentBuildTopicPartitions());
-                        dispatcher = ledgerId -> queue.publish(dataTopic, ledgerId);
+                        dispatcher = (ledgerId, sizeBytes) -> queue.publish(dataTopic, ledgerId, sizeBytes);
                     }
                     // Reuse the topic's page index (segment build reads its footers); the heavy build
                     // runs on the broker executor, off the producer ack path.

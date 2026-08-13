@@ -221,6 +221,8 @@ public class StreamLakeQuery extends AdminResource {
         info.setDataLedgers(catalog.size());
         long segmented = 0;
         long pages = 0;
+        long records = 0;
+        long sizeBytes = 0;
         long minEt = Long.MAX_VALUE;
         long maxEt = Long.MIN_VALUE;
         for (StreamLakeCatalog.LedgerInfo li : catalog.values()) {
@@ -228,12 +230,16 @@ public class StreamLakeQuery extends AdminResource {
                 segmented++;
             }
             pages += li.rowCount; // LedgerInfo.rowCount is the data ledger's entry (page) count
+            records += li.recordCount; // exact rows, captured at segment build (0 until segmented)
+            sizeBytes += li.sizeBytes; // data-ledger bytes, captured at segment build (0 until segmented)
             minEt = Math.min(minEt, li.minEventTime);
             maxEt = Math.max(maxEt, li.maxEventTime);
         }
         info.setDataLedgersSegmented(segmented);
         info.setDataLedgersOpen(catalog.size() - segmented);
         info.setDataPages(pages);
+        info.setTotalRecords(records);
+        info.setSizeBytes(sizeBytes);
         info.setMinEventTime(catalog.isEmpty() ? 0 : minEt);
         info.setMaxEventTime(catalog.isEmpty() ? 0 : maxEt);
         info.setCatalogLedgerId(rec.catalogLedgerId);

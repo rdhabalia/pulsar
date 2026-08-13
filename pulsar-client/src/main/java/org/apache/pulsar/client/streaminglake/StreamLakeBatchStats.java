@@ -103,9 +103,15 @@ public final class StreamLakeBatchStats {
     }
 
     private final List<ColumnStats> columns;
+    private final int rowCount;
 
     StreamLakeBatchStats(List<ColumnStats> columns) {
+        this(columns, 0);
+    }
+
+    StreamLakeBatchStats(List<ColumnStats> columns, int rowCount) {
         this.columns = columns;
+        this.rowCount = rowCount;
     }
 
     /**
@@ -126,6 +132,11 @@ public final class StreamLakeBatchStats {
         return columns;
     }
 
+    /** The number of data rows this footer's page holds (0 for a synthesized whole-ledger summary). */
+    public int rowCount() {
+        return rowCount;
+    }
+
     public ColumnStats column(int columnIndex) {
         for (ColumnStats cs : columns) {
             if (cs.columnIndex == columnIndex) {
@@ -141,6 +152,7 @@ public final class StreamLakeBatchStats {
         try (DataOutputStream out = new DataOutputStream(bos)) {
             out.write(MAGIC);
             out.writeByte(VERSION);
+            out.writeInt(rowCount);
             out.writeInt(columns.size());
             for (ColumnStats cs : columns) {
                 out.writeInt(cs.columnIndex);
@@ -178,6 +190,7 @@ public final class StreamLakeBatchStats {
                 throw new IllegalArgumentException("Not a StreamLake stats footer");
             }
             in.readByte(); // version (reserved)
+            int rowCount = in.readInt();
             int n = in.readInt();
             List<ColumnStats> cols = new ArrayList<>(n);
             for (int i = 0; i < n; i++) {
@@ -205,7 +218,7 @@ public final class StreamLakeBatchStats {
                 }
                 cols.add(new ColumnStats(columnIndex, type, min, max, distinctCount, set, bloom));
             }
-            return new StreamLakeBatchStats(cols);
+            return new StreamLakeBatchStats(cols, rowCount);
         } catch (IOException e) {
             throw new UncheckedIOException("StreamLake stats decode failed", e);
         }
