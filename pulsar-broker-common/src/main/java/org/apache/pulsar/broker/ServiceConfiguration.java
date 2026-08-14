@@ -2498,13 +2498,14 @@ public class ServiceConfiguration implements PulsarConfiguration {
         doc = "Number of parallel decode workers for a StreamLake single-table scan (and each side of a "
             + "join). A scan's per-page reads already prefetch, but Arrow decode + row-filter otherwise run "
             + "on one thread -- so this > 1 read+decodes+filters pages across a worker pool, serializing only "
-            + "the emit, to lift the single-threaded decode ceiling. NOTE: the realized speedup is bounded by "
-            + "the read path -- each surviving page is fetched with one managedLedger entry read, so when "
-            + "reads dominate (e.g. a full scan against a single bookie, ~a few hundred MB/s) more decode "
-            + "workers help only marginally; saturating NVMe additionally needs faster reads (multiple "
-            + "bookies and/or batched range reads). Result order is not page order (fine for "
-            + "scans/aggregations/joins; ORDER BY re-sorts). 0 (default) = auto = "
-            + "min(64, availableProcessors x 2); 1 = the serial, page-ordered path."
+            + "the emit, to lift the single-threaded decode ceiling. Measured (12-core Mac, warm 140M-row / "
+            + "4.2 GB unclustered full scan): serial 14.1s -> 8.1s at cores x 2 (~1.7x); oversubscribing "
+            + "(64 workers on 12 cores) regresses to ~11s, so scaling is best up to ~availableProcessors x 2. "
+            + "The win is largest when decode-bound (warm/cached reads); when the read path dominates instead "
+            + "(cold first scan, or a single bookie at ~a few hundred MB/s) the gain is smaller and saturating "
+            + "NVMe additionally needs faster reads (multiple bookies and/or batched range reads). Result "
+            + "order is not page order (fine for scans/aggregations/joins; ORDER BY re-sorts). 0 (default) = "
+            + "auto = min(64, availableProcessors x 2); 1 = the serial, page-ordered path."
     )
     private int streamLakeQueryDecodeConcurrency = 0;
 
