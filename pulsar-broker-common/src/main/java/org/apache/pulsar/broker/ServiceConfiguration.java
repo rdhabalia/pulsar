@@ -2493,6 +2493,21 @@ public class ServiceConfiguration implements PulsarConfiguration {
     )
     private boolean streamLakeQueryUseSegmentSummary = true;
 
+    @FieldContext(
+        category = CATEGORY_STORAGE_ML,
+        doc = "Number of parallel decode workers for a StreamLake single-table scan (and each side of a "
+            + "join). A scan's per-page reads already prefetch, but Arrow decode + row-filter otherwise run "
+            + "on one thread -- so this > 1 read+decodes+filters pages across a worker pool, serializing only "
+            + "the emit, to lift the single-threaded decode ceiling. NOTE: the realized speedup is bounded by "
+            + "the read path -- each surviving page is fetched with one managedLedger entry read, so when "
+            + "reads dominate (e.g. a full scan against a single bookie, ~a few hundred MB/s) more decode "
+            + "workers help only marginally; saturating NVMe additionally needs faster reads (multiple "
+            + "bookies and/or batched range reads). Result order is not page order (fine for "
+            + "scans/aggregations/joins; ORDER BY re-sorts). 0 (default) = auto = "
+            + "min(64, availableProcessors x 2); 1 = the serial, page-ordered path."
+    )
+    private int streamLakeQueryDecodeConcurrency = 0;
+
     //
     //
     @FieldContext(

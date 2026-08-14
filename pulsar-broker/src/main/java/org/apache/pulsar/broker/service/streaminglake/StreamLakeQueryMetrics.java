@@ -66,6 +66,12 @@ public final class StreamLakeQueryMetrics {
         rowsRead++;
     }
 
+    /** Count {@code n} rows decoded from a page at once (used by the parallel scan, where the caller
+     * already holds the emit lock, so plain-field accumulation stays race-free). */
+    public void addRowsRead(long n) {
+        rowsRead += n;
+    }
+
     /** Record one data page read from storage: its Arrow byte size (drives bytesRead + peak buffer). */
     public void recordPageRead(int bytes) {
         bytesRead += bytes;

@@ -830,7 +830,9 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                             brokerService.getPulsar().getConfiguration()
                                     .isStreamLakeQueryIncludeUnsegmentedLedgers(),
                             brokerService.getPulsar().getConfiguration()
-                                    .isStreamLakeQueryUseSegmentSummary());
+                                    .isStreamLakeQueryUseSegmentSummary(),
+                            brokerService.getPulsar().getConfiguration()
+                                    .getStreamLakeQueryDecodeConcurrency());
                     streamLakeQueryService = qs;
                 }
             }

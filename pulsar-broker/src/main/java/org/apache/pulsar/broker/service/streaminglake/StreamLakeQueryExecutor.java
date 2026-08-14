@@ -22,10 +22,15 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.pulsar.client.streaminglake.StreamLakeArrowBatchDecoder;
 import org.apache.pulsar.client.streaminglake.StreamLakeHashJoin;
 import org.apache.pulsar.client.streaminglake.StreamLakeJoinTable;
@@ -66,6 +71,11 @@ public class StreamLakeQueryExecutor {
     private final Executor readExecutor;
     private final int readConcurrency;
     private final StreamLakeQueryMetrics metrics;
+    // Parallel-decode: a dedicated pool with >=decodeConcurrency threads and how many worker threads to
+    // run. When both are set (>1), a scan reads+decodes+row-filters pages across workers (order-agnostic)
+    // to lift the single-threaded decode ceiling; null/<=1 keeps the serial, page-ordered path.
+    private final Executor decodeExecutor;
+    private final int decodeConcurrency;
 
     /** Serial reader (no page read-ahead). */
     public StreamLakeQueryExecutor(StreamLakePruner pruner, PageReader pageReader) {
@@ -90,11 +100,28 @@ public class StreamLakeQueryExecutor {
      */
     public StreamLakeQueryExecutor(StreamLakePruner pruner, PageReader pageReader,
             Executor readExecutor, int readConcurrency, StreamLakeQueryMetrics metrics) {
+        this(pruner, pageReader, readExecutor, readConcurrency, metrics, null, 1);
+    }
+
+    /**
+     * @param decodeExecutor pool (with at least {@code decodeConcurrency} threads) that runs parallel
+     *                       decode workers for {@link #scan}; null disables parallel decode.
+     * @param decodeConcurrency number of parallel decode workers (&gt;1 enables the order-agnostic parallel
+     *                          scan; &le;1 keeps the serial, page-ordered scan). Each worker owns its Arrow
+     *                          decoder; decode + row-filter run in parallel, only the emit + counters are
+     *                          serialized, so a single query can pull many GB/s off NVMe instead of being
+     *                          capped by one decode thread.
+     */
+    public StreamLakeQueryExecutor(StreamLakePruner pruner, PageReader pageReader,
+            Executor readExecutor, int readConcurrency, StreamLakeQueryMetrics metrics,
+            Executor decodeExecutor, int decodeConcurrency) {
         this.pruner = pruner;
         this.pageReader = pageReader;
         this.readExecutor = readExecutor;
         this.readConcurrency = readConcurrency;
         this.metrics = metrics;
+        this.decodeExecutor = decodeExecutor;
+        this.decodeConcurrency = Math.max(1, decodeConcurrency);
         metrics.setReadConcurrency(readConcurrency);
     }
 
@@ -111,10 +138,21 @@ public class StreamLakeQueryExecutor {
     }
 
     /**
-     * Streaming scan: prune to candidate pages, read them (parallel prefetch), and push each row that
-     * passes the predicate to {@code out} — without materializing the whole result.
+     * Streaming scan: prune to candidate pages, read them, and push each row that passes the predicate to
+     * {@code out} — without materializing the whole result. With {@code decodeConcurrency > 1} the pages
+     * are read + decoded + row-filtered across a worker pool (order-agnostic) and only the emit to
+     * {@code out} is serialized; otherwise it reads (with prefetch) and decodes serially in page order.
      */
     public void scan(long fromMs, long toMs, StreamLakeScanPredicate predicate, RowConsumer out)
+            throws Exception {
+        if (decodeExecutor != null && decodeConcurrency > 1) {
+            scanParallel(fromMs, toMs, predicate, out);
+        } else {
+            scanSerial(fromMs, toMs, predicate, out);
+        }
+    }
+
+    private void scanSerial(long fromMs, long toMs, StreamLakeScanPredicate predicate, RowConsumer out)
             throws Exception {
         try (StreamLakeArrowBatchDecoder decoder = new StreamLakeArrowBatchDecoder()) {
             forEachPage(fromMs, toMs, predicate, (p, arrow) -> {
@@ -125,6 +163,88 @@ public class StreamLakeQueryExecutor {
                     }
                 }
             });
+        }
+    }
+
+    // Sentinel that tells a decode worker no more pages are coming.
+    private static final StreamLakePruner.PagePointer POISON = new StreamLakePruner.PagePointer(-1, -1);
+
+    /**
+     * Order-agnostic parallel scan: {@code decodeConcurrency} workers each own an Arrow decoder and pull
+     * pruned pages off a bounded queue, read+decode+row-filter them in parallel, and emit survivors under
+     * a single lock (so the RowConsumer and counters stay single-threaded while the heavy decode/filter is
+     * parallel). Result row order is not the page order — fine for scans/aggregations/joins (SQL without
+     * ORDER BY does not promise order; ORDER BY re-sorts downstream).
+     */
+    private void scanParallel(long fromMs, long toMs, StreamLakeScanPredicate predicate, RowConsumer out)
+            throws Exception {
+        BlockingQueue<StreamLakePruner.PagePointer> queue =
+                new ArrayBlockingQueue<>(Math.max(2, decodeConcurrency * 4));
+        Object emitLock = new Object();
+        AtomicReference<Exception> failure = new AtomicReference<>();
+        CountDownLatch done = new CountDownLatch(decodeConcurrency);
+        for (int i = 0; i < decodeConcurrency; i++) {
+            decodeExecutor.execute(() -> {
+                try (StreamLakeArrowBatchDecoder decoder = new StreamLakeArrowBatchDecoder()) {
+                    while (true) {
+                        StreamLakePruner.PagePointer p = queue.take();
+                        if (p == POISON) {
+                            return;
+                        }
+                        if (failure.get() != null) {
+                            continue; // drain to the poison pill without doing work
+                        }
+                        byte[] arrow = pageReader.readArrowBatch(p.ledgerId, p.entryId);
+                        List<Object[]> survivors = new ArrayList<>();
+                        long rows = 0;
+                        for (Object[] row : decoder.decodeRows(arrow)) {
+                            rows++;
+                            if (predicate.matchesRow(row)) {
+                                survivors.add(row);
+                            }
+                        }
+                        synchronized (emitLock) {
+                            metrics.recordPageRead(arrow.length);
+                            metrics.addRowsRead(rows);
+                            for (Object[] r : survivors) {
+                                out.accept(r);
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    failure.compareAndSet(null, e);
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+        StreamLakePruner.Stats stats = new StreamLakePruner.Stats();
+        try {
+            pruner.prune(fromMs, toMs, predicate, stats, p -> {
+                // Back-pressured hand-off; bail out promptly if a worker has already failed so we never
+                // block forever on a queue no one is draining.
+                while (!queue.offer(p, 200, TimeUnit.MILLISECONDS)) {
+                    if (failure.get() != null) {
+                        throw new RuntimeException("StreamLake parallel scan worker failed");
+                    }
+                }
+            }, s -> metrics.logProgress(s, false));
+        } catch (Exception e) {
+            failure.compareAndSet(null, e);
+        } finally {
+            for (int i = 0; i < decodeConcurrency; i++) {
+                while (!queue.offer(POISON, 200, TimeUnit.MILLISECONDS)) {
+                    if (done.getCount() == 0) {
+                        break; // all workers already exited
+                    }
+                }
+            }
+            done.await();
+        }
+        metrics.addPruneStats(stats);
+        Exception f = failure.get();
+        if (f != null) {
+            throw f;
         }
     }
 

@@ -63,14 +63,16 @@ public final class StreamLakeQueryService {
     private final String brokerJoinSpillDir;
     private final boolean brokerQueryIncludeUnsegmentedLedgers;
     private final boolean brokerQueryUseSegmentSummary;
+    private final int decodeConcurrency;
 
     private volatile StreamLakePruner pruner;
     private volatile StreamLakeQueryExecutor executor;
+    private volatile java.util.concurrent.ExecutorService decodeExecutor;
 
     private StreamLakeQueryService(ManagedLedger managedLedger, StreamLakeSegmentService segmentService,
             StreamLakePageIndex pageIndex, StreamingLakeConfig cfg, Executor readExecutor,
             String brokerJoinSpillDir, boolean brokerQueryIncludeUnsegmentedLedgers,
-            boolean brokerQueryUseSegmentSummary) {
+            boolean brokerQueryUseSegmentSummary, int decodeConcurrency) {
         this.managedLedger = managedLedger;
         this.segmentService = segmentService;
         this.pageIndex = pageIndex;
@@ -81,14 +83,43 @@ public final class StreamLakeQueryService {
         this.brokerJoinSpillDir = brokerJoinSpillDir == null ? "" : brokerJoinSpillDir;
         this.brokerQueryIncludeUnsegmentedLedgers = brokerQueryIncludeUnsegmentedLedgers;
         this.brokerQueryUseSegmentSummary = brokerQueryUseSegmentSummary;
+        // 0 => auto = cores x 2 (capped); 1 => serial decode; >1 => explicit worker count.
+        this.decodeConcurrency = decodeConcurrency > 0 ? decodeConcurrency
+                : Math.min(64, Runtime.getRuntime().availableProcessors() * 2);
     }
 
     public static StreamLakeQueryService create(ManagedLedger managedLedger,
             StreamLakeSegmentService segmentService, StreamLakePageIndex pageIndex, StreamingLakeConfig cfg,
             Executor readExecutor, String brokerJoinSpillDir,
-            boolean brokerQueryIncludeUnsegmentedLedgers, boolean brokerQueryUseSegmentSummary) {
+            boolean brokerQueryIncludeUnsegmentedLedgers, boolean brokerQueryUseSegmentSummary,
+            int decodeConcurrency) {
         return new StreamLakeQueryService(managedLedger, segmentService, pageIndex, cfg, readExecutor,
-                brokerJoinSpillDir, brokerQueryIncludeUnsegmentedLedgers, brokerQueryUseSegmentSummary);
+                brokerJoinSpillDir, brokerQueryIncludeUnsegmentedLedgers, brokerQueryUseSegmentSummary,
+                decodeConcurrency);
+    }
+
+    /** Lazily-created dedicated pool for parallel-decode scan workers (daemon threads; sized to the
+     * decode concurrency so a scan's producer never starves waiting for a worker). Null when decode is
+     * serial. */
+    private Executor decodeExecutor() {
+        if (decodeConcurrency <= 1) {
+            return null;
+        }
+        java.util.concurrent.ExecutorService e = decodeExecutor;
+        if (e == null) {
+            synchronized (this) {
+                e = decodeExecutor;
+                if (e == null) {
+                    e = java.util.concurrent.Executors.newFixedThreadPool(decodeConcurrency, r -> {
+                        Thread t = new Thread(r, "sl-decode-" + managedLedger.getName());
+                        t.setDaemon(true);
+                        return t;
+                    });
+                    decodeExecutor = e;
+                }
+            }
+        }
+        return e;
     }
 
     /** The topic's StreamLake config (join strategy, budgets, RocksDB sizes, ...). */
@@ -206,7 +237,8 @@ public final class StreamLakeQueryService {
                 e = executor;
                 if (e == null) {
                     e = new StreamLakeQueryExecutor(pruner(), this::readArrowBatch, readExecutor,
-                            cfg.getQueryReadConcurrency());
+                            cfg.getQueryReadConcurrency(), new StreamLakeQueryMetrics(),
+                            decodeExecutor(), decodeConcurrency);
                     executor = e;
                 }
             }
@@ -220,7 +252,7 @@ public final class StreamLakeQueryService {
      */
     public StreamLakeQueryExecutor executor(StreamLakeQueryMetrics metrics) {
         return new StreamLakeQueryExecutor(pruner(), this::readArrowBatch, readExecutor,
-                cfg.getQueryReadConcurrency(), metrics);
+                cfg.getQueryReadConcurrency(), metrics, decodeExecutor(), decodeConcurrency);
     }
 
     // Read one pruned page (a data-ledger entry) from the managed ledger and strip the message
