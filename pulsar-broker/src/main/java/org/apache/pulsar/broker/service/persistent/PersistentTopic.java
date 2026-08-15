@@ -905,6 +905,39 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             final StreamLakeSegmentService segmentService = streamLakeSegmentService;
             final long ingestTimeMs = Clock.systemUTC().millis();
             final long numMessages = publishContext.getNumberOfMessages();
+            if (brokerService.pulsar().getConfiguration().isStreamLakePageIndexAsyncAppend()) {
+                // Non-blocking append: pipeline the footer write (asyncAddEntry) so no shared broker
+                // thread parks on the BK write. The ordered side effects (segment grouping, dedup, ack)
+                // still run on the per-topic ordered executor when the footer is durable -- preserving
+                // per-topic order and the durable-before-ack barrier -- but the executor task no longer
+                // blocks. Footers for a single-writer ledger complete in add order, so the whenComplete
+                // callbacks (and thus the ordered tasks) run in data-entry order.
+                pageIndex.appendFooterAsync(dataLedgerId, dataEntryId, footer).whenComplete((v, err) ->
+                    brokerService.getTopicOrderedExecutor().executeOrdered(topic, () -> {
+                        try {
+                            if (err != null) {
+                                Throwable cause = err instanceof CompletionException && err.getCause() != null
+                                        ? err.getCause() : err;
+                                throw cause instanceof Exception ? (Exception) cause
+                                        : new RuntimeException(cause);
+                            }
+                            if (segmentService != null) {
+                                segmentService.onEntryPersisted(dataLedgerId, dataEntryId, ingestTimeMs,
+                                        numMessages);
+                            }
+                            messageDeduplication.recordMessagePersisted(publishContext, position);
+                            publishContext.completed(null, dataLedgerId, dataEntryId);
+                        } catch (Exception e) {
+                            log.warn().exceptionMessage(e).log("StreamLake async page-index footer append "
+                                    + "failed for " + topic + " at " + dataLedgerId + ":" + dataEntryId
+                                    + "; failing publish");
+                            publishContext.completed(new PersistenceException(e), -1, -1);
+                        } finally {
+                            decrementPendingWriteOpsAndCheck();
+                        }
+                    }));
+                return;
+            }
             // Serialize appends per topic (ordered by data entry) so segment grouping and dedup stay
             // monotonic, and keep the blocking BK write off the managed-ledger callback thread.
             brokerService.getTopicOrderedExecutor().executeOrdered(topic, () -> {

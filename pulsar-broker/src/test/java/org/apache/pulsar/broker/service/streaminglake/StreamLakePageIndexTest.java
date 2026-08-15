@@ -144,4 +144,52 @@ public class StreamLakePageIndexTest {
         assertEquals(new String(reopened.footersFor(300L).get(0).stats, StandardCharsets.UTF_8), "ccc");
         reopened.close();
     }
+
+    @Test
+    public void appendsAndReadsFootersAsync() throws Exception {
+        StreamLakePageIndex idx = StreamLakePageIndex.open(bk, ml, metaStore());
+        // Submit without waiting so the appends pipeline; a single-writer ledger acks in add order.
+        java.util.List<java.util.concurrent.CompletableFuture<Void>> fs = new java.util.ArrayList<>();
+        fs.add(idx.appendFooterAsync(100L, 0L, footer("f100-0")));
+        fs.add(idx.appendFooterAsync(100L, 1L, footer("f100-1")));
+        fs.add(idx.appendFooterAsync(200L, 0L, footer("f200-0")));
+        java.util.concurrent.CompletableFuture
+                .allOf(fs.toArray(new java.util.concurrent.CompletableFuture[0]))
+                .get(30, java.util.concurrent.TimeUnit.SECONDS);
+
+        List<StreamLakePageIndex.PageFooter> l100 = idx.footersFor(100L);
+        assertEquals(l100.size(), 2);
+        assertEquals(l100.get(0).dataEntryId, 0L);
+        assertEquals(new String(l100.get(0).stats, StandardCharsets.UTF_8), "f100-0");
+        assertEquals(l100.get(1).dataEntryId, 1L);
+        assertEquals(new String(l100.get(1).stats, StandardCharsets.UTF_8), "f100-1");
+        assertEquals(idx.footersFor(200L).size(), 1);
+        assertTrue(idx.covers(100L));
+        assertFalse(idx.covers(999L));
+        idx.close();
+    }
+
+    @Test
+    public void rollsHeadAsyncAtSizeThresholdPreservingOrder() throws Exception {
+        // tiny threshold so async appends must cross the drain-barrier roll repeatedly
+        StreamLakePageIndex idx = StreamLakePageIndex.open(bk, ml, metaStore(), 30);
+        java.util.List<java.util.concurrent.CompletableFuture<Void>> fs = new java.util.ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            fs.add(idx.appendFooterAsync(100L, i, footer("footer-" + i)));
+        }
+        java.util.concurrent.CompletableFuture
+                .allOf(fs.toArray(new java.util.concurrent.CompletableFuture[0]))
+                .get(30, java.util.concurrent.TimeUnit.SECONDS);
+
+        List<Long> chain = metaStore().read().pageIndexLedgerIds;
+        assertTrue(chain.size() > 1, "async head should have rolled into multiple ledgers, got "
+                + chain.size());
+        List<StreamLakePageIndex.PageFooter> footers = idx.footersFor(100L);
+        assertEquals(footers.size(), 8, "all async footers readable across the rolled ledgers");
+        for (int i = 0; i < 8; i++) {
+            assertEquals(footers.get(i).dataEntryId, (long) i, "footers stay in data-entry order");
+            assertEquals(new String(footers.get(i).stats, StandardCharsets.UTF_8), "footer-" + i);
+        }
+        idx.close();
+    }
 }

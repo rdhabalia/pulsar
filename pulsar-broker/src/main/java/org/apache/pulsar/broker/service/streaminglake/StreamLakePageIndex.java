@@ -19,12 +19,16 @@
 package org.apache.pulsar.broker.service.streaminglake;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import org.apache.bookkeeper.client.AsyncCallback;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerEntry;
@@ -102,6 +106,30 @@ public class StreamLakePageIndex implements AutoCloseable {
     private long headBytes;
     private int headEntryCount;
     private long headDataLedger = -1; // the data ledger the head is currently accumulating footers for
+
+    // ---- async append state (streamLakePageIndexAsyncAppend), all mutated under `this` ----
+    // A roll (createLedger) must not run while adds to the old head are still in flight, so a roll
+    // drains: `rolling` fences new appends into `deferredAppends`, and the last in-flight completion
+    // starts the async roll. `inFlightAdds` counts asyncAddEntry ops submitted to the current head but
+    // not yet acked. No I/O is ever performed while holding `this`.
+    private boolean rolling;
+    private long inFlightAdds;
+    private final Deque<PendingAppend> deferredAppends = new ArrayDeque<>();
+
+    /** An append deferred while a head roll drains/completes; replayed onto the fresh head. */
+    private static final class PendingAppend {
+        final long dataLedgerId;
+        final long dataEntryId;
+        final byte[] footer;
+        final CompletableFuture<Void> result;
+
+        PendingAppend(long dataLedgerId, long dataEntryId, byte[] footer, CompletableFuture<Void> result) {
+            this.dataLedgerId = dataLedgerId;
+            this.dataEntryId = dataEntryId;
+            this.footer = footer;
+            this.result = result;
+        }
+    }
 
     private StreamLakePageIndex(BookKeeper bk, StreamLakeMetaStore metaStore,
                                 long maxHeadBytes, int maxEntriesPerLedger,
@@ -182,6 +210,141 @@ public class StreamLakePageIndex implements AutoCloseable {
         headBytes += entry.length;
         headEntryCount++;
         headDataLedger = dataLedgerId;
+    }
+
+    /**
+     * Non-blocking append: durably append the footer via {@code asyncAddEntry} and complete the returned
+     * future when the bookie acks -- no thread parks on the write, so many appends pipeline per topic.
+     * Ordering is preserved (the caller submits in data-entry order and a single-writer ledger acks in
+     * order), and the head roll is a drain barrier ({@code rolling} fences new appends until in-flight
+     * adds complete, then an async close+create installs the fresh head). All state is mutated under
+     * {@code this}; the only work under the lock is in-memory (the BK ops are async).
+     */
+    public CompletableFuture<Void> appendFooterAsync(long dataLedgerId, long dataEntryId, byte[] footer) {
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        try {
+            synchronized (this) {
+                submitOrDefer(new PendingAppend(dataLedgerId, dataEntryId, footer, result));
+            }
+        } catch (Throwable t) {
+            result.completeExceptionally(t);
+        }
+        return result;
+    }
+
+    // Caller holds `this`. Either submit the append to the current head, or (if a roll is needed or in
+    // progress) queue it and kick/await the roll.
+    private void submitOrDefer(PendingAppend a) {
+        if (rolling) {
+            deferredAppends.add(a);
+            return;
+        }
+        byte[] entry = encode(a.dataLedgerId, a.dataEntryId, a.footer);
+        boolean boundary = head != null && headDataLedger != a.dataLedgerId;
+        boolean overEntries = head != null && headEntryCount >= maxEntriesPerLedger;
+        boolean overBytes = head != null && headBytes > 0 && headBytes + entry.length > maxHeadBytes;
+        boolean needRoll = head == null || (boundary && overEntries) || overBytes;
+        if (needRoll) {
+            rolling = true;
+            deferredAppends.add(a);
+            if (inFlightAdds == 0) {
+                startRoll();            // nothing in flight to the old head -> roll immediately
+            }                           // else: the last in-flight completion starts the roll
+            return;
+        }
+        headEntryCount++;
+        headBytes += entry.length;
+        headDataLedger = a.dataLedgerId;
+        inFlightAdds++;
+        head.asyncAddEntry(entry, (rc, lh, entryId, ctx) ->
+                onAddComplete(rc, lh, entryId, a), null);
+    }
+
+    // BK add-callback thread. Record the ref (in order -- a single-writer ledger acks in add order),
+    // complete the publish, and if a roll was waiting for this ledger to drain, start it now.
+    private void onAddComplete(int rc, LedgerHandle lh, long entryId, PendingAppend a) {
+        boolean startRollNow = false;
+        synchronized (this) {
+            inFlightAdds--;
+            if (rc == BKException.Code.OK) {
+                refsByDataLedger.computeIfAbsent(a.dataLedgerId, k -> new ArrayList<>())
+                        .add(new Ref(lh.getId(), entryId, a.dataEntryId));
+            }
+            if (rolling && inFlightAdds == 0) {
+                startRollNow = true;
+            }
+        }
+        if (rc == BKException.Code.OK) {
+            a.result.complete(null);
+        } else {
+            a.result.completeExceptionally(BKException.create(rc));
+        }
+        if (startRollNow) {
+            synchronized (this) {
+                startRoll();
+            }
+        }
+    }
+
+    // Caller holds `this`, `inFlightAdds == 0`, `rolling == true`. Async close the old head, create a
+    // fresh one, persist the chain, then replay the deferred appends onto it. No blocking under `this`.
+    private void startRoll() {
+        LedgerHandle old = head;
+        AsyncCallback.CreateCallback onCreated = (rc, fresh, ctx) -> {
+            List<PendingAppend> replay = null;
+            RuntimeException failure = null;
+            synchronized (this) {
+                if (rc == BKException.Code.OK && fresh != null) {
+                    chain.add(fresh.getId());
+                    try {
+                        metaStore.setPageIndexLedgerIds(chain);   // rare (per roll) metadata write
+                    } catch (Exception e) {
+                        log.warn("StreamLake page-index chain persist failed for {}: {}",
+                                metaStore.name(), e.toString());
+                    }
+                    head = fresh;
+                    headBytes = 0;
+                    headEntryCount = 0;
+                    rolling = false;
+                    replay = new ArrayList<>(deferredAppends);
+                    deferredAppends.clear();
+                } else {
+                    failure = new RuntimeException("StreamLake page-index roll (createLedger) failed rc=" + rc);
+                }
+            }
+            if (failure != null) {
+                failDeferred(failure);
+                return;
+            }
+            // Replay deferred appends onto the fresh head, in order, each under `this`.
+            for (PendingAppend a : replay) {
+                synchronized (this) {
+                    submitOrDefer(a);
+                }
+            }
+        };
+        AsyncCallback.CloseCallback onClosed = (rc, lh, ctx) ->
+                bk.asyncCreateLedger(ensembleSize, writeQuorum, ackQuorum,
+                        BookKeeper.DigestType.CRC32, PASSWORD, onCreated, null, Collections.emptyMap());
+        if (old != null) {
+            old.asyncClose(onClosed, null);
+        } else {
+            bk.asyncCreateLedger(ensembleSize, writeQuorum, ackQuorum,
+                    BookKeeper.DigestType.CRC32, PASSWORD, onCreated, null, Collections.emptyMap());
+        }
+    }
+
+    // Fail every queued append (roll could not produce a head). Clears `rolling` so the topic can retry.
+    private void failDeferred(Throwable cause) {
+        List<PendingAppend> failed;
+        synchronized (this) {
+            rolling = false;
+            failed = new ArrayList<>(deferredAppends);
+            deferredAppends.clear();
+        }
+        for (PendingAppend a : failed) {
+            a.result.completeExceptionally(cause);
+        }
     }
 
     /** The stored footers for a data ledger, ordered by data-entry, read on demand from the chain. */
