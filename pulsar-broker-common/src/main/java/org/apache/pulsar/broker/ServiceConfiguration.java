@@ -2509,19 +2509,6 @@ public class ServiceConfiguration implements PulsarConfiguration {
     )
     private int streamLakeQueryDecodeConcurrency = 0;
 
-    @FieldContext(
-        category = CATEGORY_STORAGE_ML,
-        doc = "When true, the per-page StreamLake page-index footer is appended with a non-blocking "
-            + "asyncAddEntry (the publish is acked in the add-callback) instead of a synchronous "
-            + "addEntry on the shared per-topic ordered executor. This pipelines many footer writes per "
-            + "topic (bandwidth-bound) instead of one-blocking-write-at-a-time (latency-bound), lifting "
-            + "ingest throughput without changing page size, and stops the ingest ack path from parking "
-            + "a shared broker thread on BK I/O. Ordering + the durable-before-ack barrier are preserved "
-            + "(single-writer ledger acks in add order; the head roll drains in-flight adds first). "
-            + "Default false (the synchronous, thread-offloaded path)."
-    )
-    private boolean streamLakePageIndexAsyncAppend = false;
-
     //
     //
     @FieldContext(

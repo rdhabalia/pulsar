@@ -196,20 +196,20 @@ public class StreamLakePageIndex implements AutoCloseable {
     }
 
     /**
-     * Durably append a batch's stats footer, keyed by the data-ledger entry it describes. The footer
-     * is sliced by the caller from the message payload (never parsed). Rolls the head ledger at a
-     * data-ledger boundary once it crosses {@code maxEntriesPerLedger} (or the byte safety cap).
+     * Blocking convenience wrapper over {@link #appendFooterAsync}: append the footer and wait for the
+     * bookie ack. Retained for tests and callers wanting synchronous semantics; production ingest calls
+     * {@link #appendFooterAsync} directly so no broker thread ever parks on the write.
      */
-    public synchronized void appendFooter(long dataLedgerId, long dataEntryId, byte[] footer)
-            throws Exception {
-        byte[] entry = encode(dataLedgerId, dataEntryId, footer);
-        ensureHeadFor(entry.length, dataLedgerId);
-        long piEntryId = addToHead(entry);
-        refsByDataLedger.computeIfAbsent(dataLedgerId, k -> new ArrayList<>())
-                .add(new Ref(head.getId(), piEntryId, dataEntryId));
-        headBytes += entry.length;
-        headEntryCount++;
-        headDataLedger = dataLedgerId;
+    public void appendFooter(long dataLedgerId, long dataEntryId, byte[] footer) throws Exception {
+        try {
+            appendFooterAsync(dataLedgerId, dataEntryId, footer).get();
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception) {
+                throw (Exception) cause;
+            }
+            throw new RuntimeException(cause);
+        }
     }
 
     /**
@@ -348,10 +348,14 @@ public class StreamLakePageIndex implements AutoCloseable {
     }
 
     /** The stored footers for a data ledger, ordered by data-entry, read on demand from the chain. */
-    public synchronized List<PageFooter> footersFor(long dataLedgerId) throws Exception {
-        List<Ref> refs = refsByDataLedger.get(dataLedgerId);
-        if (refs == null || refs.isEmpty()) {
-            return Collections.emptyList();
+    public List<PageFooter> footersFor(long dataLedgerId) throws Exception {
+        List<Ref> refs;
+        synchronized (this) {
+            List<Ref> src = refsByDataLedger.get(dataLedgerId);
+            if (src == null || src.isEmpty()) {
+                return Collections.emptyList();
+            }
+            refs = new ArrayList<>(src);   // snapshot under the lock; do the BK reads outside it
         }
         List<PageFooter> out = new ArrayList<>(refs.size());
         for (Ref ref : refs) {
@@ -367,21 +371,12 @@ public class StreamLakePageIndex implements AutoCloseable {
      * recover exact set(N)/collapsed‑column precision at query time. Returns {@code [(dataEntryId,
      * footerBytes)]} in entry order.
      */
-    public synchronized List<PageFooter> readRange(long piLedgerId, long startEntry, long endEntry)
+    public List<PageFooter> readRange(long piLedgerId, long startEntry, long endEntry)
             throws Exception {
         if (piLedgerId < 0 || startEntry < 0 || endEntry < startEntry) {
             return Collections.emptyList();
         }
-        LedgerHandle lh;
-        if (head != null && head.getId() == piLedgerId) {
-            lh = head;
-        } else {
-            lh = readHandles.get(piLedgerId);
-            if (lh == null) {
-                lh = bk.openLedger(piLedgerId, BookKeeper.DigestType.CRC32, PASSWORD);
-                readHandles.put(piLedgerId, lh);
-            }
-        }
+        LedgerHandle lh = handleFor(piLedgerId);   // opens outside the lock if needed
         List<PageFooter> out = new ArrayList<>();
         // Bounded batches: a big data ledger's page-index range can be hundreds of thousands of footers;
         // a single readEntries(start,end) would issue them all at once and overwhelm the bookie ("too
@@ -402,6 +397,36 @@ public class StreamLakePageIndex implements AutoCloseable {
             }
         }
         return out;
+    }
+
+    // Get (opening + caching on first use) a read handle for a page-index ledger. Only the cache
+    // lookup / head check hold `this`; the openLedger I/O runs OUTSIDE the lock so a slow open never
+    // blocks the async append-completion path (which also needs `this`). The current head is read via
+    // its own write handle -- never openLedger'd, which would fence our own writer.
+    private LedgerHandle handleFor(long ledgerId) throws Exception {
+        synchronized (this) {
+            if (head != null && head.getId() == ledgerId) {
+                return head;
+            }
+            LedgerHandle cached = readHandles.get(ledgerId);
+            if (cached != null) {
+                return cached;
+            }
+        }
+        LedgerHandle opened = bk.openLedger(ledgerId, BookKeeper.DigestType.CRC32, PASSWORD);
+        synchronized (this) {
+            LedgerHandle existing = readHandles.get(ledgerId);
+            if (existing != null) {
+                try {
+                    opened.close();   // lost the open race; use the cached handle
+                } catch (Exception ignore) {
+                    // best-effort
+                }
+                return existing;
+            }
+            readHandles.put(ledgerId, opened);
+            return opened;
+        }
     }
 
     /** Whether any footer has been recorded for a data ledger. */
@@ -513,44 +538,6 @@ public class StreamLakePageIndex implements AutoCloseable {
 
     // ---------------------------------------------------------------- write ledger chain
 
-    private void ensureHeadFor(int entryLen, long dataLedgerId) throws Exception {
-        if (head == null) {
-            rotateHead();
-            return;
-        }
-        boolean boundary = headDataLedger != dataLedgerId;   // a new data ledger is starting
-        boolean overEntries = headEntryCount >= maxEntriesPerLedger;
-        boolean overBytes = headBytes > 0 && headBytes + entryLen > maxHeadBytes;
-        // Roll at a data-ledger boundary once over the entry threshold (keeps each ledger's footers
-        // contiguous so its page-index range is a single (piLedgerId, start, end)); the byte cap is a
-        // hard safety guard that can split a very large data ledger.
-        if ((boundary && overEntries) || overBytes) {
-            rotateHead();
-        }
-    }
-
-    private void rotateHead() throws Exception {
-        closeHeadQuietly();
-        LedgerHandle fresh = bk.createLedger(ensembleSize, writeQuorum, ackQuorum,
-                BookKeeper.DigestType.CRC32, PASSWORD);
-        chain.add(fresh.getId());
-        metaStore.setPageIndexLedgerIds(chain);
-        head = fresh;
-        headBytes = 0;
-        headEntryCount = 0;
-    }
-
-    private long addToHead(byte[] entry) throws Exception {
-        try {
-            return head.addEntry(entry);
-        } catch (Exception e) {
-            // head fenced/closed -> start a new head and retry once
-            head = null;
-            rotateHead();
-            return head.addEntry(entry);
-        }
-    }
-
     private void closeHeadQuietly() {
         if (head != null) {
             try {
@@ -562,15 +549,7 @@ public class StreamLakePageIndex implements AutoCloseable {
     }
 
     private byte[] readEntry(long ledgerId, long entryId) throws Exception {
-        if (head != null && head.getId() == ledgerId) {
-            Enumeration<LedgerEntry> en = head.readEntries(entryId, entryId);
-            return en.nextElement().getEntry();
-        }
-        LedgerHandle lh = readHandles.get(ledgerId);
-        if (lh == null) {
-            lh = bk.openLedger(ledgerId, BookKeeper.DigestType.CRC32, PASSWORD);
-            readHandles.put(ledgerId, lh);
-        }
+        LedgerHandle lh = handleFor(ledgerId);
         Enumeration<LedgerEntry> en = lh.readEntries(entryId, entryId);
         return en.nextElement().getEntry();
     }
