@@ -104,6 +104,10 @@ set_key "$conf" brokerDeleteInactiveTopicsEnabled "false"
 # instead of the JVM temp dir (/tmp, often small or RAM-backed -> "No space left on device" on large
 # joins). The broker creates it if missing. This is a broker ServiceConfiguration key, applied here.
 set_key "$conf" streamLakeJoinSpillDir        "$SL_QUERY_LOCAL_DIR"
+# StreamLake query parallelism: number of parallel Arrow-decode workers per scan / per join side.
+# 0 = auto = min(64, availableProcessors x 2) -- the measured sweet spot (1 GB scan: ~1.7x at cores x 2;
+# oversubscribing beyond cores x 2 regresses). SL_DECODE_CONCURRENCY overrides (e.g. 64 to pin the cap).
+set_key "$conf" streamLakeQueryDecodeConcurrency "${SL_DECODE_CONCURRENCY:-0}"
 
 echo "Configured:"
 echo "  journal (NVMe)   : $SL_JOURNAL_DIR"

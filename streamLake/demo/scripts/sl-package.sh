@@ -11,7 +11,7 @@ cd "$REPO_ROOT"
 
 echo "[1/4] Building the Pulsar server distribution (compiles the StreamLake fork)…"
 ./gradlew :distribution:pulsar-server-distribution:assemble \
-  -x test -x checkstyleMain -x checkstyleTest --no-daemon --console=plain
+  -PskipJavaVersionCheck -x test -x checkstyleMain -x checkstyleTest --no-daemon --console=plain
 
 TARBALL="$(ls -t distribution/server/build/distributions/apache-pulsar-*-bin.tar.gz 2>/dev/null | head -1)"
 if [ -z "${TARBALL:-}" ] || [ ! -f "$TARBALL" ]; then

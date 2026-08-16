@@ -18,7 +18,9 @@
  */
 
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -78,8 +80,16 @@ public final class StreamLakeIngest {
             throw new IllegalArgumentException("--table must be Person or Employee, was " + table);
         }
         final String topic = "persistent://" + tenant + "/" + namespace + "/" + table;
+        // Pruning stats-footer knobs (per page, on the client). Building the footer -- per-column
+        // min/max, the distinct-value set (bounded by set-max-cardinality) and the bloom filter -- is
+        // the dominant client CPU cost, so only index the columns you actually prune/join on. Indexing
+        // a high-cardinality STRING column (e.g. Person.name, col 1) is especially expensive; drop it
+        // from --index-cols to publish faster. Defaults preserve the original all-columns behavior.
+        final List<Integer> indexCols = parseIntList(a.getOrDefault("index-cols", "0,1,2"));
+        final int setMax = Integer.parseInt(a.getOrDefault("set-max-cardinality", "64"));
+        final double bloomFpp = Double.parseDouble(a.getOrDefault("bloom-fpp", "0.01"));
         final StreamLakeTopicSchema ts = new StreamLakeTopicSchema(
-                isPerson ? personSchema() : employeeSchema(), Arrays.asList(0, 1, 2), 64, 0.01);
+                isPerson ? personSchema() : employeeSchema(), indexCols, setMax, bloomFpp);
 
         System.out.printf("StreamLake ingest -> %s  (target=%s, threads=%d, rowsPerPage=%d, startId=%d)%n",
                 topic, targetBytes > 0 ? gb(targetBytes) : (maxRows + " rows"), threads, rowsPerPage, startId);
@@ -223,6 +233,18 @@ public final class StreamLakeIngest {
 
     private static String gb(long bytes) {
         return String.format("%.2f GB", bytes / (double) (1L << 30));
+    }
+
+    // Parse a comma-separated list of ints (e.g. "0,1,2") into a List; empty string -> empty list.
+    private static List<Integer> parseIntList(String csv) {
+        List<Integer> out = new ArrayList<>();
+        for (String part : csv.split(",")) {
+            String p = part.trim();
+            if (!p.isEmpty()) {
+                out.add(Integer.parseInt(p));
+            }
+        }
+        return out;
     }
 
     // Parse "--key value" / "--flag" pairs into a map.
