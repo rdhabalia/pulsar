@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import org.apache.bookkeeper.client.BKException;
@@ -190,6 +191,43 @@ public class StreamLakeCatalog implements AutoCloseable {
     public synchronized void upsert(LedgerInfo info) {
         infos.put(info.dataLedgerId, info);
         appendDurably(info);
+    }
+
+    /**
+     * Non-blocking {@link #upsert}: record the info in memory (latest wins) then durably append it via
+     * {@code asyncAddEntry}, completing the returned future on the BookKeeper add-callback. Used on the
+     * per-topic ordered executor (open/close ledger registration) so that shared thread never parks on a
+     * catalog BK write. The single-writer catalog ledger acks in submission order, so successive async
+     * upserts stay ordered. On a fenced/failed write the future completes exceptionally (the boundary
+     * callers log and continue; a new owner re-registers and the crash-recovery drain heals segments) --
+     * this async path deliberately does not attempt the sync {@link #appendDurably} rotate-and-retry,
+     * which would block.
+     */
+    public CompletableFuture<Void> upsertAsync(LedgerInfo info) {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        try {
+            LedgerHandle lh;
+            byte[] entry;
+            synchronized (this) {
+                infos.put(info.dataLedgerId, info);
+                lh = writeLedger;
+                entry = lh == null ? null : encode(info);
+            }
+            if (lh == null) {
+                future.complete(null);
+                return future;
+            }
+            lh.asyncAddEntry(entry, (rc, handle, entryId, ctx) -> {
+                if (rc == BKException.Code.OK) {
+                    future.complete(null);
+                } else {
+                    future.completeExceptionally(BKException.create(rc));
+                }
+            }, null);
+        } catch (Throwable t) {
+            future.completeExceptionally(t);
+        }
+        return future;
     }
 
     /** Transition a data ledger's state (e.g. CLOSED, SEGMENTED), preserving the other fields. */

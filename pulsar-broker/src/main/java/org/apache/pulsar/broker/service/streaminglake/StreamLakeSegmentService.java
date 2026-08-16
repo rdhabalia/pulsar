@@ -175,28 +175,34 @@ public final class StreamLakeSegmentService implements AutoCloseable {
     }
 
     private void registerOpen(long ledgerId, long eventTimeMs) {
-        try {
-            // maxEventTime = MAX_VALUE while OPEN keeps the still-growing ledger a candidate for any
-            // window up to now; it is rewritten with the true bound when the ledger closes.
-            catalog.upsert(new StreamLakeCatalog.LedgerInfo(ledgerId, System.currentTimeMillis(),
-                    eventTimeMs, Long.MAX_VALUE, 0, StreamLakeCatalog.State.OPEN));
-        } catch (RuntimeException e) {
-            log.warn("StreamLake open-ledger register failed for {} ledger {}: {}",
-                    topicName, ledgerId, e.toString());
-        }
+        // maxEventTime = MAX_VALUE while OPEN keeps the still-growing ledger a candidate for any window up
+        // to now; it is rewritten with the true bound when the ledger closes. Non-blocking: the append is
+        // fired async so the per-topic ordered executor never parks on the catalog BK write.
+        catalog.upsertAsync(new StreamLakeCatalog.LedgerInfo(ledgerId, System.currentTimeMillis(),
+                eventTimeMs, Long.MAX_VALUE, 0, StreamLakeCatalog.State.OPEN))
+                .exceptionally(ex -> {
+                    log.warn("StreamLake open-ledger register failed for {} ledger {}: {}",
+                            topicName, ledgerId, ex.toString());
+                    return null;
+                });
     }
 
     private void finalizeLedger(long ledgerId, long minEt, long maxEt, long rows) {
-        try {
-            // Durably record CLOSED + true event-time bounds BEFORE the (async) build, so a crash in
-            // between is healed by buildAllClosed() on the next open.
-            catalog.upsert(new StreamLakeCatalog.LedgerInfo(ledgerId, System.currentTimeMillis(),
-                    minEt, maxEt, rows, StreamLakeCatalog.State.CLOSED));
-        } catch (RuntimeException e) {
-            log.warn("StreamLake close-ledger register failed for {} ledger {}: {}",
-                    topicName, ledgerId, e.toString());
-            return;
-        }
+        // Durably record CLOSED + true event-time bounds via a NON-BLOCKING append; only once it is
+        // durable do we dispatch the (async) build -- preserving "CLOSED durable before build" so a crash
+        // in between is healed by buildAllClosed() on the next open. The ordered executor never blocks on
+        // the catalog BK write; the dispatch runs on the BK add-callback thread (cheap, non-blocking).
+        catalog.upsertAsync(new StreamLakeCatalog.LedgerInfo(ledgerId, System.currentTimeMillis(),
+                minEt, maxEt, rows, StreamLakeCatalog.State.CLOSED))
+                .thenRun(() -> dispatchBuild(ledgerId))
+                .exceptionally(ex -> {
+                    log.warn("StreamLake close-ledger register failed for {} ledger {}: {}",
+                            topicName, ledgerId, ex.toString());
+                    return null;
+                });
+    }
+
+    private void dispatchBuild(long ledgerId) {
         if (dispatcher != null) {
             // Phase F: hand the build to a system-topic consumer (off this broker). If the dispatch
             // itself fails (e.g. system topic unavailable) fall back to an inline build so a segment is

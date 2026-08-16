@@ -800,7 +800,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                     svc = StreamLakeSegmentService.open(
                             brokerService.getPulsar().getBookKeeperClient(), ledger, metaStore,
                             getOrCreateStreamLakePageIndex(), cfg,
-                            brokerService.getPulsar().getExecutor(), dispatcher);
+                            brokerService.getStreamLakeSegmentBuildExecutor(), dispatcher);
                     streamLakeSegmentService = svc;
                 }
             }
@@ -825,7 +825,8 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                 if (qs == null) {
                     StreamingLakeConfig cfg = getStreamingLakeConfig();
                     qs = StreamLakeQueryService.create(ledger, getOrCreateStreamLakeSegmentService(),
-                            getOrCreateStreamLakePageIndex(), cfg, brokerService.getPulsar().getExecutor(),
+                            getOrCreateStreamLakePageIndex(), cfg,
+                            brokerService.getStreamLakeQueryReadExecutor(),
                             brokerService.getPulsar().getConfiguration().getStreamLakeJoinSpillDir(),
                             brokerService.getPulsar().getConfiguration()
                                     .isStreamLakeQueryIncludeUnsegmentedLedgers(),

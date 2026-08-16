@@ -251,6 +251,11 @@ public class BrokerService implements Closeable {
     // configured with asyncSegmentBuildViaSystemTopic; closed on broker shutdown.
     private final Map<NamespaceName, org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuildQueue>
             streamLakeBuildQueues = new ConcurrentHashMap<>();
+    // Dedicated broker-wide daemon pools for StreamLake so its (unavoidably blocking) BookKeeper reads and
+    // writes never park a SHARED broker thread (the main pulsar executor / a per-topic ordered executor),
+    // which would starve unrelated topics. Created on first use, shut down on broker close.
+    private volatile java.util.concurrent.ExecutorService streamLakeSegmentBuildExecutor;
+    private volatile java.util.concurrent.ExecutorService streamLakeQueryReadExecutor;
 
     private final ConcurrentLinkedQueue<TopicLoadingContext> pendingTopicLoadingQueue;
 
@@ -940,6 +945,14 @@ public class BrokerService implements Closeable {
             if (ledgerDeletionExecutorProvider != null) {
                 log.info("Shutting down executor for ledger deletion...");
                 ledgerDeletionExecutorProvider.shutdownNow();
+            }
+
+            // shutdown StreamLake dedicated pools (segment build + query read)
+            if (streamLakeSegmentBuildExecutor != null) {
+                streamLakeSegmentBuildExecutor.shutdownNow();
+            }
+            if (streamLakeQueryReadExecutor != null) {
+                streamLakeQueryReadExecutor.shutdownNow();
             }
 
             // unregister non-static metrics collectors
@@ -2481,6 +2494,52 @@ public class BrokerService implements Closeable {
         return streamLakeBuildQueues.computeIfAbsent(ns, n ->
                 org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuildQueue.create(
                         pulsar, n, partitions, this::resolveStreamLakeBuilder));
+    }
+
+    /**
+     * Broker-wide dedicated daemon pool that runs StreamLake segment builds and crash-recovery drains.
+     * Isolating them off {@code pulsar.getExecutor()} keeps a slow BookKeeper segment read/write from
+     * starving shared broker background tasks; the pool is bounded so many topics building at once cannot
+     * explode the broker's thread count. Created on first use.
+     */
+    public java.util.concurrent.ExecutorService getStreamLakeSegmentBuildExecutor() {
+        java.util.concurrent.ExecutorService e = streamLakeSegmentBuildExecutor;
+        if (e == null) {
+            synchronized (this) {
+                e = streamLakeSegmentBuildExecutor;
+                if (e == null) {
+                    int threads = Math.max(2, Runtime.getRuntime().availableProcessors() / 2);
+                    e = java.util.concurrent.Executors.newFixedThreadPool(threads,
+                            new ExecutorProvider.ExtendedThreadFactory("pulsar-streamlake-segment-build",
+                                    true));
+                    streamLakeSegmentBuildExecutor = e;
+                }
+            }
+        }
+        return e;
+    }
+
+    /**
+     * Broker-wide dedicated daemon pool for StreamLake query page reads. Each pruned-page read blocks a
+     * pool thread on a BookKeeper read (thread-per-read); running them here rather than on
+     * {@code pulsar.getExecutor()} keeps a heavy scan from parking shared broker threads. Sized at least
+     * as wide as a topic's read concurrency so scan parallelism is preserved. Created on first use.
+     */
+    public java.util.concurrent.ExecutorService getStreamLakeQueryReadExecutor() {
+        java.util.concurrent.ExecutorService e = streamLakeQueryReadExecutor;
+        if (e == null) {
+            synchronized (this) {
+                e = streamLakeQueryReadExecutor;
+                if (e == null) {
+                    int threads = Math.max(16, Runtime.getRuntime().availableProcessors() * 2);
+                    e = java.util.concurrent.Executors.newFixedThreadPool(threads,
+                            new ExecutorProvider.ExtendedThreadFactory("pulsar-streamlake-query-read",
+                                    true));
+                    streamLakeQueryReadExecutor = e;
+                }
+            }
+        }
+        return e;
     }
 
     private org.apache.pulsar.broker.service.streaminglake.StreamLakeSegmentBuilder
